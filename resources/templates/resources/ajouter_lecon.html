@@ -1,0 +1,118 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Ajouter une leçon</title>
+    <script src="{% static 'ckeditor/ckeditor-init.js' %}"></script>
+    <script src="{% static 'ckeditor/ckeditor/ckeditor.js' %}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="{% static 'resources/js/filtre_ajout_lecon.js' %}" defer></script>
+    <style>
+        .lecon-flex-wrapper { display: flex; justify-content: space-between; gap: 32px; align-items: flex-start; max-width: 1100px; margin: 3rem auto 2rem auto;}
+        .lecon-select-col { width: 270px; background: #f8fefd; border-radius: 10px; box-shadow: 0 2px 8px #e4eee5; padding: 1.7rem 1.3rem 1.5rem 1.3rem; }
+        .lecon-editor-col { flex: 1 1 0%; border-radius: 10px; background: #fafcf8; box-shadow: 0 1.5px 5px #e0e7ea; padding: 2rem 2rem 1.6rem 2rem; min-width: 600px; max-width: 900px;}
+        label { margin-bottom: 0.3rem; color: #107856 !important; font-weight: 600; display: block;}
+        select, input[type="text"], input[type="file"], textarea { width: 100%; padding: 0.8rem; border: 1px solid #b5c2bf; border-radius: 4px; font-size: 1.08rem; margin-bottom: 1rem; background: #fafbfc;}
+        select:disabled, input:disabled { background: #e7eae9; color: #6c757d; }
+        .btn-vert, .btn-vert-retour { background-color: #43a047; color: #fff !important; padding: 0.7rem 1.3rem; border: none; border-radius: 6px; cursor: pointer; font-size: 1.09rem; transition: background-color 0.22s, color 0.1s; margin-bottom: 16px; margin-right: 10px; text-decoration: none; display: inline-block;}
+        .btn-vert:hover, .btn-vert-retour:hover { background-color: #2e7d32 !important; color: #fff !important;}
+        .message-success, .message-error { font-weight: bold; margin-bottom: 14px; padding: 0.6rem 1.1rem; border-radius: 6px;}
+        .message-success { color: #1b7f21; background: #ddffdc; border: 1px solid #98e5a7; }
+        .message-error { color: #e53935; background: #fff1f1; border: 1px solid #ff9496; }
+        .lecon-btn-row { margin-top: 2rem; text-align: right; display: flex; gap: 12px; flex-wrap: wrap; flex-direction: row-reverse;}
+        .lecon-editor-col .cke, .lecon-editor-col .ck-editor__main, .lecon-editor-col .ck-editor__editable_inline, .django-ckeditor-widget, #id_contenu { width: 100% !important; min-width: 500px; max-width: 100%; }
+    </style>
+</head>
+<body>
+<div class="matiere-form-container">
+    <a href="{% url 'admin:resources_lecon_changelist' %}" class="btn-vert-retour">⬅️ Dashboard Leçons</a>
+    <a href="{% url 'ajouter_lecon' %}" class="btn-vert">Ajout dynamique</a>
+    <h2>Ajouter une nouvelle leçon</h2>
+    {% if message %}
+    <div class="{% if 'succès' in message %}message-success{% else %}message-error{% endif %}">{{ message }}</div>
+    {% endif %}
+    <div class="lecon-flex-wrapper">
+        <div class="lecon-select-col">
+            <label for="pays-select">Pays :</label>
+            <select id="pays-select" required>
+                <option value="">Sélectionner un pays</option>
+                {% for p in pays %}
+                <option value="{{ p.id }}">{{ p.nom }}</option>
+                {% endfor %}
+            </select>
+            <label for="ss-select">Sous-système :</label>
+            <select id="ss-select" required disabled>
+                <option value="">Sélectionnez d'abord un pays</option>
+            </select>
+            <label for="classe-select">Classe :</label>
+            <select id="classe-select" required disabled>
+                <option value="">Sélectionnez d'abord un sous-système</option>
+            </select>
+            <label for="matiere-select">Matière :</label>
+            <select id="matiere-select" required disabled>
+                <option value="">Sélectionnez d'abord une classe</option>
+            </select>
+        </div>
+        <div class="lecon-editor-col">
+            <form method="post" enctype="multipart/form-data" id="lecon-form">
+                {% csrf_token %}
+                {{ form.matiere.as_hidden }}
+                {{ form.titre.label_tag }}
+                {{ form.titre }}
+                {{ form.contenu.label_tag }}
+                {{ form.contenu }}
+                {{ form.fichier_pdf.label_tag }}
+                {{ form.fichier_pdf }}
+
+                <div class="lecon-btn-row">
+                    <button type="button" class="btn-vert" onclick="openPrintPreview()">Voir le rendu / Exporter PDF</button>
+                    <button type="submit" class="btn-vert">Enregistrer</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+window.APP_CONFIG = {
+    apiSousSystemes: "{% url 'liste_sous_systemes_par_pays' 0 %}".replace('/0/', '/'),
+    apiClasses: "{% url 'liste_classes_par_ss' 0 %}".replace('/0/', '/'),
+    apiMatieres: "{% url 'liste_matieres_par_classe' 0 %}".replace('/0/', '/')
+};
+// Ouvre popup propre avec rendu MathJax seul + bouton d'export caché à l'impression
+function openPrintPreview() {
+    let contenu = CKEDITOR.instances && CKEDITOR.instances['id_contenu']
+        ? CKEDITOR.instances['id_contenu'].getData()
+        : "";
+    let printWindow = window.open('', '', 'width=900,height=1200');
+    printWindow.document.write(
+        '<html>'+
+        '<head>'+
+        '<meta charset="UTF-8">'+
+        '<title>&nbsp;</title>'+ // Titre invisible
+        '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></'+'script>'+
+        '<style>'+
+            'body { font-family: Arial,sans-serif; background: #fff; margin:0; padding:30px 30px; max-width:800px;}'+
+            '.math, .mjx-math, .MJXc-display {max-width:100% !important; text-align:center !important; overflow-wrap:break-word;}'+
+            '#pdf-print-btn { display:block; margin:14px 0 22px 0; background:#1978d8; color:#fff; border:none; border-radius:6px; font-size:1.07rem; padding:8px 26px; cursor:pointer;}'+
+            '@media print { #pdf-print-btn, h3 {display:none !important;} body {margin:0 !important;} }'+
+        '</style>'+
+        '</head>'+
+        '<body>'+
+        // Ici, titre et bouton export ne seront PAS dans le PDF grâce à media print
+        '<button id="pdf-print-btn" onclick="window.print();">Exporter PDF ou Imprimer</button>'+
+        '<div id="lecon_print_content">'+
+            (contenu || "<p style=\'color:#bbb;\'>Aucun contenu à afficher.</p>") +
+        '</div>'+
+        '<script>'+
+           'if (window.MathJax && window.MathJax.typesetPromise){'+
+                'MathJax.typesetPromise([document.getElementById(\"lecon_print_content\")]);'+
+           '}'+
+        '<\/script>'+
+        '</body></html>'
+    );
+    printWindow.document.close();
+}
+</script>
+</body>
+</html>

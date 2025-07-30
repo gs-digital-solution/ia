@@ -1,0 +1,11 @@
+django
+{% extends "admin/change_list.html" %}
+
+{% block object-tools %}
+    {{ block.super }}
+    <li>
+        <a href="{% url 'ajouter_lecon' %}" class="addlink" style="background:#2ecc71;color:#fff;margin-left:8px;">
+            ➕ Ajout dynamique lecon
+        </a>
+    </li>
+{% endblock %}

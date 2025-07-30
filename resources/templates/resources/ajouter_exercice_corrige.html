@@ -1,0 +1,127 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Ajouter exercice corrigé</title>
+    <script src="{% static 'ckeditor/ckeditor-init.js' %}"></script>
+    <script src="{% static 'ckeditor/ckeditor/ckeditor.js' %}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="{% static 'resources/js/filtre_ajout_exercice.js' %}" defer></script>
+    <style>
+        body { background: #eefbef; }
+        .grille-3c { display: flex; gap:32px; max-width: 1220px; margin: 3rem auto;}
+        .col-filtre { width:265px; background:#eafbe3; padding: 1.5em 1.2em; border-radius: 13px; box-shadow: 0 2px 8px #c8eeca;}
+        .col-editeur { flex: 2 1 0%; min-width: 570px; background: #fff; border-radius: 12px; box-shadow: 0 1.5px 7px #9ece99; padding: 2em; }
+        .col-lecons { width:255px; background:#e2ffe1; border-radius:12px; box-shadow: 0 1px 8px #81e59a; padding:1.6em;}
+        label { color:#21a943; margin-bottom: 0.38rem; font-weight: 600; display: block;}
+        select, input[type="text"], input[type="file"], textarea { width: 100%; padding: 0.8rem; border: 1.4px solid #24ba52; border-radius: 4px; font-size: 1.08rem; margin-bottom: 1rem; background: #f2fef6; }
+        select:disabled, input:disabled { background: #e5fce7; color: #7da288;}
+        .btn-vert, .btn-vert-retour { background-color: #19b749; color: #fff !important; padding:0.8rem 1.4rem; border:none; border-radius:6px; cursor:pointer; font-size:1.11rem; margin-bottom:16px; margin-right:10px; text-decoration:none;}
+        .btn-vert:hover, .btn-vert-retour:hover { background:#12893d !important;}
+        .lecon-btn-row { margin-top:2rem; text-align:right; display:flex;gap:14px;flex-wrap:wrap;flex-direction:row-reverse;}
+        .liste-lecons li { margin-bottom: 0.85em; }
+        h4 { color:#1e8336;margin-bottom:1em;}
+        .nav-btns { margin: 25px auto 10px auto; max-width: 1220px; }
+        .btn-export-pdf { background:#1978d8; color:white; border:none; border-radius:6px; font-size: 1.04rem; padding:7px 22px; cursor:pointer; margin:14px 0 0 0;}
+    </style>
+</head>
+<body>
+<div class="nav-btns">
+    <a href="{% url 'admin:resources_exercicecorrige_changelist' %}" class="btn-vert-retour">⬅️ Dashboard Exercices corrigés</a>
+    <a href="{% url 'ajouter_exercice_corrige' %}" class="btn-vert">Ajout dynamique</a>
+</div>
+{% if message %}
+    <div class="message">{{ message }}</div>
+{% endif %}
+<form method="post" enctype="multipart/form-data" id="exercice-corrige-form">
+{% csrf_token %}
+<div class="grille-3c">
+    <!-- Colonne gauche : filtres -->
+    <div class="col-filtre">
+        <label for="pays-select">Pays :</label>
+        <select id="pays-select" required>
+            <option value="">Pays</option>
+            {% for p in pays %}<option value="{{ p.id }}">{{ p.nom }}</option>{% endfor %}
+        </select>
+        <label for="departement-select">Département :</label>
+        <select id="departement-select" required disabled>
+            <option value="">Département</option>
+        </select>
+        <label for="type-select">Type d'exercice :</label>
+        <select id="type-select" name="type_exercice" required disabled>
+            <option value="">Type d'exercice</option>
+        </select>
+        <label for="ss-select">Sous-système :</label>
+        <select id="ss-select" required disabled><option value="">Sous-système</option></select>
+        <label for="classe-select">Classe :</label>
+        <select id="classe-select" required disabled><option value="">Classe</option></select>
+        <label for="matiere-select">Matière :</label>
+        <select id="matiere-select" required disabled><option value="">Matière</option></select>
+        {{ form.matiere.as_hidden }}
+    </div>
+    <div class="col-editeur">
+        {{ form.intitule.label_tag }} {{ form.intitule }}
+        {{ form.contenu_exercice.label_tag }} {{ form.contenu_exercice }}
+        <button type="button" class="btn-vert" onclick="openPreviewPageCorrige('exercice')">Voir le rendu énoncé</button>
+        {{ form.contenu_corrige.label_tag }} {{ form.contenu_corrige }}
+        <button type="button" class="btn-vert" onclick="openPreviewPageCorrige('corrige')">Voir le rendu corrigé</button>
+        {{ form.fichier_exo.label_tag }} {{ form.fichier_exo }}
+        {{ form.fichier_corrige.label_tag }} {{ form.fichier_corrige }}
+        <div class="lecon-btn-row" style="margin-top:2rem;">
+            <button type="submit" class="btn-vert">Enregistrer</button>
+        </div>
+    </div>
+    <div class="col-lecons">
+        <h4>Leçons associées à la matière</h4>
+        <ul id="liste-lecons" class="liste-lecons"></ul>
+    </div>
+</div>
+</form>
+<script>
+window.APP_CONFIG = {
+    apiSousSystemes: "{% url 'liste_sous_systemes_par_pays' 0 %}".replace('/0/', '/'),
+    apiDepartements: "{% url 'liste_departements_par_pays' 0 %}".replace('/0/', '/'),
+    apiTypesExercices: "{% url 'liste_types_exercices_par_departement' 0 %}".replace('/0/', '/'),
+    apiClasses: "{% url 'liste_classes_par_ss' 0 %}".replace('/0/', '/'),
+    apiMatieres: "{% url 'liste_matieres_par_classe' 0 %}".replace('/0/', '/'),
+    apiLecons: "{% url 'liste_lecons_par_matiere' 0 %}".replace('/0/', '/')
+};
+
+// Aperçu séparé de chaque éditeur avec MathJax/Export PDF natif
+function openPreviewPageCorrige(fieldName) {
+    let contenu = '';
+    if (CKEDITOR.instances && CKEDITOR.instances['id_contenu_'+fieldName])
+        contenu = CKEDITOR.instances['id_contenu_'+fieldName].getData();
+    let titre = fieldName === 'corrige' ? "Rendu du corrigé" : "Rendu de l'énoncé";
+    let printWindow = window.open('', '', 'width=900,height=1200');
+    printWindow.document.write(
+        '<html>'+
+        '<head>'+
+        '<meta charset="UTF-8">'+
+        '<title>' + titre + '</title>'+
+        '<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"><\/script>'+
+        '<style>'+
+            'body { font-family: Arial, sans-serif; background: #fff; max-width: 820px; margin:40px auto; padding: 35px; }'+
+            '.math, .mjx-math, .MJXc-display { max-width:100% !important; text-align:center !important; overflow-wrap:break-word;}'+
+            '#pdf-print-btn { display:block; margin:12px 0 22px 0; background:#1978d8; color:white; border:none; border-radius:6px; font-size: 1.10rem; padding:7px 30px; cursor:pointer; }'+
+            '@media print { #pdf-print-btn, h2 { display:none !important; } body { margin:0 !important; } }'+
+        '</style>'+
+        '</head>'+
+        '<body>'+
+        '<h2 style="color:#218c5b;">' + titre + '</h2>'+
+        '<button id="pdf-print-btn" onclick="window.print();">Exporter en PDF</button>'+
+        '<div id="render_content">' + (contenu || "<p style=\'color:#bbb;\'>Aucun contenu à afficher.</p>") + '</div>'+
+        '<script>'+
+        'if (window.MathJax && window.MathJax.typesetPromise){'+
+            'MathJax.typesetPromise([document.getElementById("render_content")]);'+
+        '}'+
+        '<\/script>'+
+        '</body></html>'
+    );
+    printWindow.document.close();
+}
+
+</script>
+</body>
+</html>

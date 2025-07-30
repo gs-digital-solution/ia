@@ -1,0 +1,107 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ajouter une classe | Système éducatif</title>
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+    <style>
+        .form-container {
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #495057;
+        }
+        select, input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        .btn-submit {
+            background-color: #4e73df;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background-color 0.3s;
+        }
+        .btn-submit:hover {
+            background-color: #2e59d9;
+        }
+    </style>
+</head>
+<body>
+<a href="{% url 'admin:resources_classe_changelist' %}"
+   style="background: #4e73df;
+          color: white;
+          padding: 8px 16px;
+          border-radius: 4px;
+          text-decoration: none;">
+    ⬅️ Retour au dashboard Classes
+</a>
+    <div class="container">
+        <div class="form-container">
+            <h2 class="form-title">Ajouter une nouvelle classe</h2>
+            {% if message %}
+          <div style="color: green; font-weight: bold; margin-bottom: 10px;">
+        {{ message }}
+        </div>
+          {% endif %}
+            <form method="post" class="classe-form">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label for="pays-select">Pays :</label>
+                    <select id="pays-select" name="pays" required class="form-control">
+                        <option value="">Sélectionner un pays</option>
+                        {% for p in pays %}
+                        <option value="{{ p.id }}" data-code="{{ p.code }}">{{ p.nom }} ({{ p.code }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="ss-select">Sous-système :</label>
+                    <select id="ss-select" name="sous_systeme" required class="form-control" disabled>
+                        <option value="">Sélectionnez d'abord un pays</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="nom-classe">Nom de la classe :</label>
+                    <input type="text" id="nom-classe" name="nom" required class="form-control" placeholder="Ex: Classe de CP">
+                </div>
+                <div class="form-group">
+                    <label for="code-classe">Code :</label>
+                    <input type="text" id="code-classe" name="code" required class="form-control" placeholder="Ex: CP-EDU">
+                    <small class="form-text">Utilisez un code court et significatif</small>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-submit">Enregistrer la classe</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        window.APP_CONFIG = {
+            apiUrl: "{% url 'liste_sous_systemes_par_pays' 0 %}".replace("/0/", "/"),
+            csrfToken: "{{ csrf_token }}"
+        };
+    </script>
+    <script src="{% static 'resources/js/filtre_soussysteme.js' %}" defer></script>
+</body>
+</html>

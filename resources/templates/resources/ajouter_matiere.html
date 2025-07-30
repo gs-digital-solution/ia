@@ -1,0 +1,56 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Ajouter une matière</title>
+    <link rel="stylesheet" href="{% static 'resources/css/styles.css' %}">
+    <script src="{% static 'resources/js/filtre_ajout_matiere.js' %}" defer></script>
+</head>
+<body>
+    <div class="matiere-form-container">
+        <!-- Bouton retour dashboard (vert) -->
+        <a href="{% url 'admin:resources_matiere_changelist' %}" class="btn-vert-retour">⬅️ Retour Dashboard des Matières</a>
+        <!-- Bouton accès dynamique (vert), on peut le dupliquer sur tes autres dashboards admin si besoin -->
+        <a href="{% url 'ajouter_matiere' %}" class="btn-vert">Ajout dynamique</a>
+        <h2>Ajouter une nouvelle matière</h2>
+        {% if message %}
+            <div class="{% if 'succès' in message %}message-success{% else %}message-error{% endif %}">{{ message }}</div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            <label for="pays-select">Pays :</label>
+            <select id="pays-select" name="pays" required>
+                <option value="">Sélectionner un pays</option>
+                {% for p in pays %}
+                    <option value="{{ p.id }}">{{ p.nom }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="ss-select">Sous-système :</label>
+            <select id="ss-select" name="sous_systeme" required disabled>
+                <option value="">Sélectionne d'abord un pays</option>
+            </select>
+
+            <label for="classe-select">Classe :</label>
+            <select id="classe-select" name="classe" required disabled>
+                <option value="">Sélectionne d'abord un sous-système</option>
+            </select>
+
+            <label for="nom-matiere">Nom de la matière :</label>
+            <input type="text" id="nom-matiere" name="nom" required>
+
+            <label for="code-matiere">Code :</label>
+            <input type="text" id="code-matiere" name="code" required>
+
+            <button type="submit" class="btn-vert">Enregistrer la matière</button>
+        </form>
+    </div>
+    <script>
+    window.APP_CONFIG = {
+        apiSousSystemes: "{% url 'liste_sous_systemes_par_pays' 0 %}".replace('/0/', '/'),
+        apiClasses: "{% url 'liste_classes_par_ss' 0 %}".replace('/0/', '/')
+    };
+    </script>
+</body>
+</html>

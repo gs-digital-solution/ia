@@ -1,0 +1,43 @@
+# Django
+*.sqlite3
+*.pyc
+__pycache__/
+migrations/
+/staticfiles/
+/media/
+
+# Environnement
+.env
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# Fichiers de configuration locaux de la BDD
+/local_settings.py
+/local_settings.pyc
+.env.local
+*.env
+
+# Fichiers de dump/backup PostgreSQL
+*.backup
+*.dump
+*.sql
+*.pgdump
+
+# Fichiers de logs PostgreSQL
+*.log
+/pg_log/
+
+# Fichiers temporaires
+*.pid
+*.lock
+postmaster.pid
+postgresql.auto.conf.tmp
+
+# Dossiers de données PostgreSQL (si vous avez un dossier local)
+/pgdata/
+/postgres_data/
