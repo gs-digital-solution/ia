@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% block content %}
+<style>
+.corrige-section {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    max-width: 540px;
+    margin: 2rem auto;
+    padding: 1.1rem 1.3rem;
+    text-align: center;
+}
+.corrige-header {
+    color: #008060;
+    font-weight: 700;
+    font-size: 1.5em;
+    margin-bottom: 18px;
+    text-align: center;
+}
+.corrige-bloc {
+    background: #fff;     /* fond blanc même sur écran */
+    border-radius: 7px;
+    padding: 0.8em 0.7em;
+    margin-bottom: 0.50em; /* espace réduit */
+    color: #111;         /* texte noir pur */
+    word-break: break-word;
+    display: block;
+    text-align: left;
+    max-width: 100%;
+    font-size: 1.09em;
+    white-space: pre-line;
+    line-height: 1.19;
+    border: 1px solid #f0f0f0;
+}
+a.django-link { color:#008060; text-decoration:underline; }
+a.django-link:hover { color: #00a484; }
+.btn-retour, #pdfBtn {
+    background:#008060;
+    color:#fff;
+    padding:0.45em 1.5em;
+    margin-top:10px;
+    border-radius:5px;
+    border:none;
+    cursor:pointer;
+    font-weight:550;
+    display: inline-block;
+}
+.btn-retour:hover, #pdfBtn:hover {background:#00a484;}
+@media print {
+    .btn-retour, #pdfBtn, nav, .navbar, header, footer { display: none !important; }
+    body, .corrige-section, .corrige-bloc { background: #fff !important; color: #111 !important; }
+    .corrige-section { margin: 0 !important; padding: 0.6em 0.2em !important; box-shadow: none !important; }
+    .corrige-header { font-size: 1.14em !important; color: #111 !important; }
+    a.django-link { color: #111 !important; text-decoration: underline !important; }
+}
+</style>
+<div class="corrige-section">
+    <div class="corrige-header">Corrigé généré</div>
+    <div style="margin-bottom:2px;"><b>Date de soumission :</b> {{ demande.date_soumission|date:"d/m/Y H:i" }}</div>
+    <div class="corrige-bloc" style="margin-bottom: 0.15em;">
+        <b>Fichier de l’énoncé :</b>
+        {% if demande.fichier %}
+            <a class="django-link" href="{{ demande.fichier.url }}" target="_blank">{{ demande.fichier.name }}</a>
+        {% else %}
+            Aucun fichier joint.
+        {% endif %}
+    </div>
+    <div class="corrige-bloc" style="margin-top: 0.10em;">
+        <b>Corrigé :</b>
+        <div id="zone-corrige">{% autoescape off %}{{ demande.corrigé|linebreaksbr }}{% endautoescape %}</div>
+    </div>
+    {% if pdf_enabled %}
+        <button id="pdfBtn" type="button">Télécharger/Enregistrer en PDF</button>
+    {% endif %}
+    <a href="{% url 'correction:soumettre' %}" class="btn-retour">← Soumettre un autre exercice</a>
+</div>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['\\[', '\\]']],
+  },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+    var btn = document.getElementById("pdfBtn");
+    if(btn){
+        btn.addEventListener('click', function(){
+            window.print();
+        });
+        if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+            btn.addEventListener('click', function(){
+                setTimeout(function(){
+                    alert("Astuce : Sur mobile, après avoir lancé l'impression, choisissez 'Enregistrer en PDF' ou 'Partager', puis consultez le PDF dans Téléchargements/Fichiers.");
+                }, 700);
+            });
+        }
+    }
+});
+</script>
+{% endblock %}

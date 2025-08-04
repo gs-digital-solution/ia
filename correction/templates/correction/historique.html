@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+{% block content %}
+<style>
+body { font-family: 'Segoe UI', 'Roboto', 'Arial', sans-serif; }
+.hist-section {
+    background: #f8fefa;
+    border-radius: 14px;
+    border: 4px solid #008060;
+    box-shadow: 0 3px 18px 0 #00806016;
+    max-width: 620px;
+    margin: 1.3rem auto 1.4rem auto;
+    padding: 1.1rem 0.12rem 1.2rem 0.12rem;
+}
+.hist-header {
+    color: #00a484;
+    font-family: 'Segoe UI Semibold', 'Roboto', Arial, sans-serif;
+    font-weight: 800;
+    font-size: 1.19em;
+    margin-bottom: 0.95em;
+    text-align: center;
+    letter-spacing: 0.04em;
+}
+.exo-plaque {
+    background: linear-gradient(115deg, #d2ffee 0%, #a5f5d4 100%);
+    border-radius: 17px;
+    margin: 0.74em auto 1.1em auto;
+    padding: 0.65em 1.1em 0.65em 1.1em;
+    width: 94%;
+    box-shadow: 0 2.5px 13px 2px #119c6977, 0 2px 8px #23806008;
+    font-size: 1em;
+    color: #135838;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    position: relative;
+}
+.info-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    font-weight: 600;
+    margin: 2px 0 2px 0;
+    padding: 0;
+    font-size: 0.97em;
+    color: #117952;
+    letter-spacing: 0.01em;
+}
+.info-label {
+    margin-right: 6px;
+    font-weight: 800;
+    color: #008060;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+.info-value {
+    font-weight: 600;
+    color: #154b3f;
+    word-break: break-all;
+}
+a.hist-link {
+    color: #117952; font-weight:600;
+    text-decoration: underline; border-radius:4px;
+    padding:2px 6px 2px 3px;
+    transition: color .2s;
+    font-size: 1.03em;
+}
+a.hist-link:hover { color: #008060; background:#eafaf4; }
+.btn-retour {
+    background:#00a484;
+    color:#fff;
+    padding:0.45em 1.3em;
+    margin: 1.1em auto 0 auto;
+    display:inline-block;
+    border-radius:17px;
+    border:none;
+    font-weight:600;
+    font-size:1.02em;
+    box-shadow: 0 2px 10px #00806018;
+    transition: background 0.28s;
+    font-family:'Segoe UI Semibold','Roboto',sans-serif;
+    cursor:pointer;
+    white-space:nowrap;
+    letter-spacing: .03em;
+}
+.btn-retour:hover { background: #00795e; }
+/* Bouton de suppression */
+.btn-suppr {
+    background: #e53260;
+    color: #fff;
+    padding: 0.24em 0.98em;
+    border-radius: 10px;
+    border:none;
+    font-weight:600;
+    font-size:0.98em;
+    margin-left:10px;
+    float:right;
+    margin-top:4px;
+    margin-bottom:1px;
+    cursor:pointer;
+    box-shadow: 0 1.5px 7px 0 #e532602a;
+    transition: background 0.15s;
+}
+.btn-suppr:hover { background: #a40228; }
+@media print {
+    .btn-suppr, .btn-retour, nav, .navbar, header, footer { display: none !important; }
+    body { background: #fff !important; }
+}
+@media (max-width: 600px) {
+    .hist-section { max-width: 99vw; padding: 0.35em 0 .7em 0;}
+    .hist-header { font-size: 1em; }
+    .exo-plaque { width:99%; max-width:99%; font-size:0.97em; padding: 0.3em 0.19em 0.36em 0.19em;}
+    .info-row { font-size:0.95em; }
+}
+</style>
+
+{% if messages %}
+<div style="max-width:540px;margin:10px auto;">
+    {% for message in messages %}
+        <div style="padding:0.9em 1.1em;background:#eafaf3; border-radius:12px;color:#008060;font-size:1.06em;text-align:center;">
+            {{ message }}
+        </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="hist-section">
+    <div class="hist-header">Mes exercices soumis</div>
+    {% if demandes %}
+        {% for demande in demandes %}
+            <div class="exo-plaque">
+                <div class="info-row">
+                    <span class="info-label">DATE :</span>
+                    <span class="info-value">{{ demande.date_soumission|date:"d/m/Y H:i" }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">FICHIER :</span>
+                    <span class="info-value">
+                        {% if demande.fichier %}
+                            <a class="hist-link" href="{{ demande.fichier.url }}" target="_blank">{{ demande.fichier.name }}</a>
+                        {% else %}
+                            Aucun fichier joint.
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">CORRIGÉ :</span>
+                    <span class="info-value">
+                        <a class="hist-link" href="{% url 'correction:voir_corrige' demande.id %}">Voir corrigé</a>
+                    </span>
+                </div>
+                <div style="width:100%;text-align: right;">
+                    <a href="{% url 'correction:supprimer_demande' demande.id %}"
+                       class="btn-suppr"
+                       onclick="return confirm('Confirmer la suppression définitive de cette soumission et de son corrigé ?');"
+                    >Supprimer</a>
+                </div>
+            </div>
+        {% empty %}
+            <p style="text-align: center; color: #888;">Aucune soumission enregistrée pour le moment.</p>
+        {% endfor %}
+    {% else %}
+        <p style="text-align: center; color: #888;">Aucune soumission enregistrée pour le moment.</p>
+    {% endif %}
+    <div style="margin-top: 1.1em; text-align: center;">
+        <a href="{% url 'correction:soumettre' %}" class="btn-retour">+ Soumettre un nouvel exercice</a>
+    </div>
+</div>
+{% endblock %}

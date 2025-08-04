@@ -1,0 +1,186 @@
+{% extends 'base.html' %}
+{% block content %}
+<style>
+    body { background: #f9fcf7; }
+    .django-green { background: #008060; color: #fff; }
+    .form-section {
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+        padding: 2rem 1.5rem;
+        max-width: 540px;
+        margin: 2rem auto;
+    }
+    .form-header {
+        color: #008060;
+        font-weight: 700;
+        font-size: 2em;
+        letter-spacing: 1px;
+        margin-bottom: 1.5rem;
+        text-align: center;
+    }
+    label {
+        color: #008060;
+        font-weight: 500;
+        margin-top: 1rem;
+        display: block;
+        margin-bottom: 0.5rem;
+    }
+    select, input[type="file"] {
+        width: 100%;
+        border: 1.5px solid #008060;
+        border-radius: 5px;
+        padding: 0.6em;
+        margin-bottom: 1.2em;
+        background: #f6fefb;
+        font-size: 1em;
+        transition: border-color 0.2s;
+    }
+    select:disabled, input:disabled { opacity: 0.7; cursor: not-allowed; background: #e3f2ed; }
+    button.submit-btn {
+        width: 100%; background: #008060; color: #fff; font-weight: 600; font-size: 1.2em;
+        border: none; border-radius: 5px; padding: 0.8em 0.5em; margin-top: 1em; cursor: pointer; transition: background 0.3s;
+    }
+    button.submit-btn:hover { background: #00a484; }
+    .lecon-checkbox-block { margin: 8px 0 18px 0; padding: 0.75em; background: #f6fefb; border-radius: 6px; }
+    .lecon-checkbox { accent-color: #008060; width: 1.1em; height: 1.1em; margin-right: 0.7em; }
+    .lecon-label { display: flex; align-items: center; margin-bottom: 0.5em; font-size: 1em; color: #134c33; }
+    @media (max-width: 700px) {
+        .form-section { max-width: 99vw; padding: 1.2rem 0.5rem; }
+        .form-header { font-size: 1.35em; }
+    }
+</style>
+<div class="form-section">
+    <div class="form-header">📤 Soumettre un exercice</div>
+    <form method="post" enctype="multipart/form-data" id="soumission-form" autocomplete="off">
+        {% csrf_token %}
+        <label for="id_pays">Pays</label>
+        {{ form.pays }}
+
+        <label for="id_sous_systeme">Sous-système</label>
+        {{ form.sous_systeme }}
+
+        <label for="id_departement">Département</label>
+        {{ form.departement }}
+
+        <label for="id_classe">Classe</label>
+        {{ form.classe }}
+
+        <label for="id_matiere">Matière</label>
+        {{ form.matiere }}
+
+        <label for="id_type_exercice">Type d'exercice</label>
+        {{ form.type_exercice }}
+
+<label for="id_fichier">Fichier de l'exercice (PDF ou image/photo)</label>
+<input type="file" name="fichier" id="id_fichier" accept=".pdf, image/*" capture="environment"
+       style="width:100%;border:1.5px solid #008060;border-radius:5px;padding:0.6em;margin-bottom:1.2em;
+       background:#f6fefb;">
+
+        <button type="submit" class="submit-btn">Soumettre</button>
+
+        <!-- Bloc dynamique pour les leçons : seront injectées en JS -->
+        <div id="bloc-lecons" class="lecon-checkbox-block" style="display:none;"></div>
+
+    </form>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Utilitaires
+    function resetSelect(select) {
+        if (!select) return;
+        select.innerHTML = '';
+        select.appendChild(new Option('Sélectionner...', ''));
+        select.disabled = true;
+    }
+    function fillSelect(select, dataArray, placeholder='Sélectionner...') {
+        select.innerHTML = '';
+        select.appendChild(new Option(placeholder, ''));
+        dataArray.forEach(item => {
+            select.appendChild(new Option(item.nom || item.titre || item.label, item.id));
+        });
+        select.disabled = false;
+    }
+
+    // Les selects
+    const paysSelect = document.getElementById('id_pays');
+    const ssSelect = document.getElementById('id_sous_systeme');
+    const departementSelect = document.getElementById('id_departement');
+    const classeSelect = document.getElementById('id_classe');
+    const matiereSelect = document.getElementById('id_matiere');
+    const typeExoSelect = document.getElementById('id_type_exercice');
+    const leconsBloc = document.getElementById('bloc-lecons');
+
+    // Au chargement
+    [ssSelect, departementSelect, classeSelect, matiereSelect, typeExoSelect].forEach(resetSelect);
+    paysSelect.disabled = false;
+    leconsBloc.style.display = "none";
+    leconsBloc.innerHTML = '';
+
+    paysSelect.addEventListener('change', function() {
+        let val = paysSelect.value;
+        resetSelect(ssSelect); resetSelect(departementSelect);
+        resetSelect(classeSelect); resetSelect(matiereSelect);
+        resetSelect(typeExoSelect);
+        leconsBloc.style.display = "none"; leconsBloc.innerHTML = '';
+        if (!val) return;
+        fetch(`/correction/ajax/sous-systemes/?pays_id=${val}`)
+            .then(r=>r.json()).then(data=>fillSelect(ssSelect, data, 'Sélectionner un sous-système'));
+        fetch(`/correction/ajax/departements/?pays_id=${val}`)
+            .then(r=>r.json()).then(data=>fillSelect(departementSelect, data, 'Sélectionner un département'));
+    });
+
+    ssSelect.addEventListener('change', function() {
+        let val = ssSelect.value;
+        resetSelect(classeSelect); resetSelect(matiereSelect);
+        resetSelect(typeExoSelect);
+        leconsBloc.style.display = "none"; leconsBloc.innerHTML = '';
+        if (!val) return;
+        fetch(`/correction/ajax/classes/?ss_id=${val}`)
+            .then(r=>r.json()).then(data=>fillSelect(classeSelect, data, 'Sélectionner une classe'));
+    });
+
+    classeSelect.addEventListener('change', function() {
+        let val = classeSelect.value;
+        resetSelect(matiereSelect);
+        leconsBloc.style.display = "none"; leconsBloc.innerHTML = '';
+        if (!val) return;
+        fetch(`/correction/ajax/matieres/?classe_id=${val}`)
+            .then(r=>r.json()).then(data=>fillSelect(matiereSelect, data, 'Sélectionner une matière'));
+    });
+
+    departementSelect.addEventListener('change', function() {
+        let val = departementSelect.value;
+        resetSelect(typeExoSelect);
+        if (!val) return;
+        fetch(`/correction/ajax/types-exercices/?departement_id=${val}`)
+            .then(r=>r.json()).then(data=>fillSelect(typeExoSelect, data, "Sélectionner un type d'exercice"));
+    });
+
+    matiereSelect.addEventListener('change', function() {
+        let val = matiereSelect.value;
+        leconsBloc.style.display = "none"; leconsBloc.innerHTML = '';
+        if (!val) return;
+        fetch(`/correction/ajax/lecons/?matiere_id=${val}`)
+            .then(r=>r.json())
+            .then(data=>{
+                if(data.length > 0) {
+                    leconsBloc.innerHTML = `<div style="margin-bottom:8px;color:#008060;font-weight:600;">Améliorez votre corrigé en cochant les leçons évaluées dans votre sujet (facultatif)</div>`;
+                    data.forEach(item => {
+                        leconsBloc.innerHTML += `
+                            <label class="lecon-label">
+                                <input type="checkbox" name="lecons" value="${item.id}" class="lecon-checkbox"/>
+                                <span>${item.titre}</span>
+                            </label>
+                        `;
+                    });
+                    leconsBloc.style.display = "";
+                } else {
+                    leconsBloc.innerHTML = "";
+                    leconsBloc.style.display = "none";
+                }
+            });
+    });
+});
+</script>
+{% endblock %}

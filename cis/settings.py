@@ -26,7 +26,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-7$j*dur!0j!#=2sqea*^&zlizyki39l=s7f3l%vfg1!5-^z5h2'
+#SECRET_KEY = 'Stocké dans .env'
+SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -34,8 +35,10 @@ DEBUG = True
 ALLOWED_HOSTS = []
 #Cette config de ckeditor permet l’upload d’images depuis le back-office ou le front si tu ouvres les droits.
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"
-# Application definition
 
+# Modèle utilisateur personnalisé
+#AUTH_USER_MODEL = 'correction.Utilisateur'
+# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -46,7 +49,7 @@ INSTALLED_APPS = [
     'resources',
     'ckeditor',
     'ckeditor_uploader',
-
+    'correction',
 ]
 
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"   # Dossier où seront stockées les images
@@ -85,7 +88,7 @@ ROOT_URLCONF = 'cis.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / "templates"],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -164,3 +167,7 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
