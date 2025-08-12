@@ -1,0 +1,37 @@
+{% block content %}
+<style>
+body { background: #f9fcf7; }
+.form-section { background: #fff; border-radius: 8px; box-shadow: 0 2px 10px #00806022; padding: 2rem 1.5rem; max-width: 410px; margin: 2.5rem auto;}
+.form-header { color: #008060; font-weight: 700; font-size: 2em; margin-bottom: 1.5rem; text-align: center; }
+label { color:#008060; font-weight:500; margin-top:1rem; display:block; margin-bottom:0.5rem;}
+input[type="text"], input[type="password"] { width:100%; border:1.5px solid #008060; border-radius:5px; padding:0.6em; background:#f6fefb; font-size:1em; margin-bottom:1.2em;}
+button.submit-btn { width:100%; background:#008060; color:#fff; font-weight:600; font-size:1.1em; border:none; border-radius:5px; padding:0.8em 0.5em; margin-top:1em; cursor:pointer; transition:background 0.3s;}
+button.submit-btn:hover { background:#00a484; }
+@media (max-width: 700px){ .form-section { max-width:98vw; padding: 1.2rem 0.7rem;} .form-header {font-size:1.3em;} }
+</style>
+
+
+
+<div class="form-section">
+    <div class="form-header">🔑 Connexion</div>
+    <form method="post" autocomplete="off">
+        {% csrf_token %}
+        {% if form.errors %}
+            <div style="color:#d10c20; margin-bottom:0.6em;">Identifiants invalides ou incomplets.</div>
+        {% endif %}
+        <label for="id_username">Numéro WhatsApp</label>
+        <input type="text" id="id_username" name="username" required autocomplete="username" placeholder="Votre numéro WhatsApp">
+
+        <label for="id_password">Mot de passe</label>
+        <input type="password" id="id_password" name="password" required autocomplete="current-password" placeholder="Votre mot de passe">
+
+        <button type="submit" class="submit-btn">Se connecter</button>
+    </form>
+    <div style="margin-top:1.2em; text-align:center; font-size:.97em;">
+        <a href="{% url 'correction:mot_de_passe_oublie' %}" style="color:#00a484;text-decoration:underline;">Mot de passe oublié ?</a>
+    </div>
+    <div style="margin-top:0.5em; text-align:center; font-size:.97em;">
+        <a href="{% url 'correction:inscription' %}" style="color:#00a484;">Pas encore de compte ? Créer un compte</a>
+    </div>
+</div>
+{% endblock %}

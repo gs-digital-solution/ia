@@ -1,7 +1,9 @@
 from django.urls import path
 from . import views
+from django.contrib.auth import views as auth_views
 
 app_name = 'correction'
+
 urlpatterns = [
     path(
         'soumettre/',
@@ -31,17 +33,40 @@ urlpatterns = [
         'ajax/lecons/',
         views.ajax_lecons,
         name='ajax_lecons'),
-   path(
+    path(
     'corrige/<int:demande_id>/',
     views.voir_corrige, name='voir_corrige'),
-   path(
+    path(
     'historique/',
     views.historique,
     name='historique'),
-   path(
+    path(
      'supprimer/<int:demande_id>/',
       views.supprimer_demande,
       name='supprimer_demande'),
+
+    path(
+        'inscription/',
+        views.inscription,
+        name='inscription'),
+
+    path(
+        'login/',
+        auth_views.LoginView.as_view(template_name='correction/login.html'),
+        name='login'),
+
+    path(
+        'logout/',
+        auth_views.LogoutView.as_view(),
+        name='logout'),
+    path(
+        'mot-de-passe-oublie/',
+        views.mot_de_passe_oublie,
+        name='mot_de_passe_oublie'),
+    path(
+        'reset-password/',
+        views.reset_password,
+        name='reset_password'),
 
 
 

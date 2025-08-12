@@ -4,6 +4,7 @@ from django.db import models
 from django.db import models
 from django.conf import settings
 from resources.models import (Pays, SousSysteme, Classe, Matiere, Lecon,Departement,TypeExercice)
+from django.contrib.auth.models import AbstractUser
 
 class DemandeCorrection(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -33,3 +34,16 @@ class AppConfig(models.Model):
 
     class Meta:
         verbose_name = 'Paramètre Application'
+
+
+#pour la gestion des utilisateurs
+class CustomUser(AbstractUser):
+    whatsapp_number = models.CharField(max_length=20, unique=True)
+    pays = models.ForeignKey(Pays, null=True, blank=True, on_delete=models.SET_NULL, related_name="users")
+    sous_systeme = models.ForeignKey(SousSysteme, null=True, blank=True, on_delete=models.SET_NULL, related_name="users")
+    secret_question = models.CharField(max_length=128)
+    secret_answer = models.CharField(max_length=128)
+    first_name = models.CharField(max_length=64)
+
+    def check_secret(self, answer):
+        return self.secret_answer.strip().lower() == answer.strip().lower()

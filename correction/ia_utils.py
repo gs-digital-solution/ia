@@ -1,12 +1,18 @@
-import tempfile
-from pdfminer.high_level import extract_text
-from PIL import Image
-import pytesseract
-import matplotlib.pyplot as plt
-import numpy as np
-import openai
-import json
+import requests  # Ajout pour les appels API à DeepSeek
+import re as _re
 import os
+import tempfile
+import json
+from pdfminer.high_level import extract_text
+from PIL import Image, ImageEnhance, ImageFilter
+import pytesseract
+import numpy as np
+import matplotlib
+
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import re
+
 
 def extraire_texte_pdf(fichier_path):
     try:
@@ -19,6 +25,11 @@ def extraire_texte_pdf(fichier_path):
 def extraire_texte_image(fichier_path):
     try:
         image = Image.open(fichier_path)
+        # Prétraitement : niveaux de gris, contraste, binarisation
+        image = image.convert("L").filter(ImageFilter.MedianFilter())
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2.2)
+        image = image.point(lambda x: 0 if x < 150 else 255, '1')
         texte = pytesseract.image_to_string(image, lang="fra+eng")
         return texte.strip()
     except Exception as e:
@@ -46,97 +57,343 @@ def extraire_texte_fichier(fichier_field):
     return texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
 
 def tracer_graphique(graphique_dict, output_name):
-    x_min = float(graphique_dict.get("x_min", -2))
-    x_max = float(graphique_dict.get("x_max", 4))
-    expression = graphique_dict.get("expression", "x")
-    titre = graphique_dict.get("titre", "Graphique à tracer")
-    x = np.linspace(x_min, x_max, 400)
+    if 'graphique' in graphique_dict:
+        graphique_dict = graphique_dict['graphique']
+    print(">>> tracer_graphique CALLED with graphique_dict:", graphique_dict, "output_name:", output_name)
+    gtype = graphique_dict.get("type", "fonction").lower().strip()
+    print(">>> gtype détecté :", repr(gtype))
+    titre = graphique_dict.get("titre", "Graphique généré")
+    def safe_float(expr):
+        try:
+            return float(eval(str(expr), {"__builtins__": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
+        except Exception as e:
+            print("Erreur safe_float sur :", expr, e)
+            try: return float(expr)
+            except Exception as e2: print("Erreur safe_float cast direct:", expr, e2); return None
     try:
-        y = eval(expression, {'x': x, 'np': np, '__builtins__': None})
-    except Exception as e:
-        print("Erreur tracé:", e)
+        from django.conf import settings
+        dossier = os.path.join(settings.MEDIA_ROOT, "graphes")
+        os.makedirs(dossier, exist_ok=True)
+        chemin_png = os.path.join(dossier, output_name)
+        if "fonction" in gtype:
+            x_min = graphique_dict.get("x_min", -2)
+            x_max = graphique_dict.get("x_max", 4)
+            expression = graphique_dict.get("expression", "x")
+            x_min_val = safe_float(x_min)
+            x_max_val = safe_float(x_max)
+            if x_min_val is None: x_min_val = -2
+            if x_max_val is None: x_max_val = 4
+            x = np.linspace(x_min_val, x_max_val, 400)
+            expression_patch = expression.replace('^', '**')
+            # PATCH pour ln et autres fonctions/math
+            funcs = [
+                "sin", "cos", "tan", "exp", "log", "log10",
+                "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "sqrt", "abs"
+            ]
+            for fct in funcs:
+                expression_patch = re.sub(r'(?<![\w.])' + fct + r'\s*\(', f'np.{fct}(', expression_patch)
+            expression_patch = expression_patch.replace('ln(', 'np.log(')
+            print(f">>> final expression to eval = {expression_patch}")
+            try:
+                y = eval(expression_patch, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi, "sqrt": np.sqrt})
+                if np.isscalar(y) or (isinstance(y, np.ndarray) and y.shape == ()):
+                    y = np.full_like(x, y)
+            except Exception as e:
+                print(f"Erreur tracé (eval expression): {expression_patch}. Exception: {e}")
+                return None
+            plt.figure(figsize=(6, 4))
+            plt.plot(x, y, color="#008060")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.grid(True)
+            plt.tight_layout()
+        elif "histogramme" in gtype:
+            intervalles = graphique_dict.get("intervalles") or graphique_dict.get("classes") or []
+            effectifs = graphique_dict.get("effectifs", [])
+            print(f">>> HISTO : intervalles={intervalles}, effectifs={effectifs}")
+            try:
+                labels = [str(ival) for ival in intervalles]
+                x_pos = np.arange(len(labels))
+                effectifs = [float(e) for e in effectifs]
+                print(f">>> x_pos={x_pos}, labels={labels}, effectifs(san)={effectifs}")
+                plt.figure(figsize=(7, 4.5))
+                plt.bar(x_pos, effectifs, color="#208060", edgecolor='black', width=0.9)
+                plt.xticks(x_pos, labels, rotation=35)
+                plt.title(titre)
+                plt.xlabel(graphique_dict.get("xlabel", "Classes / Intervalles"))
+                plt.ylabel(graphique_dict.get("ylabel", "Effectif"))
+                plt.grid(axis='y')
+                plt.tight_layout()
+            except Exception as e:
+                print("Erreur dans le bloc HISTO :", e)
+                return None
+        elif "diagramme à bandes" in gtype or "diagramme en bâtons" in gtype or "diagramme à batons" in gtype:
+            categories = graphique_dict.get("categories", [])
+            effectifs = graphique_dict.get("effectifs", [])
+            print(f">>> BANDS : categories={categories}, effectifs={effectifs}")
+            x_pos = np.arange(len(categories))
+            plt.figure(figsize=(7, 4.5))
+            plt.bar(x_pos, effectifs, color="#208060", edgecolor='black', width=0.7)
+            plt.xticks(x_pos, categories, rotation=15)
+            plt.title(titre)
+            plt.xlabel("Catégories")
+            plt.ylabel("Effectif")
+            plt.tight_layout()
+        elif "nuage de points" in gtype:
+            x_points = graphique_dict.get("x", [])
+            y_points = graphique_dict.get("y", [])
+            print(f">>> SCATTER : x={x_points}, y={y_points}")
+            plt.figure(figsize=(6, 4))
+            plt.scatter(x_points, y_points, color="#006080")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.grid(True)
+            plt.tight_layout()
+        elif "effectifs cumulés" in gtype or "courbe des effectifs cumulés" in gtype:
+            x_points = graphique_dict.get("x", [])
+            y_points = graphique_dict.get("y", [])
+            print(f">>> EC : x={x_points}, y={y_points}")
+            plt.figure(figsize=(6, 4))
+            plt.plot(x_points, y_points, marker="o", color="#b65d2f")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("Effectifs cumulés")
+            plt.grid(True)
+            plt.tight_layout()
+        elif "diagramme circulaire" in gtype or "camembert" in gtype or "pie" in gtype:
+            categories = graphique_dict.get("categories", [])
+            effectifs = graphique_dict.get("effectifs", [])
+            print(f">>> PIE : categories={categories}, effectifs={effectifs}")
+            plt.figure(figsize=(5.3, 5.3))
+            plt.pie(effectifs, labels=categories, autopct='%1.1f%%', colors=plt.cm.Paired.colors, startangle=90, wedgeprops={"edgecolor":"k"})
+            plt.title(titre)
+            plt.tight_layout()
+        elif "polygone" in gtype:
+            # Prendre en compte tous les formats possibles pour la polygone statistique
+            points = graphique_dict.get("points")
+            points_x = graphique_dict.get("points_x")
+            points_y = graphique_dict.get("points_y")
+            abscisses = graphique_dict.get("abscisses")
+            ordonnees = graphique_dict.get("ordonnees")
+            # 1. Format [[x, y], ...]
+            if points:
+                x = [float(p[0]) for p in points]
+                y = [float(p[1]) for p in points]
+            # 2. Format points_x + points_y (listes coordonnées)
+            elif points_x and points_y:
+                x = [float(xx) for xx in points_x]
+                y = [float(yy) for yy in points_y]
+            # 3. Format abscisses/ordonnees
+            elif abscisses and ordonnees:
+                x = [float(xx) for xx in abscisses]
+                y = [float(yy) for yy in ordonnees]
+            else:
+                # Cas d'erreur : rien à tracer
+                print("Erreur : aucun point trouvé pour le polygone")
+                x = []
+                y = []
+            print(f">>> POLYGONE : x={x}, y={y}")
+            plt.figure(figsize=(7, 4.5))
+            plt.plot(x, y, marker="o", color="#003355")
+            plt.title(graphique_dict.get("titre", "Polygone des effectifs cumulés"))
+            plt.xlabel(graphique_dict.get("x_label", "Abscisse"))
+            plt.ylabel(graphique_dict.get("y_label", "Effectifs cumulés ou ordonnée"))
+            plt.grid(True)
+            plt.tight_layout()
+        else:
+            print("Type de graphique non supporté dans le dict reçu :", gtype)
+            return None
+        plt.savefig(chemin_png)
+        plt.close()
+        print(f"IMAGE PNG GENERE : {chemin_png} -- accessible à /media/graphes/{output_name}")
+        return "graphes/" + output_name
+    except Exception as ee:
+        print(f"Erreur générale sauvegarde PNG {chemin_png if 'chemin_png' in locals() else output_name} :", ee)
         return None
-    plt.figure(figsize=(6, 4))
-    plt.plot(x, y, color="#008060")
-    plt.title(titre)
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.grid(True)
-    from django.conf import settings
-    dossier = os.path.join(settings.MEDIA_ROOT, "graphes")
-    os.makedirs(dossier, exist_ok=True)
-    chemin_png = os.path.join(dossier, output_name)
-    plt.savefig(chemin_png)
-    plt.close()
-    return "graphes/" + output_name
+
 
 def generer_corrige_ia_et_graphique(
         texte_enonce,
         contexte,
-        lecons_contenus=[],  # Listes de tuples (titre, contenu)
-        exemples_corriges=[]  # Listes de corrigés du même type
+        lecons_contenus=None,
+        exemples_corriges=None
 ):
-    client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+    print("UTILISATION DE DEEPSEEK-R1")
+    if lecons_contenus is None:
+        lecons_contenus = []
+    if exemples_corriges is None:
+        exemples_corriges = []
 
+    # Configuration DeepSeek
+    api_key = os.getenv('DEEPSEEK_API_KEY')  # Changer le nom de la variable d'environnement
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    def clean_txt(txt, n=320):
+        return txt[:n].replace('\n', ' ').replace('\r', ' ').strip()
+
+    # Préparation du contexte scientifique
+    lecons = [f"### {t}\n{c}" for t, c in lecons_contenus[:3]]  # Jusqu'à 3 leçons
+    exemples = [clean_txt(e, 600) for e in exemples_corriges[:2]]  # Jusqu'à 2 exemples
+
+    # Prompt optimisé pour DeepSeek-R1 (scientifique + LaTeX)
+    SYSTEM_PROMPT = """
+Vous êtes un professeur expert en sciences (mathématiques, physique, chimie). 
+Corrigez rigoureusement les exercices en suivant ces règles :
+
+1. Pour chaque question nécessitant un graphique :
+   - Terminez la correction par "---corrigé---"
+   - Ajoutez UNIQUEMENT le JSON du graphique sur la ligne suivante
+
+2. Structurez la correction :
+   - Méthode claire avec étapes de raisonnement
+   - Calculs détaillés avec notations LaTeX (\\(...\\))
+   - Conclusion finale encadrée [Réponse]
+
+3. Types de graphiques supportés :
+   - "fonction", "cercle trigo", "nuage de points", "histogramme"
+   - "diagramme à bandes", "effectifs cumulés", "diagramme circulaire"
+   - "polygone"
+
+4. Dans les JSON de graphique :
+   - Utilisez "expression" pour les fonctions mathématiques
+   - "angles" en radians pour le cercle trigo
+   - Précisez les unités dans les labels
+5- La clé "points_x"/"points_y" ou "points" ou "abscisses"/"ordonnees" 
+    sont TOUJOURS acceptées pour une polygone statistique.
+"""
+
+    EXEMPLE_PROMPT = """
+--- EXEMPLE 1 (Cercle trigo) ---
+Énoncé : Résoudre dans \\([-\\pi;2\\pi]\\) \\(2\\cos x = \\sqrt{2}\\) et représenter les solutions.
+Corrigé : On isole cos x... [étapes détaillées]...
+Les solutions sont \\(x = -\\frac{\\pi}{4}, \\frac{\\pi}{4}, \\frac{7\\pi}{4}, \\frac{9\\pi}{4}\\).
+---corrigé---
+{"graphique": {"type":"cercle trigo", "angles":["-pi/4","pi/4","7*pi/4","9*pi/4"], "labels":["S1","S2","S3","S4"], "titre":"Solutions trigonométriques"}}
+
+--- EXEMPLE 2 (Fonction) ---
+Énoncé : Tracer \\(f(x) = x^2 - 2x + 1\\) sur \\([-1;3]\\)
+Corrigé : La fonction est un polynôme... [étapes]...
+[Réponse] La parabole a son minimum en (1,0).
+---corrigé---
+{"graphique": {"type": "fonction", "expression": "x**2 - 2*x + 1", "x_min": -1, "x_max": 3, "titre": "Parabole"}}
+
+--- EXEMPLE 3 Polygone des effectifs cumulés ---
+Énoncé :
+Voici les résultats à un test pour 20 élèves, regroupés par classe :
+Classe     | Effectif
+[0;5[      | 3
+[5;10[     | 6
+[10;15[    | 7
+[15;20[    | 4
+
+1) Calculez les effectifs cumulés croissants (ECC).
+2) Tracez le polygone des ECC en fonction de la borne supérieure de chaque classe.
+3) Interprétez la distribution.
+
+Corrigé :
+**1. Calcul des effectifs cumulés croissants**
+
+| Borne supérieure | ECC |
+|:----------------:|:---:|
+| 0                | 0   |
+| 5                | 3   |
+| 10               | 3+6 = 9 |
+| 15               | 9+7 = 16 |
+| 20               | 16+4 = 20 |
+
+**2. Tracé du polygone**
+Le polygone relie successivement les points :
+- (0, 0)
+- (5, 3)
+- (10, 9)
+- (15, 16)
+- (20, 20)
+
+[Réponse]  
+La distribution montre que la majorité des élèves a obtenu entre 10 et 20.
+
+---corrigé---
+{"graphique": {
+    "type": "polygone",
+    "points": [[0,0],[5,3],[10,9],[15,16],[20,20]],
+    "points_x": [0,5,10,15,20],
+    "points_y": [0,3,9,16,20],
+    "titre": "Polygone des effectifs cumulés",
+    "x_label": "Borne supérieure",
+    "y_label": "ECC"
+}}
+"""
+
+    # Construction du prompt final
     prompt_ia = (
-        "Voici le CONTEXTE pédagogique et local de l'utilisateur :\n"
+        "### CONTEXTE DU COURS\n"
         f"{contexte}\n\n"
-        "OBJECTIF : Donne un corrigé détaillé, étape par étape, STRICTEMENT adapté à ce contexte (niveau, pays, sous-système, matière, type d'exercice, ...).\n"
-        "---\n"
-        "EXEMPLES DE CORRIGÉS SIMILAIRES :\n"
-    )
-    if exemples_corriges:
-        for ex_ind, ex_corr in enumerate(exemples_corriges, 1):
-            prompt_ia += f"\n— Exemple corrigé {ex_ind} :\n{ex_corr}\n"
-    else:
-        prompt_ia += "\nAucun exemple similaire disponible dans la base.\n"
 
-    if lecons_contenus:
-        prompt_ia += "\nLeçon(s) pédagogique(s) à exploiter/insister si pertinent :\n"
-        for titre, contenu in lecons_contenus:
-            prompt_ia += f"\n>> {titre} : {contenu}\n"
-        prompt_ia += "\nIntègre ces leçons dans ta solution si elles sont nécessaires."
+        "### LEÇONS UTILES\n"
+        f"{chr(10).join(lecons) if lecons else 'Aucune leçon supplémentaire'}\n\n"
 
-    prompt_ia += (
-        "\n---\nÉNONCÉ À CORRIGER :\n" + texte_enonce +
-        "\n---\n"
-        "Consignes de RÉDACTION :\n"
-        "- Correction détaillée, pédagogique, structurée étape par étape, adaptée au pays et au niveau, claire et sans phrases inutiles.\n"
-        "- Si un graphique (courbe, histogramme, etc.) doit être produit, ajoute à la fin de la réponse le JSON suivant sur UNE SEULE LIGNE (sinon mets juste {}):\n"
-        '{"graphique":{"type":"fonction","expression":"...","titre":"...","x_min":"...","x_max":"..."}}\n'
-        "- Pour toutes les formules, utilises impérativement \\( ... \\) (en ligne) ou \\[ ... \\] (affichées). N'utilises jamais $...$.\n"
-        "- SEPARATEUR OBLIGATOIRE : après ta correction, écris sur une NOUVELLE ligne\n"
-        "---corrigé---\n"
-        "- Puis écris le JSON EXACTEMENT sur une ligne. Ne mets jamais de phrase ou de commentaire en dehors de la correction ou du JSON."
+        "### EXEMPLES DE CORRIGÉS\n"
+        f"{chr(10).join(exemples) if exemples else 'Aucun exemple fourni'}\n\n"
+
+        "### EXERCICE À CORRIGER\n"
+        f"{texte_enonce.strip()}\n\n"
+
+        "### CONSIGNES FINALES\n"
+        "- Répondez en français avec un style clair et pédagogique\n"
+        "- Utilisez exclusivement \\( \\) pour les formules en ligne\n"
+        "- Vérifiez les unités et les calculs numériques\n"
+        "- Structurez avec : Méthode → Calcul → [Réponse]"
     )
 
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {
-                "role": "system",
-                "content": "Tu es un super correcteur pédagogique expert, qui répond TOUJOURS en français, strictement selon le contexte, les leçons et les exemples, et qui respecte toutes les consignes."
-            },
-            {
-                "role": "user",
-                "content": prompt_ia
-            }
+    # Appel à l'API DeepSeek-R1
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT + EXEMPLE_PROMPT},
+            {"role": "user", "content": prompt_ia}
         ],
-        temperature=0.18,
-        max_tokens=1900
-    )
+        "temperature": 0.12,  # Plus bas pour plus de rigueur scientifique
+        "max_tokens": 3000,  # Augmentation pour les corrections détaillées
+        "top_p": 0.3,
+        "frequency_penalty": 0.2
+    }
 
-    output = response.choices[0].message.content
+    try:
+        response = requests.post(api_url, headers=headers, json=data, timeout=100)
+        response_data = response.json()
 
-    # Séparation corrigé/JSON (retourne TOUJOURS DEUX VALEURS)
-    if "---corrigé---" in output:
-        corrigé, part_json = output.rsplit("---corrigé---", 1)
-        try:
-            graphique_dict = json.loads(part_json.strip())
-        except Exception:
-            graphique_dict = {}
-    else:
-        corrigé = output
-        graphique_dict = {}
+        if response.status_code != 200:
+            error_msg = f"Erreur API DeepSeek [{response.status_code}]: {response_data.get('message', 'Pas de détail')}"
+            print(error_msg)
+            return error_msg, None
 
-    return corrigé.strip(), graphique_dict.get("graphique", None)
+        output = response_data['choices'][0]['message']['content']
+        print("=== DEEPSEEK OUTPUT ===\n", output)
+
+        # Traitement des graphiques (identique à avant)
+        regex_all_json = _re.findall(r'(\{\s*"graphique"\s*:\s*\{[\s\S]+?\}\s*\})', output)
+
+        if regex_all_json:
+            graph_list = []
+            corrige_txt = output
+            for idx, found_json in enumerate(regex_all_json, 1):
+                try:
+                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
+                    graph_dict = json.loads(sjson)
+                    corrige_txt = corrige_txt.replace(found_json, f"\n[[GRAPHIC_{idx}]]\n", 1)
+                    graph_list.append(graph_dict)
+                except Exception as e:
+                    print("Erreur parsing JSON:", e)
+                    continue
+            return corrige_txt.strip(), graph_list
+
+        return output.strip(), None
+
+    except Exception as e:
+        return f"Erreur API: {str(e)}", None

@@ -13,6 +13,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 load_dotenv()
+from django.urls import reverse_lazy
 #print("DB_USER:", os.getenv('DB_USER'))
 #print("DB_PASSWORD:", os.getenv('DB_PASSWORD'))
 
@@ -171,3 +172,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+AUTH_USER_MODEL = "correction.CustomUser"
+
+
+#pour rediriger l'utilisateur toujours vers la page soummettre quand le login est bon
+LOGIN_REDIRECT_URL = reverse_lazy('correction:soumettre')
+#pour rediriger l'utilisateur toujours vers la page de connexion lorsqu'il se déconnecte
+LOGOUT_REDIRECT_URL = reverse_lazy('correction:login')

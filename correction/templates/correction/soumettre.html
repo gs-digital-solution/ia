@@ -1,5 +1,46 @@
-{% extends 'base.html' %}
+
 {% block content %}
+
+<style>
+.quick-nav {
+    width: 100%;
+    max-width: 540px;
+    margin: 0 auto 1.1em auto;
+    display: flex;
+    justify-content: center;
+    gap: 1em;
+    flex-wrap: wrap;
+}
+.quick-btn {
+    background: #00a484;
+    color: #fff;
+    font-size: 1.08em;
+    font-weight: 600;
+    border: none;
+    border-radius: 25px;
+    padding: 0.44em 1.2em 0.46em 1.2em;
+    margin:0;
+    box-shadow: 0 1px 6px #00806044;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    transition: background .18s, color .18s, box-shadow .2s;
+}
+.quick-btn:hover, .quick-btn:focus {
+    background: #008060;
+    color: #efefef;
+}
+@media (max-width: 700px) {
+    .quick-nav { max-width:98vw; gap:0.32em;}
+    .quick-btn { width: 95vw; max-width:99vw; text-align:center; margin: 0.09em auto;}
+}
+</style>
+<div class="quick-nav">
+    <a href="{% url 'correction:soumettre' %}" class="quick-btn">corriger un sujet avec CIS</a>
+    <a href="{% url 'correction:historique' %}" class="quick-btn">Historique</a>
+    <a href="{% url 'logout' %}" class="quick-btn">Déconnexion</a>
+</div>
+
 <style>
     body { background: #f9fcf7; }
     .django-green { background: #008060; color: #fff; }
@@ -45,9 +86,14 @@
     .lecon-checkbox-block { margin: 8px 0 18px 0; padding: 0.75em; background: #f6fefb; border-radius: 6px; }
     .lecon-checkbox { accent-color: #008060; width: 1.1em; height: 1.1em; margin-right: 0.7em; }
     .lecon-label { display: flex; align-items: center; margin-bottom: 0.5em; font-size: 1em; color: #134c33; }
+    .file-help {
+        margin-top: -6px; margin-bottom: 10px;
+        font-size: 0.95em; color: #00695f; display: block;
+    }
     @media (max-width: 700px) {
         .form-section { max-width: 99vw; padding: 1.2rem 0.5rem; }
         .form-header { font-size: 1.35em; }
+        .file-help { font-size: 0.93em;}
     }
 </style>
 <div class="form-section">
@@ -72,14 +118,20 @@
         <label for="id_type_exercice">Type d'exercice</label>
         {{ form.type_exercice }}
 
-<label for="id_fichier">Fichier de l'exercice (PDF ou image/photo)</label>
-<input type="file" name="fichier" id="id_fichier" accept=".pdf, image/*" capture="environment"
-       style="width:100%;border:1.5px solid #008060;border-radius:5px;padding:0.6em;margin-bottom:1.2em;
-       background:#f6fefb;">
+        <label for="id_fichier">Fichier de l'exercice (PDF, photo, image)</label>
+        <input type="file" name="fichier" id="id_fichier"
+               accept=".pdf, image/*"
+               capture="environment"
+               style="width:100%;border:1.5px solid #008060;border-radius:5px;padding:0.6em;margin-bottom:0.35em;background:#f6fefb;">
+        <span class="file-help">
+            Sur mobile, ton appareil photo s’ouvrira automatiquement. <br>
+            Prends une photo nette, bien éclairée & de texte imprimé si possible.<br>
+            Sur ordinateur, tu peux choisir un fichier PDF, JPG ou PNG.
+        </span>
 
         <button type="submit" class="submit-btn">Soumettre</button>
 
-        <!-- Bloc dynamique pour les leçons : seront injectées en JS -->
+        <!-- Bloc dynamique pour les leçons : injecté en JS -->
         <div id="bloc-lecons" class="lecon-checkbox-block" style="display:none;"></div>
 
     </form>

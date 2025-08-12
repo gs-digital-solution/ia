@@ -1,5 +1,45 @@
-{% extends 'base.html' %}
 {% block content %}
+
+<style>
+.quick-nav {
+    width: 100%;
+    max-width: 540px;
+    margin: 0 auto 1.1em auto;
+    display: flex;
+    justify-content: center;
+    gap: 1em;
+    flex-wrap: wrap;
+}
+.quick-btn {
+    background: #00a484;
+    color: #fff;
+    font-size: 1.08em;
+    font-weight: 600;
+    border: none;
+    border-radius: 25px;
+    padding: 0.44em 1.2em 0.46em 1.2em;
+    margin:0;
+    box-shadow: 0 1px 6px #00806044;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    transition: background .18s, color .18s, box-shadow .2s;
+}
+.quick-btn:hover, .quick-btn:focus {
+    background: #008060;
+    color: #efefef;
+}
+@media (max-width: 700px) {
+    .quick-nav { max-width:98vw; gap:0.32em;}
+    .quick-btn { width: 95vw; max-width:99vw; text-align:center; margin: 0.09em auto;}
+}
+</style>
+<div class="quick-nav">
+    <a href="{% url 'correction:soumettre' %}" class="quick-btn">corriger un sujet avec CIS</a>
+    <a href="{% url 'correction:historique' %}" class="quick-btn">Historique</a>
+    <a href="{% url 'logout' %}" class="quick-btn">Déconnexion</a>
+</div>
+
 <style>
 .corrige-section {
     background: #fff;
@@ -20,30 +60,41 @@
 .corrige-bloc {
     background: #fff;     /* fond blanc même sur écran */
     border-radius: 7px;
-    padding: 0.8em 0.7em;
-    margin-bottom: 0.50em; /* espace réduit */
+    padding: 0.3em 0.7em 0.4em 0.7em; /* padding réduit */
+    margin-bottom: 0.15em; /* espace très réduit */
     color: #111;         /* texte noir pur */
     word-break: break-word;
     display: block;
     text-align: left;
     max-width: 100%;
-    font-size: 1.09em;
+    font-size: 1.07em;
     white-space: pre-line;
-    line-height: 1.19;
+    line-height: 1.07;
     border: 1px solid #f0f0f0;
+}
+.btn-zone-pdf-noch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25em;
+    margin: 0.7em 0 0.2em 0;
 }
 a.django-link { color:#008060; text-decoration:underline; }
 a.django-link:hover { color: #00a484; }
 .btn-retour, #pdfBtn {
     background:#008060;
     color:#fff;
-    padding:0.45em 1.5em;
-    margin-top:10px;
+    padding:0.39em 1.12em;
+    margin:0;
     border-radius:5px;
     border:none;
     cursor:pointer;
     font-weight:550;
-    display: inline-block;
+    display: block;
+    font-size: 1.03em;
+    width: 100%;
+    margin-bottom: 0.11em;
+    box-sizing: border-box;
 }
 .btn-retour:hover, #pdfBtn:hover {background:#00a484;}
 @media print {
@@ -57,7 +108,7 @@ a.django-link:hover { color: #00a484; }
 <div class="corrige-section">
     <div class="corrige-header">Corrigé généré</div>
     <div style="margin-bottom:2px;"><b>Date de soumission :</b> {{ demande.date_soumission|date:"d/m/Y H:i" }}</div>
-    <div class="corrige-bloc" style="margin-bottom: 0.15em;">
+    <div class="corrige-bloc" style="margin-bottom: 0.07em;">
         <b>Fichier de l’énoncé :</b>
         {% if demande.fichier %}
             <a class="django-link" href="{{ demande.fichier.url }}" target="_blank">{{ demande.fichier.name }}</a>
@@ -65,14 +116,16 @@ a.django-link:hover { color: #00a484; }
             Aucun fichier joint.
         {% endif %}
     </div>
-    <div class="corrige-bloc" style="margin-top: 0.10em;">
+    <div class="corrige-bloc" style="margin-top: 0.01em;">
         <b>Corrigé :</b>
         <div id="zone-corrige">{% autoescape off %}{{ demande.corrigé|linebreaksbr }}{% endautoescape %}</div>
     </div>
-    {% if pdf_enabled %}
-        <button id="pdfBtn" type="button">Télécharger/Enregistrer en PDF</button>
-    {% endif %}
-    <a href="{% url 'correction:soumettre' %}" class="btn-retour">← Soumettre un autre exercice</a>
+    <div class="btn-zone-pdf-noch">
+        {% if pdf_enabled %}
+            <button id="pdfBtn" type="button">Télécharger/Enregistrer en PDF</button>
+        {% endif %}
+        <a href="{% url 'correction:soumettre' %}" class="btn-retour">← Soumettre un autre exercice</a>
+    </div>
 </div>
 <script>
 window.MathJax = {
@@ -101,4 +154,5 @@ document.addEventListener('DOMContentLoaded', function(){
     }
 });
 </script>
+
 {% endblock %}
