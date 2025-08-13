@@ -31,9 +31,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com']
 #Cette config de ckeditor permet l’upload d’images depuis le back-office ou le front si tu ouvres les droits.
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"
 
@@ -170,6 +170,7 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 MEDIA_URL = '/media/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 AUTH_USER_MODEL = "correction.CustomUser"
