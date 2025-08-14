@@ -41,6 +41,7 @@ CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"
 #AUTH_USER_MODEL = 'correction.Utilisateur'
 # Application definition
 INSTALLED_APPS = [
+    'correction',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -50,7 +51,7 @@ INSTALLED_APPS = [
     'resources',
     'ckeditor',
     'ckeditor_uploader',
-    'correction',
+
 ]
 
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"   # Dossier où seront stockées les images
