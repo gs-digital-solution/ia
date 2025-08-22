@@ -2,7 +2,6 @@
 <style>
 body { background: #f9fcf7; }
 
-/* Navigation réutilisée */
 .quick-nav {
     width: 100%;
     max-width: 540px;
@@ -78,13 +77,50 @@ button.submit-btn:hover { background: #00a484; }
 .form-hint {
     font-size: .95em; color: #00695f; margin-bottom: 1em; margin-top: -0.5em;
 }
-
 @media (max-width: 700px) {
     .form-section { max-width: 99vw; padding: 1.1rem 0.47rem; }
     .form-header { font-size: 1.35em; }
 }
+.msg-bloc { margin-bottom: 1.07em;}
 </style>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const paysSelect = document.getElementById('id_pays');
+    const ssSelect = document.getElementById('id_sous_systeme');
 
+    function resetSelect(select, placeholder='Sélectionner...') {
+        select.innerHTML = '';
+        select.appendChild(new Option(placeholder, ''));
+        select.disabled = true;
+    }
+
+    function fillSelect(select, dataArray, placeholder='Sélectionner...') {
+        select.innerHTML = '';
+        select.appendChild(new Option(placeholder, ''));
+        dataArray.forEach(item => {
+            select.appendChild(new Option(item.nom, item.id));
+        });
+        select.disabled = dataArray.length === 0;
+    }
+
+    // Au chargement, désactive le select sous-système si pas de pays choisi
+    if (!paysSelect.value) {
+        resetSelect(ssSelect, 'Sélectionner d\'abord un pays');
+    }
+
+    paysSelect.addEventListener('change', function() {
+        let val = paysSelect.value;
+        resetSelect(ssSelect, 'Chargement...');
+        if (!val) {
+            resetSelect(ssSelect, 'Sélectionner d\'abord un pays');
+            return;
+        }
+        fetch(`/correction/ajax/sous-systemes/?pays_id=${val}`)
+            .then(r => r.json())
+            .then(data => fillSelect(ssSelect, data, 'Sélectionner un sous-système'));
+    });
+});
+</script>
 <div class="quick-nav">
     <a href="{% url 'correction:login' %}" class="quick-btn">Se connecter</a>
     <a href="{% url 'correction:inscription' %}" class="quick-btn">Créer un compte</a>
@@ -92,35 +128,43 @@ button.submit-btn:hover { background: #00a484; }
 
 <div class="form-section">
     <div class="form-header">👤 Inscription utilisateur</div>
+    {% if messages %}
+      <div class="msg-bloc">
+        {% for m in messages %}
+          <div style="
+            background: {% if m.tags == 'success' %}#d2ffe2{% else %}#ffe1e1{% endif %};
+            color: {% if m.tags == 'success' %}#007931{% else %}#d10c20{% endif %};
+            border-radius:8px; padding:0.72em 1.12em; font-weight:600; text-align:center;">
+            {{ m }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
     <form method="post" autocomplete="off">
         {% csrf_token %}
         {% if form.non_field_errors %}
-            <div style="color:#d10c20; margin-bottom:0.9em;">
+            <div style="background:#ffe1e1; color:#d10c20; border-radius:8px; padding:0.7em 1.1em; font-weight: 600; margin-bottom:0.9em;">
                 {{ form.non_field_errors }}
             </div>
         {% endif %}
+
         <label for="id_first_name">Prénom</label>
         {{ form.first_name }}
-
         <label for="id_whatsapp_number">Numéro WhatsApp</label>
         <span class="form-hint"> </span>
         {{ form.whatsapp_number }}
-
         <label for="id_pays">Pays</label>
         {{ form.pays }}
-
         <label for="id_sous_systeme">Sous-système</label>
         {{ form.sous_systeme }}
-
+        <label for="id_gmail">Adresse Gmail</label>
+        {{ form.gmail }}
         <label for="id_password1">Mot de passe</label>
         {{ form.password1 }}
-
         <label for="id_password2">Confirmer mot de passe</label>
         {{ form.password2 }}
-
         <label for="id_secret_question">Question secrète</label>
         {{ form.secret_question }}
-
         <label for="id_secret_answer">Réponse secrète</label>
         {{ form.secret_answer }}
 

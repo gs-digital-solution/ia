@@ -8,17 +8,26 @@ input[type="text"], input[type="tel"] { width:100%; border:1.5px solid #008060; 
 button.submit-btn { width:100%; background:#008060; color:#fff; font-weight:600; font-size:1.1em; border:none; border-radius:5px; padding:0.8em 0.5em; margin-top:1em; cursor:pointer; transition:background 0.3s;}
 button.submit-btn:hover { background:#00a484; }
 @media (max-width: 700px){ .form-section { max-width:98vw; padding: 1.2rem 0.7rem;} .form-header {font-size:1.13em;} }
+.msg-bloc { margin-bottom: 1.07em;}
 </style>
-
 <div class="form-section">
     <div class="form-header">🔏 Mot de passe oublié</div>
-    {% if message %}
-        <div style="color:#d10c20; margin-bottom:0.8em;">{{ message }}</div>
+    {% if messages %}
+      <div class="msg-bloc">
+        {% for m in messages %}
+          <div style="
+            background: {% if m.tags == 'success' %}#d2ffe2{% else %}#ffe1e1{% endif %};
+            color: {% if m.tags == 'success' %}#007931{% else %}#d10c20{% endif %};
+            border-radius:8px; padding:0.72em 1.12em; font-weight:600; text-align:center;">
+            {{ m }}
+          </div>
+        {% endfor %}
+      </div>
     {% endif %}
     <form method="post" autocomplete="off">
         {% csrf_token %}
         <label for="id_whatsapp">Entrez votre numéro WhatsApp</label>
-        <input type="text" id="id_whatsapp" name="whatsapp_number" required placeholder="Ex: +23761234567">
+        <input type="text" id="id_whatsapp" name="whatsapp_number" required placeholder="saisissez votre numéro ici">
         <button type="submit" class="submit-btn">Continuer</button>
     </form>
     <div style="margin-top:1em; text-align:center;">

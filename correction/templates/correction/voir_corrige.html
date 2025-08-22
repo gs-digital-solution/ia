@@ -1,5 +1,6 @@
 {% block content %}
 
+<!-- ----------- STYLES ------------- -->
 <style>
 .quick-nav {
     width: 100%;
@@ -33,14 +34,6 @@
     .quick-nav { max-width:98vw; gap:0.32em;}
     .quick-btn { width: 95vw; max-width:99vw; text-align:center; margin: 0.09em auto;}
 }
-</style>
-<div class="quick-nav">
-    <a href="{% url 'correction:soumettre' %}" class="quick-btn">corriger un sujet avec CIS</a>
-    <a href="{% url 'correction:historique' %}" class="quick-btn">Historique</a>
-    <a href="{% url 'logout' %}" class="quick-btn">Déconnexion</a>
-</div>
-
-<style>
 .corrige-section {
     background: #fff;
     border-radius: 8px;
@@ -58,11 +51,11 @@
     text-align: center;
 }
 .corrige-bloc {
-    background: #fff;     /* fond blanc même sur écran */
+    background: #fff;
     border-radius: 7px;
-    padding: 0.3em 0.7em 0.4em 0.7em; /* padding réduit */
-    margin-bottom: 0.15em; /* espace très réduit */
-    color: #111;         /* texte noir pur */
+    padding: 0.3em 0.7em 0.4em 0.7em;
+    margin-bottom: 0.15em;
+    color: #111;
     word-break: break-word;
     display: block;
     text-align: left;
@@ -104,10 +97,28 @@ a.django-link:hover { color: #00a484; }
     .corrige-header { font-size: 1.14em !important; color: #111 !important; }
     a.django-link { color: #111 !important; text-decoration: underline !important; }
 }
+.feedback-section {margin-top:2.2em;padding:1.15em 0;border-top:1.3px solid #c2e7d5;text-align:center;}
+.feedback-success {color:#1c7c40;font-weight:700;background:#e1fae5;border-radius:6px;padding:0.55em 1.18em;display:inline-block;}
+.submit-btn { margin-top:0.7em;width:auto;}
 </style>
+
+<!-- ----------- NAV BAR ------------- -->
+<div class="quick-nav">
+    <a href="{% url 'correction:soumettre' %}" class="quick-btn">corriger un sujet avec CIS</a>
+    <a href="{% url 'correction:historique' %}" class="quick-btn">Historique</a>
+    <a href="{% url 'correction:profil' %}" class="quick-btn">Mon profil</a>
+    <a href="{% url 'correction:logout' %}" class="quick-btn">Déconnexion</a>
+    {% if user.is_authenticated and user.role == 'admin' %}
+        <a href="{% url 'correction:admin_dashboard' %}" class="quick-btn">Dashboard admin</a>
+    {% endif %}
+</div>
+
+<!-- ----------- ZONE DE CORRIGE ------------- -->
 <div class="corrige-section">
     <div class="corrige-header">Corrigé généré</div>
-    <div style="margin-bottom:2px;"><b>Date de soumission :</b> {{ demande.date_soumission|date:"d/m/Y H:i" }}</div>
+    <div style="margin-bottom:2px;">
+        <b>Date de soumission :</b> {{ demande.date_soumission|date:"d/m/Y H:i" }}
+    </div>
     <div class="corrige-bloc" style="margin-bottom: 0.07em;">
         <b>Fichier de l’énoncé :</b>
         {% if demande.fichier %}
@@ -118,7 +129,8 @@ a.django-link:hover { color: #00a484; }
     </div>
     <div class="corrige-bloc" style="margin-top: 0.01em;">
         <b>Corrigé :</b>
-        <div id="zone-corrige">{% autoescape off %}{{ demande.corrigé|linebreaksbr }}{% endautoescape %}</div>
+        <!-- ✅ PATCH ICI : retrait du filtre linebreaksbr -->
+        <div id="zone-corrige">{% autoescape off %}{{ demande.corrigé }}{% endautoescape %}</div>
     </div>
     <div class="btn-zone-pdf-noch">
         {% if pdf_enabled %}
@@ -127,6 +139,34 @@ a.django-link:hover { color: #00a484; }
         <a href="{% url 'correction:soumettre' %}" class="btn-retour">← Soumettre un autre exercice</a>
     </div>
 </div>
+
+<!-- ----------- FEEDBACK UTILISATEUR ------------- -->
+<div class="feedback-section">
+    <h4 style="color:#098f56; font-size:1.13em;">Votre avis sur ce corrigé</h4>
+    {% if user.is_authenticated %}
+        {% if has_feedback %}
+            <div class="feedback-success">
+                Merci pour votre avis !
+            </div>
+        {% else %}
+            <form method="post" action="{% url 'correction:donner_feedback' correction.id %}" style="margin-bottom:0;">
+                {% csrf_token %}
+                {{ form.note.errors }}
+                <div style="margin-bottom: 1.2em;">
+                  <b>Note :</b> {{ form.note }}
+                </div>
+                <div>
+                    {{ form.comment.label_tag }}<br>
+                    {{ form.comment }}
+                </div>
+                <button class="submit-btn">Envoyer le feedback</button>
+            </form>
+        {% endif %}
+    {% else %}
+        <div><a href="{% url 'correction:login' %}">Connectez-vous pour donner votre avis</a></div>
+    {% endif %}
+</div>
+
 <script>
 window.MathJax = {
   tex: {
@@ -152,7 +192,11 @@ document.addEventListener('DOMContentLoaded', function(){
             });
         }
     }
+
+    // 👉 Si zone-corrige contenu dynamique, on peut forcer MathJax :
+    if(window.MathJax && window.MathJax.typeset){
+        window.MathJax.typeset();
+    }
 });
 </script>
-
 {% endblock %}

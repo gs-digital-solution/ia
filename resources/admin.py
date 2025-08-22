@@ -8,6 +8,7 @@ from .models import Departement
 from .models import TypeExercice
 from .models import Lecon
 from .models import ExerciceCorrige
+from .models import PromptIA
 
 @admin.register(Pays)
 class PaysAdmin(admin.ModelAdmin):
@@ -69,3 +70,12 @@ class ExerciceCorrigeAdmin(admin.ModelAdmin):
     search_fields = ('intitule', 'contenu_exercice', 'contenu_corrige')
     readonly_fields = ('date_creation',)
     filter_horizontal = ("lecons_associees",)
+
+
+
+
+@admin.register(PromptIA)
+class PromptIAAdmin(admin.ModelAdmin):
+    list_display = ("matiere", "classe", "sous_systeme", "pays", "updated_at")
+    search_fields = ("matiere__nom", "classe__nom", "sous_systeme__nom", "pays__nom")
+    list_filter = ("pays", "sous_systeme", "classe")

@@ -1,0 +1,131 @@
+{% block content %}
+<style>
+:root {
+  --color-main: #0c4b33;
+  --color-main-light: #0e6c46;
+  --color-bg: #f8fbf5;
+  --color-thead: #e7f7ea;
+  --color-tborder: #c2e7d5;
+  --color-btn: #228753;
+  --color-btn-hover: #17653b;
+}
+
+body { background: var(--color-bg);}
+.form-section {
+    background: #fff;
+    border-radius: 9px;
+    box-shadow: 0 2px 18px #0c4b3330;
+    padding: 2.2rem 1.6rem;
+    max-width: 700px;
+    margin: 2rem auto;
+    border: 1.5px solid var(--color-tborder);
+}
+.form-header {
+    color: var(--color-main);
+    background: var(--color-thead);
+    border-radius: 8px;
+    padding: 0.8em 0;
+    font-weight: 700;
+    font-size: 1.65em;
+    text-align:center;
+    margin-bottom:1.2em;
+    letter-spacing:1px;
+    border: 1.5px solid var(--color-tborder);
+    box-shadow: 0 2px 9px #1c663533;
+}
+.quick-nav {
+    width: 100%;
+    max-width: 700px;
+    margin: 0 auto 1.1em auto;
+    display: flex;
+    justify-content: center;
+    gap: 1em;
+    flex-wrap: wrap;
+}
+.quick-btn {
+    background: var(--color-btn);
+    color: #fff;
+    font-size: 1.08em;
+    font-weight: 600;
+    border: none;
+    border-radius: 25px;
+    padding: 0.44em 1.2em 0.46em 1.2em;
+    margin:0;
+    box-shadow: 0 1px 6px #00806044;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background .18s, color .18s, box-shadow .2s;
+}
+.quick-btn:hover, .quick-btn:focus {
+    background: var(--color-btn-hover);
+    color:#efefef;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.8em;
+    box-shadow: 0 2px 12px #13784525;
+    background: #fafefc;
+    border-radius: 10px;
+    overflow: hidden;
+}
+th, td { padding: 0.77em 0.2em; text-align: center;}
+th {
+    background: var(--color-thead);
+    color: var(--color-main);
+    font-weight: 700;
+    border-bottom: 2.5px solid var(--color-tborder);
+}
+tr:nth-child(even) { background: #f4fdf7;}
+tr:hover { background: #e1f6ea; }
+td {
+    border-bottom: 1px solid #e0eee7;
+    font-size:1.07em;
+}
+.msg-bloc { margin-bottom: 1.07em;}
+.admin-success-msg {
+    background: #cfeece;
+    color: #0d593c;
+    border-radius:9px;
+    font-size:1.06em;
+    font-weight: 600;
+    padding:0.8em 1.2em;
+    margin:0.5em 0 1.2em 0;
+    box-shadow: 0 1.5px 5px #0c8f3d14;
+    text-align:center;
+}
+.admin-err-msg {
+    background: #fae4e4;
+    color: #ca0f0f;
+    border-radius:9px;
+    font-size:1.05em;
+    font-weight: 600;
+    padding:0.8em 1.2em;
+    margin:0.5em 0 1.2em 0;
+    text-align:center;
+}
+@media (max-width: 700px) {
+    .form-section { max-width: 99vw; padding: 1.1rem 0.47rem; }
+    .form-header { font-size: 1.19em;}
+    .quick-nav { max-width:99vw; gap:0.32em;}
+    table {font-size:0.95em;}
+}
+</style>
+<div class="quick-nav">
+    <a href="{% url 'correction:admin_users' %}" class="quick-btn">Utilisateurs</a>
+    <a href="{% url 'correction:profil' %}" class="quick-btn">Profil</a>
+    <a href="{% url 'correction:admin_feedback_list' %}" class="quick-btn">voir les réactions des utilisateurs</a>
+    <a href="{% url 'correction:login' %}" class="quick-btn">Déconnexion</a>
+</div>
+<div class="form-section" style="max-width:600px">
+    <h2 class="form-header">🚀 Dashboard administrateur</h2>
+    <ul style="font-size:1.08em;line-height:1.6;">
+        <li><b>Total utilisateurs :</b> {{ n_users }}</li>
+        <li><b>Admins :</b> {{ n_admin }} | <b>Profs :</b> {{ n_prof }} | <b>Élèves :</b> {{ n_eleve }} | <b>Investisseurs :</b> {{ n_invest }}</li>
+        <li><b>Corrections générées :</b> {{ n_corriges }}</li>
+    </ul>
+    <div style="margin-top:1.3em;">
+        <a href="{% url 'correction:admin_users' %}" class="quick-btn">Gérer les utilisateurs</a>
+    </div>
+</div>
+{% endblock %}

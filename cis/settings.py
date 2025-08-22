@@ -31,9 +31,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
-
-ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com']
+DEBUG = True
+#pour passer en production et travailler en local aussi
+ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
+#pour faire des tests en local
+#ALLOWED_HOSTS = ['127.0.0.1:8000','host']
 #Cette config de ckeditor permet l’upload d’images depuis le back-office ou le front si tu ouvres les droits.
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"
 
@@ -51,6 +53,7 @@ INSTALLED_APPS = [
     'resources',
     'ckeditor',
     'ckeditor_uploader',
+    'smart_selects',
 
 ]
 
@@ -181,3 +184,12 @@ AUTH_USER_MODEL = "correction.CustomUser"
 LOGIN_REDIRECT_URL = reverse_lazy('correction:soumettre')
 #pour rediriger l'utilisateur toujours vers la page de connexion lorsqu'il se déconnecte
 LOGOUT_REDIRECT_URL = reverse_lazy('correction:login')
+LOGIN_URL=reverse_lazy('correction:login')
+
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'

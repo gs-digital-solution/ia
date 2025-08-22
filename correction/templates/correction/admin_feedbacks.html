@@ -1,0 +1,86 @@
+{% block content %}
+<style>
+:root { --color-main: #0c4b33; --color-thead: #e7f7ea; --color-btn: #228753; }
+body { background: #f8fbf5 }
+.form-section { background: #fff; border-radius: 9px; box-shadow: 0 2px 18px #0c4b3330; padding: 2.2rem 1.6rem; max-width: 920px; margin: 2rem auto; border: 1.5px solid #c2e7d5; }
+.form-header { color: var(--color-main); background: var(--color-thead); border-radius: 8px; padding: 0.8em 0; font-weight: 700; font-size: 1.61em; text-align:center; margin-bottom:1.1em }
+.quick-nav { width: 100%; max-width: 900px; margin: 0 auto 1.1em auto; display: flex; justify-content: center; gap: 1em; flex-wrap: wrap;}
+.quick-btn { background: var(--color-btn); color: #fff; font-size: 1.08em; font-weight: 600; border: none; border-radius: 25px; padding: 0.44em 1.2em 0.46em 1.2em; margin:0; box-shadow: 0 1px 6px #00806044; cursor: pointer; text-decoration: none; transition: background .18s, color .18s, box-shadow .2s;}
+.quick-btn:hover, .quick-btn:focus { background: #17653b; color: #efefef;}
+table { width: 100%; border-collapse: collapse; margin-top: 0.8em; box-shadow: 0 2px 12px #13784525; background: #fafefc; border-radius: 10px; overflow: hidden;}
+th, td { padding: 0.77em 0.2em; text-align: center;}
+th { background: var(--color-thead); color: var(--color-main); font-weight: 700; border-bottom: 2.5px solid #c2e7d5;}
+tr:nth-child(even) { background: #f4fdf7;}
+tr:hover { background: #e1f6ea; }
+.feedback-comment { background: #f9f9ee; color: #26503b; border-radius:5px; margin:0.4em auto 0.65em auto; padding:0.3em 1em; font-size:.95em; display:inline-block;}
+label, select { font-size:1.07em; }
+</style>
+
+<div class="quick-nav">
+    <a href="{% url 'correction:admin_dashboard' %}" class="quick-btn">Dashboard admin</a>
+    <a href="{% url 'correction:admin_users' %}" class="quick-btn">Utilisateurs</a>
+    <a href="{% url 'correction:admin_feedback_list' %}" class="quick-btn">Feedbacks</a>
+    <a href="{% url 'correction:profil' %}" class="quick-btn">Profil</a>
+    <a href="{% url 'correction:logout' %}" class="quick-btn">Déconnexion</a>
+</div>
+
+<div class="form-section">
+    <div class="form-header">⭐️ Feedbacks sur les corrigés</div>
+
+    <form method="get" style="margin-bottom:1.2em; display: flex; gap:1em; flex-wrap: wrap;align-items:center;">
+        <label>Utilisateur :
+            <select name="user" onchange="this.form.submit()">
+                <option value="">Tous</option>
+                {% for u in users %}
+                <option value="{{ u.id }}" {% if user_id == u.id|stringformat:"s" %}selected{% endif %}>
+                    {{ u.first_name }} (#{{ u.id }}) - {{ u.get_role_display }}
+                </option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Corrigé :
+            <select name="corrig" onchange="this.form.submit()">
+                <option value="">Tous</option>
+                {% for c in corrections %}
+                <option value="{{ c.id }}" {% if corrig_id == c.id|stringformat:"s" %}selected{% endif %}>
+                    #{{ c.id }} - {{ c.matiere }} ({{ c.date_soumission|date:"d/m/Y" }})
+                </option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit" class="quick-btn" style="padding:0em 1.3em;margin-left:1.2em;">Filtrer</button>
+    </form>
+    <table>
+        <tr>
+            <th>Date</th>
+            <th>Utilisateur</th>
+            <th>Corrigé (ID)</th>
+            <th>Note</th>
+            <th>Commentaire</th>
+        </tr>
+        {% for fb in feedbacks %}
+        <tr>
+            <td>{{ fb.created_at|date:'d/m/Y H:i' }}</td>
+            <td>
+                <a href="{% url 'correction:user_profil_admin' fb.user.id %}" style="color:#008060;">{{ fb.user.first_name }}</a>
+                <br><span style="font-size:.97em; color:#888;">#{{ fb.user.id }}, {{ fb.user.get_role_display }}</span>
+            </td>
+            <td>
+                <a href="{% url 'correction:voir_corrige' fb.correction.id %}" style="color:#156c47;">#{{ fb.correction.id }}</a>
+                <br><span style="font-size:.96em;color:#225649;">{{ fb.correction.matiere }}</span>
+            </td>
+            <td>
+                {% for i in "12345"|make_list %}
+                    {% if forloop.counter <= fb.note %}⭐️{% else %}<span style="color:#dadada;">☆</span>{% endif %}
+                {% endfor %}
+            </td>
+            <td>
+                {% if fb.comment %}<div class="feedback-comment">{{ fb.comment }}</div>{% endif %}
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" style="text-align:center;">Aucun feedback à afficher</td></tr>
+        {% endfor %}
+    </table>
+</div>
+{% endblock %}

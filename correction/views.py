@@ -1,7 +1,7 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
-from .forms import DemandeCorrectionForm
+from .forms import DemandeCorrectionForm, ProfilUserForm
 from .models import DemandeCorrection
 from resources.models import SousSysteme, Departement, Classe, Matiere, TypeExercice, Lecon, ExerciceCorrige
 from .models import AppConfig
@@ -12,6 +12,16 @@ import re
 from .forms import CustomUserCreationForm, SECRET_QUESTIONS  # Import la liste
 from resources.models import Pays, SousSysteme
 from django.contrib.auth import get_user_model
+from .decorators import role_required
+
+from .decorators import only_admin
+from .models import CustomUser
+from django.http import HttpResponseRedirect
+from .ia_utils import generer_corrige_ia_et_graphique_async
+
+from .models import FeedbackCorrection, DemandeCorrection
+from .forms import FeedbackCorrectionForm
+
 
 # AJAX views (inchangées)
 @login_required
@@ -55,6 +65,12 @@ def ajax_lecons(request):
 # Modification MAJEURE : injection multi-graphique à l'endroit voulu dans le texte.
 @login_required
 def soumettre_exercice(request):
+    # Vérifie si la correction est bloquée par l'admin
+    app_config = AppConfig.objects.first()
+    if app_config and not app_config.correction_enabled:
+        msg = app_config.message_bloquant or "La fonctionnalité correction est temporairement indisponible. Merci de mettre à jour l'application ou de réessayer plus tard."
+        return render(request, 'correction/blocage_correction.html', {'message_bloquant': msg})
+
     if request.method == "POST":
         form = DemandeCorrectionForm(request.POST, request.FILES)
         if form.is_valid():
@@ -63,6 +79,7 @@ def soumettre_exercice(request):
             demande.save()
             form.save_m2m()
 
+            # ---------- Pipeline IA TRAITEMENT DIRECT (synchrone) ----------
             contexte = (
                 f"Pays : {demande.pays.nom if demande.pays else 'NC'}, "
                 f"Sous-système : {demande.sous_systeme.nom if demande.sous_systeme else 'NC'}, "
@@ -78,91 +95,63 @@ def soumettre_exercice(request):
                     type_exercice=demande.type_exercice,
                 ).values_list('contenu_corrige', flat=True)[:3]
             )
-
             texte_enonce = extraire_texte_fichier(
                 demande.fichier
             ) if demande.fichier else "Aucun énoncé soumis ou extraction impossible."
 
-            try:
-                corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-                    texte_enonce,
-                    contexte,
-                    lecons_contenus=lecons_contenus,
-                    exemples_corriges=exemples_corriges
-                )
-            except Exception as e:
-                corrige_txt, graph_list = f"[ERREUR IA] Correction indisponible. ({e})", None
-
-            print("graph_list =", graph_list)  # DEBUG
-
-            if graph_list and isinstance(graph_list, list):
-                img_htmls = []
-                img_urls = []
-                for idx, graph_info in enumerate(graph_list, 1):
-                    img_url = ""
-                    print(f">>> graph_info ({idx}) =", graph_info)
-                    # Décompacte tout type de dict 'graphique' pour TOUS les graphes (fonction, polygone, histogramme, ...)
-                    if graph_info and isinstance(graph_info, dict) and "graphique" in graph_info:
-                        graph_info = graph_info["graphique"]
-                    # On n'exige PAS "expression", on affiche tout type de graphe généré
-                    if graph_info and isinstance(graph_info, dict) and graph_info.get("type"):
-                        nom_g = f"graph_corrige_{demande.id}_{idx}.png"
-                        img_url = tracer_graphique(graph_info, nom_g)
-                        print(f">>> tracer_graphique img_url ({idx}) = {img_url}")
-                        if img_url:
-                            full_img_url = f'/media/{img_url}'
-                            img_html = (
-                                f'<div style="text-align:center;margin-top:0.6em;">'
-                                f'<img src="{full_img_url}" style="max-width:97%;border-radius:8px;" alt="Graphique généré">'
-                                f'</div>'
-                            )
-                        else:
-                            img_html = "<div><b>Erreur génération graphique.</b></div>"
-                    else:
-                        img_html = ""
-                    img_htmls.append(img_html)
-                    img_urls.append(img_url)
-                # IMPORTANT : remplacer SEULEMENT la première apparition de chaque placeholder
-                for idx, img_html in enumerate(img_htmls, 1):
-                    corrige_txt = corrige_txt.replace(f"[[GRAPHIC_{idx}]]", img_html, 1)
-                # Supprime les placeholders encore résiduels (doublon IA ou bug HTML)
-                for idx in range(1, len(img_htmls)+1):
-                    corrige_txt = corrige_txt.replace(f"[[GRAPHIC_{idx}]]", "")
-
-            elif graph_list and isinstance(graph_list, dict):
-                if "graphique" in graph_list:
-                    graph_info = graph_list["graphique"]
-                else:
-                    graph_info = graph_list
-                if graph_info.get("type"):
-                    nom_g = f"graph_corrige_{demande.id}.png"
-                    img_url = tracer_graphique(graph_info, nom_g)
-                    print(">>> tracer_graphique img_url (single dict) =", img_url)
-                    if img_url:
-                        img_html = (
-                            f'<div style="text-align:center;margin-top:0.6em;">'
-                            f'<img src="/media/{img_url}" style="max-width:97%;border-radius:8px;" alt="Graphique généré">'
-                            f'</div>'
-                        )
-                        corrige_txt += "\n" + img_html
-            print("CORRIGE HTML FINAL :", corrige_txt)
+            # --- Génère le corrigé IA ici (le code peut prendre du temps ici !) ---
+            corrige_txt, graph_list = generer_corrige_ia_et_graphique(
+                texte_enonce,
+                contexte,
+                lecons_contenus=lecons_contenus,
+                exemples_corriges=exemples_corriges,
+                matiere=demande.matiere
+            )
             demande.corrigé = corrige_txt
             demande.save()
-            return redirect('correction:voir_corrige', demande_id=demande.id)
+        return redirect('correction:voir_corrige', demande_id=demande.id)
+    # -------- Redirige VERS la page d'attente animée --------
+    # return redirect('correction:attente_traitement', demande_id=demande.id)
     else:
-        form = DemandeCorrectionForm()
+        # Préremplissage intelligent (pays, sous-système via User)
+        user = request.user
+        initial = {}
+        if hasattr(user, 'pays') and user.pays_id:
+            initial['pays'] = user.pays_id
+        if hasattr(user, 'sous_systeme') and user.sous_systeme_id:
+            initial['sous_systeme'] = user.sous_systeme_id
+        form = DemandeCorrectionForm(initial=initial)
 
+    # En GET ou en erreur de formulaire, on revient sur la page soumettre classique
     return render(request, "correction/soumettre.html", {"form": form})
+
 
 # Vue de consultation du corrigé (inchangée)
 @login_required
 def voir_corrige(request, demande_id):
     demande = get_object_or_404(DemandeCorrection, id=demande_id, user=request.user)
-    # Récupère le paramètre pdf_enabled
     app_config = AppConfig.objects.first()
     pdf_enabled = app_config.pdf_enabled if app_config else False
-    return render(request, "correction/voir_corrige.html", {"demande": demande, "pdf_enabled": pdf_enabled})
 
+    # Vérifie si l'utilisateur a déjà laissé un feedback sur ce corrigé
+    try:
+        feedback = FeedbackCorrection.objects.get(user=request.user, correction=demande)
+        has_feedback = True
+    except FeedbackCorrection.DoesNotExist:
+        feedback = None
+        has_feedback = False
+
+    form = None
+    if not has_feedback and request.user.is_authenticated:
+        form = FeedbackCorrectionForm()
+
+    return render(request, "correction/voir_corrige.html", {
+        "demande": demande,
+        "pdf_enabled": pdf_enabled,
+        "has_feedback": has_feedback,
+        "form": form,
+        "correction": demande,  # utile pour le feedback
+    })
 
 # Historique utilisateur (inchangé)
 @login_required
@@ -181,13 +170,14 @@ def supprimer_demande(request, demande_id):
     return render(request, "correction/confirm_supprimer.html", {"demande": demande})
 
 
-@login_required
+#@login_required ( protection retirée pour pas obligé que la création de compte nécessite qu'on soit connecté
 def inscription(request):
     if request.method == 'POST':
         form = CustomUserCreationForm(request.POST)
         if form.is_valid():
             form.save()
-            return redirect('login')
+            messages.success(request, "Compte créé avec succès ! Connectez-vous ci-dessous.")
+            return redirect('correction:login')  # Redirige vers le login après succès
     else:
         form = CustomUserCreationForm()
     return render(request, "correction/inscription.html", {
@@ -197,32 +187,191 @@ def inscription(request):
 
 # vue pour mot de passe oublié
 def mot_de_passe_oublie(request):
-    message = ""
     if request.method == 'POST':
-        whatsapp = request.POST.get('whatsapp_number')
+        whatsapp = request.POST.get('whatsapp_number', '').strip()
         user = get_user_model().objects.filter(whatsapp_number=whatsapp).first()
         if user:
-            question = user.secret_question
-            return render(request, "correction/reset_password.html", {"question": question, "whatsapp": whatsapp})
+            # Redirection vers reset-password AVEC whatsapp en GET
+            return redirect(f'{reverse("correction:reset_password")}?whatsapp={whatsapp}')
         else:
-            message = "Numéro WhatsApp inconnu ou non inscrit."
-    return render(request, "correction/mot_de_passe_oublie.html", {"message": message})
+            messages.error(request, "Numéro WhatsApp inconnu ou non inscrit.")
+            return redirect('correction:mot_de_passe_oublie')  # <-- Redirect ici pour garder le message
+    return render(request, "correction/mot_de_passe_oublie.html")
+
 
 # vue pour reset password
 def reset_password(request):
-    message = ""
+    whatsapp = request.GET.get('whatsapp') or request.POST.get('whatsapp')
+    user = get_user_model().objects.filter(whatsapp_number=whatsapp).first()
+    if request.method == 'GET':
+        if user:
+            return render(request, "correction/reset_password.html", {
+                "question": user.secret_question,
+                "whatsapp": whatsapp
+            })
+        else:
+            messages.error(request, "Session expirée ou numéro manquant.")
+            return redirect('correction:mot_de_passe_oublie')
+
     if request.method == 'POST':
-        whatsapp = request.POST.get('whatsapp')
         answer = request.POST.get('secret_answer')
         new_pwd = request.POST.get('new_password')
-        user = get_user_model().objects.filter(whatsapp_number=whatsapp).first()
         if user and user.check_secret(answer):
             user.set_password(new_pwd)
             user.save()
-            message = "Mot de passe réinitialisé avec succès !!! Vous pouvez maintenant vous connecter."
-            return redirect('correction:login')
+            messages.success(request, "Mot de passe réinitialisé avec succès ! Connectez-vous ci-dessous.")
+            return redirect('correction:login')  # Redirect pour message de succès
         else:
-            question = user.secret_question if user else "Question inconnue"
-            message = "Réponse incorrecte."
-            return render(request, "correction/reset_password.html",
-                          {"message": message, "question": question, "whatsapp": whatsapp})
+            error_msg = "Réponse incorrecte." if user else "Numéro WhatsApp inconnu."
+            return render(request, "correction/reset_password.html", {
+                "question": user.secret_question if user else "Question inconnue",
+                "whatsapp": whatsapp,
+                "message": error_msg,
+            })
+
+
+@login_required
+def profil(request):
+    user = request.user
+    if request.method == 'POST':
+        form = ProfilUserForm(request.POST, instance=user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Profil mis à jour avec succès !")
+            return redirect('correction:profil')
+    else:
+        form = ProfilUserForm(instance=user)
+    return render(request, 'correction/profil.html', {
+        'form': form,
+        'gmail': user.gmail,
+        'code_promo': user.code_promo,
+    })
+
+
+# préparation des vues pour chaque role
+@role_required('prof', 'admin')
+def espace_prof(request):
+    return render(request, 'correction/espace_prof.html')  # template à créer selon besoin
+
+@role_required('admin')
+def espace_admin(request):
+    # Page ultra-réservée
+    return render(request, 'correction/espace_admin.html')  # template à créer
+
+@role_required('admin, investisseur')
+def espace_admin(request):
+    # Page ultra-réservée
+    return render(request, 'correction/espace_investisseur.html')  # template à créer
+
+
+
+@only_admin
+def admin_dashboard(request):
+    n_users = CustomUser.objects.count()
+    n_admin = CustomUser.objects.filter(role='admin').count()
+    n_prof = CustomUser.objects.filter(role='prof').count()
+    n_eleve = CustomUser.objects.filter(role='eleve').count()
+    n_invest = CustomUser.objects.filter(role='investisseur').count()
+    n_corriges = DemandeCorrection.objects.count()
+    return render(request, "correction/admin_dashboard.html", {
+        "n_users": n_users, "n_admin": n_admin, "n_prof": n_prof,
+        "n_eleve": n_eleve, "n_invest": n_invest, "n_corriges": n_corriges
+    })
+
+@only_admin
+def admin_users_list(request):
+    role = request.GET.get("role", "")
+    q = CustomUser.objects.all()
+    if role:
+        q = q.filter(role=role)
+    q = q.order_by('-date_joined')
+    return render(request, "correction/admin_users.html", {
+        "users": q, "role_filter": role
+    })
+
+@only_admin
+def user_toggle_active(request, user_id):
+    user = CustomUser.objects.get(pk=user_id)
+    user.is_active = not user.is_active
+    user.save()
+    messages.success(request, f"Utilisateur {'activé' if user.is_active else 'désactivé'}")
+    return HttpResponseRedirect(request.META.get('HTTP_REFERER', '/'))
+
+@only_admin
+def user_delete(request, user_id):
+    user = CustomUser.objects.get(pk=user_id)
+    user.delete()
+    messages.success(request, "Utilisateur supprimé")
+    return HttpResponseRedirect(request.META.get('HTTP_REFERER', '/'))
+
+# Vues pour profil utilisateur côté admin et historique (pour admin avancée)
+
+@only_admin
+def user_profil_admin(request, user_id):
+    from .models import CustomUser
+    user = CustomUser.objects.get(pk=user_id)
+    return render(request, "correction/user_profil_admin.html", {"user": user})
+
+@only_admin
+def user_corrections(request, user_id):
+    from .models import CustomUser, DemandeCorrection
+    user = CustomUser.objects.get(pk=user_id)
+    corrections = DemandeCorrection.objects.filter(user=user).order_by('-date_soumission')
+    return render(request, "correction/user_corrections.html", {"user": user, "corrections": corrections})
+
+
+
+
+# Vues pour gestion feedback coté admin native django
+@only_admin
+def admin_feedback_list(request):
+    feedbacks = FeedbackCorrection.objects.select_related('user', 'correction').order_by('-created_at')
+    user_id = request.GET.get('user')
+    corrig_id = request.GET.get('corrig')
+
+    if user_id:
+        feedbacks = feedbacks.filter(user__id=user_id)
+    if corrig_id:
+        feedbacks = feedbacks.filter(correction__id=corrig_id)
+
+    return render(request, "correction/admin_feedbacks.html", {
+        "feedbacks": feedbacks,
+        "user_id": user_id,
+        "corrig_id": corrig_id,
+        "users": CustomUser.objects.all(),
+        "corrections": DemandeCorrection.objects.all()
+    })
+# Vues pour gestion feedback coté utilisateur
+@login_required
+def donner_feedback(request, demande_id):
+    correction = get_object_or_404(DemandeCorrection, id=demande_id)
+    fb, created = FeedbackCorrection.objects.get_or_create(user=request.user, correction=correction)
+    if request.method == 'POST':
+        form = FeedbackCorrectionForm(request.POST, instance=fb)
+        if form.is_valid():
+            form.save()
+            from django.contrib import messages
+            messages.success(request, "Merci pour votre retour !")
+            return redirect('correction:voir_corrige', demande_id=demande_id)
+    else:
+        form = FeedbackCorrectionForm(instance=fb)
+    return render(request, 'correction/feedback.html', {'form': form, 'correction': correction})
+
+
+# les deux Vues ci-dessous sont pour attente traitement ( la deuxièe est non utilisée à cause des difficulté avec celery)
+@login_required
+def attente_traitement(request, demande_id):
+    #demande = get_object_or_404(DemandeCorrection, id=demande_id, user=request.user)
+    return render(request, "correction/traitement_en_cours.html",
+                  {"demande_id": demande_id, "delai_redirection": 60})
+
+
+
+@login_required
+def etat_traitement_ajax(request, demande_id):
+    from .models import DemandeCorrection
+    demande = get_object_or_404(DemandeCorrection, id=demande_id, user=request.user)
+    # On vérifie : corrigé présent/non nul ?
+    done = (demande.corrigé and demande.corrigé.strip() != "")
+    return JsonResponse({"done": done})
+

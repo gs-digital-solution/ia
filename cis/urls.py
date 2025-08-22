@@ -35,7 +35,11 @@ path(
 path(
     'logout/',
     LogoutView.as_view(next_page='correction:soumettre'),
-    name='logout')
+    name='logout'),
+
+path(
+    'chaining/',
+    include('smart_selects.urls')),
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

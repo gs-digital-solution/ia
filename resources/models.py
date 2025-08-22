@@ -2,6 +2,8 @@ from django.db import models
 from django.core.validators import RegexValidator
 from django.utils.translation import gettext_lazy as _
 from ckeditor_uploader.fields import RichTextUploadingField
+from django.db.models import JSONField
+from smart_selects.db_fields import ChainedForeignKey
 
 #TABLE PAYS
 class Pays(models.Model):
@@ -248,3 +250,46 @@ class ExerciceCorrige(models.Model):
 
     def __str__(self):
         return f"{self.intitule} ({self.matiere.nom} - {self.type_exercice.nom})"
+
+ #table de gestion du prompt IA
+class PromptIA(models.Model):
+    pays = models.ForeignKey('Pays', on_delete=models.SET_NULL, null=True, blank=True)
+    sous_systeme = ChainedForeignKey(
+        'SousSysteme',
+        chained_field="pays",
+        chained_model_field="pays",
+        show_all=False,
+        auto_choose=True,
+        sort=True,
+        null=True, blank=True, on_delete=models.SET_NULL
+    )
+    classe = ChainedForeignKey(
+        'Classe',
+        chained_field="sous_systeme",
+        chained_model_field="sous_systeme",
+        show_all=False,
+        auto_choose=True,
+        sort=True,
+        null=True, blank=True, on_delete=models.SET_NULL
+    )
+    matiere = ChainedForeignKey(
+        'Matiere',
+        chained_field="classe",
+        chained_model_field="classe",
+        show_all=False,
+        auto_choose=True,
+        sort=True,
+        null=True, blank=True, on_delete=models.CASCADE
+    )
+    system_prompt = models.TextField("Consignes système IA", blank=True, default="")
+    exemple_prompt = models.TextField("Exemples de corrigés", blank=True, default="")
+    consignes_finales = models.TextField("Consignes finales", blank=True, default="")
+    prompt_json = models.JSONField("Prompt structuré JSON (optionnel)", blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+            items = [str(x) for x in [self.pays, self.sous_systeme, self.classe, self.matiere] if x]
+            titre = " > ".join(items) if items else "Prompt global"
+            return f"Prompt {titre}"
+
+
