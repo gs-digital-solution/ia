@@ -12,6 +12,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import re
+from celery import shared_task
 
 
 def extraire_texte_pdf(fichier_path):
@@ -214,154 +215,83 @@ def tracer_graphique(graphique_dict, output_name):
         return None
 
 
+
+
 def generer_corrige_ia_et_graphique(
         texte_enonce,
         contexte,
         lecons_contenus=None,
-        exemples_corriges=None
+        exemples_corriges=None,
+        matiere=None  # NOUVEAU : on passe maintenant la Matiere
 ):
-    print("UTILISATION DE DEEPSEEK-R1")
+
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
         exemples_corriges = []
 
-    # Configuration DeepSeek
-    api_key = os.getenv('DEEPSEEK_API_KEY')  # Changer le nom de la variable d'environnement
+    # ---- PROMPT IA personnalisable par matière -----
+    system_prompt = ""
+    exemple_prompt = ""
+    consignes_finales = ""
+
+    DEFAULT_SYSTEM_PROMPT = """
+Corrige cet exercice comme un expert discipliné, étape par étape ...
+(mets par défaut ta consigne la plus générique ici)
+"""
+    DEFAULT_EXEMPLE_PROMPT = """
+(mets un exemple très générique ici, qui s'affichera si prompt IA n'est pas custom)
+"""
+    DEFAULT_CONSIGNES_FINALES = """
+Structure : Méthode → Calcul → [Réponse]. Tex Latex...
+"""
+
+    # On cherche s'il y a un prompt custom matière
+    if matiere and hasattr(matiere, 'prompt_ia'):
+        promptia = matiere.prompt_ia
+        system_prompt = promptia.system_prompt or DEFAULT_SYSTEM_PROMPT
+        exemple_prompt = promptia.exemple_prompt or DEFAULT_EXEMPLE_PROMPT
+        consignes_finales = promptia.consignes_finales or DEFAULT_CONSIGNES_FINALES
+    else:
+        system_prompt = DEFAULT_SYSTEM_PROMPT
+        exemple_prompt = DEFAULT_EXEMPLE_PROMPT
+        consignes_finales = DEFAULT_CONSIGNES_FINALES
+
+    lecons = [f"### {t}\n{c}" for t, c in lecons_contenus[:3]]
+    exemples = [e for e in exemples_corriges[:2]]
+
+    # -- PROMPT CONSTRUIT SUR-MESURE --
+    prompt_ia = (
+        "### CONTEXTE DU COURS\n"
+        f"{contexte}\n\n"
+        "### LEÇONS UTILES\n"
+        f"{chr(10).join(lecons) if lecons else 'Aucune leçon supplémentaire'}\n\n"
+        "### EXEMPLES DE CORRIGÉS\n"
+        f"{exemple_prompt if exemple_prompt else (chr(10).join(exemples) if exemples else 'Aucun exemple fourni')}\n\n"
+        "### EXERCICE À CORRIGER\n"
+        f"{texte_enonce.strip()}\n\n"
+        "### CONSIGNES FINALES\n"
+        f"{consignes_finales}"
+    )
+
+    # Appel à l'API DeepSeek-R1...
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt_ia}
+        ],
+        "temperature": 0.12,
+        "max_tokens": 3000,
+        "top_p": 0.3,
+        "frequency_penalty": 0.2
+    }
+    # Configuration DeepSeek (API clé/config)
+    api_key = os.getenv('DEEPSEEK_API_KEY')  # Vérifie que ta variable est bien définie dans .env ou settings
     api_url = "https://api.deepseek.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
-    }
-
-    def clean_txt(txt, n=320):
-        return txt[:n].replace('\n', ' ').replace('\r', ' ').strip()
-
-    # Préparation du contexte scientifique
-    lecons = [f"### {t}\n{c}" for t, c in lecons_contenus[:3]]  # Jusqu'à 3 leçons
-    exemples = [clean_txt(e, 600) for e in exemples_corriges[:2]]  # Jusqu'à 2 exemples
-
-    # Prompt optimisé pour DeepSeek-R1 (scientifique + LaTeX)
-    SYSTEM_PROMPT = """
-Vous êtes un professeur expert en sciences (mathématiques, physique, chimie). 
-Corrigez rigoureusement les exercices en suivant ces règles :
-
-1. Pour chaque question nécessitant un graphique :
-   - Terminez la correction par "---corrigé---"
-   - Ajoutez UNIQUEMENT le JSON du graphique sur la ligne suivante
-
-2. Structurez la correction :
-   - Méthode claire avec étapes de raisonnement
-   - Calculs détaillés avec notations LaTeX (\\(...\\))
-   - Conclusion finale encadrée [Réponse]
-
-3. Types de graphiques supportés :
-   - "fonction", "cercle trigo", "nuage de points", "histogramme"
-   - "diagramme à bandes", "effectifs cumulés", "diagramme circulaire"
-   - "polygone"
-
-4. Dans les JSON de graphique :
-   - Utilisez "expression" pour les fonctions mathématiques
-   - "angles" en radians pour le cercle trigo
-   - Précisez les unités dans les labels
-5- La clé "points_x"/"points_y" ou "points" ou "abscisses"/"ordonnees" 
-    sont TOUJOURS acceptées pour une polygone statistique.
-"""
-
-    EXEMPLE_PROMPT = """
---- EXEMPLE 1 (Cercle trigo) ---
-Énoncé : Résoudre dans \\([-\\pi;2\\pi]\\) \\(2\\cos x = \\sqrt{2}\\) et représenter les solutions.
-Corrigé : On isole cos x... [étapes détaillées]...
-Les solutions sont \\(x = -\\frac{\\pi}{4}, \\frac{\\pi}{4}, \\frac{7\\pi}{4}, \\frac{9\\pi}{4}\\).
----corrigé---
-{"graphique": {"type":"cercle trigo", "angles":["-pi/4","pi/4","7*pi/4","9*pi/4"], "labels":["S1","S2","S3","S4"], "titre":"Solutions trigonométriques"}}
-
---- EXEMPLE 2 (Fonction) ---
-Énoncé : Tracer \\(f(x) = x^2 - 2x + 1\\) sur \\([-1;3]\\)
-Corrigé : La fonction est un polynôme... [étapes]...
-[Réponse] La parabole a son minimum en (1,0).
----corrigé---
-{"graphique": {"type": "fonction", "expression": "x**2 - 2*x + 1", "x_min": -1, "x_max": 3, "titre": "Parabole"}}
-
---- EXEMPLE 3 Polygone des effectifs cumulés ---
-Énoncé :
-Voici les résultats à un test pour 20 élèves, regroupés par classe :
-Classe     | Effectif
-[0;5[      | 3
-[5;10[     | 6
-[10;15[    | 7
-[15;20[    | 4
-
-1) Calculez les effectifs cumulés croissants (ECC).
-2) Tracez le polygone des ECC en fonction de la borne supérieure de chaque classe.
-3) Interprétez la distribution.
-
-Corrigé :
-**1. Calcul des effectifs cumulés croissants**
-
-| Borne supérieure | ECC |
-|:----------------:|:---:|
-| 0                | 0   |
-| 5                | 3   |
-| 10               | 3+6 = 9 |
-| 15               | 9+7 = 16 |
-| 20               | 16+4 = 20 |
-
-**2. Tracé du polygone**
-Le polygone relie successivement les points :
-- (0, 0)
-- (5, 3)
-- (10, 9)
-- (15, 16)
-- (20, 20)
-
-[Réponse]  
-La distribution montre que la majorité des élèves a obtenu entre 10 et 20.
-
----corrigé---
-{"graphique": {
-    "type": "polygone",
-    "points": [[0,0],[5,3],[10,9],[15,16],[20,20]],
-    "points_x": [0,5,10,15,20],
-    "points_y": [0,3,9,16,20],
-    "titre": "Polygone des effectifs cumulés",
-    "x_label": "Borne supérieure",
-    "y_label": "ECC"
-}}
-"""
-
-    # Construction du prompt final
-    prompt_ia = (
-        "### CONTEXTE DU COURS\n"
-        f"{contexte}\n\n"
-
-        "### LEÇONS UTILES\n"
-        f"{chr(10).join(lecons) if lecons else 'Aucune leçon supplémentaire'}\n\n"
-
-        "### EXEMPLES DE CORRIGÉS\n"
-        f"{chr(10).join(exemples) if exemples else 'Aucun exemple fourni'}\n\n"
-
-        "### EXERCICE À CORRIGER\n"
-        f"{texte_enonce.strip()}\n\n"
-
-        "### CONSIGNES FINALES\n"
-        "- Répondez en français avec un style clair et pédagogique\n"
-        "- Utilisez exclusivement \\( \\) pour les formules en ligne\n"
-        "- Vérifiez les unités et les calculs numériques\n"
-        "- Structurez avec : Méthode → Calcul → [Réponse]"
-    )
-
-    # Appel à l'API DeepSeek-R1
-    data = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT + EXEMPLE_PROMPT},
-            {"role": "user", "content": prompt_ia}
-        ],
-        "temperature": 0.12,  # Plus bas pour plus de rigueur scientifique
-        "max_tokens": 3000,  # Augmentation pour les corrections détaillées
-        "top_p": 0.3,
-        "frequency_penalty": 0.2
     }
 
     try:
@@ -397,3 +327,34 @@ La distribution montre que la majorité des élèves a obtenu entre 10 et 20.
 
     except Exception as e:
         return f"Erreur API: {str(e)}", None
+
+
+@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
+def generer_corrige_ia_et_graphique_async(
+    texte_enonce,
+    contexte,
+    lecons_contenus=None,
+    exemples_corriges=None,
+    matiere_id=None,
+    demande_id=None
+):
+    print("--- Task celery appelée ! ---")
+    print("texte_enonce:", texte_enonce)
+    print("contexte:", contexte)
+    print("lecons_contenus:", lecons_contenus)
+    print("exemples_corriges:", exemples_corriges)
+    print("matiere_id:", matiere_id)
+    print("demande_id:", demande_id)
+    from resources.models import Matiere
+    from correction.models import DemandeCorrection
+    matiere = Matiere.objects.get(id=matiere_id) if matiere_id else None
+    corrige_txt, graph_list = generer_corrige_ia_et_graphique(
+        texte_enonce,
+        contexte,
+        lecons_contenus=lecons_contenus,
+        exemples_corriges=exemples_corriges,
+        matiere=matiere
+    )
+    demande = DemandeCorrection.objects.get(id=demande_id)
+    demande.corrigé = corrige_txt
+    demande.save()

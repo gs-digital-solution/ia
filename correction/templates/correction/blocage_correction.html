@@ -1,0 +1,48 @@
+{% block content %}
+<style>
+body { background: #f6fdf7; }
+.blocage-popup {
+    background: #fffde3;
+    border:2px solid #fef09d;
+    padding:2.3em 1.5em;
+    border-radius:13px;
+    max-width:410px;
+    margin:4.2em auto;
+    text-align:center;
+    box-shadow: 0 2px 18px #0c4b3330;
+}
+.blocage-header {
+    color:#b08900;
+    font-weight:700;
+    font-size:1.3em;
+    margin-bottom:1.3em;
+    letter-spacing:1px;
+}
+.update-btn {
+    background: #00af43;
+    color:#fff;
+    font-weight:650;
+    border:none;
+    border-radius:7px;
+    padding:0.69em 1.7em;
+    margin-top:1em;
+    font-size:1.08em;
+    cursor:pointer;
+    text-decoration:none;
+    display:inline-block;
+}
+@media (max-width: 700px) {
+    .blocage-popup { max-width:97vw; padding: 1.4em 0.5em;}
+    .blocage-header { font-size:1.08em;}
+}
+</style>
+<div class="blocage-popup">
+    <div class="blocage-header">🚧 Correction indisponible</div>
+    <div style="font-size:1.09em; color:#554e08;margin-bottom:1.7em;">
+        {{ message_bloquant|linebreaks }}
+    </div>
+    <div>
+        <a href="{% url 'correction:profil' %}" class="update-btn">Retour à l'accueil / profil</a>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,55 @@
+{% block content %}
+<style>
+.process-box {background:#fff; margin:4.1em auto; border-radius: 12px; box-shadow: 0 2px 16px #0c4b3330; padding:2.1em 1.6em; max-width:350px; text-align:center;}
+.process-header { font-size:1.22em; color:#065e35; font-weight:700; margin-bottom:2.2em; }
+.process-jauge-wrap { background:#e7f7ea; border-radius:12px; margin:1.3em auto 1.1em auto; height:2.1em; width:91%; position:relative; box-shadow:0 1.1px 5px #33bb6170;}
+.process-jauge { background:#23be5e; height:100%; width:0%; border-radius:11px; transition:width 1.3s cubic-bezier(0.58,0,0.21,1); }
+.etapes {margin:2.1em 0 1.1em 0; color:#277743;font-size:1.08em;}
+.annuler-btn {margin:1.7em auto 0 auto; background:red; color:#fff; font-weight:700; border:none; border-radius:8px; padding:0.7em 2.3em; font-size:1.07em; box-shadow:0 2px 10px #d1212635; cursor:pointer;}
+.annuler-btn.hide {display:none;}
+@media (max-width:560px){ .process-box{max-width:96vw;padding:1.3em 0.5em;} }
+</style>
+<div class="process-box">
+    <div class="process-header">⏳ Génération du corrigé IA en cours...</div>
+    <div class="process-jauge-wrap">
+        <div class="process-jauge" id="progressBar"></div>
+    </div>
+    <div class="etapes" id="etapeStatus">
+        • Lyora prend en charge votre exercice!<br>
+        • Analyse de l’énoncé<br>
+        • Extraction des données<br>
+        • Génération de la correction<br>
+        • Vérification du format<br>
+        • Préparation de l’affichage...
+    </div>
+    <div id="conseil-wait" style="color:#bc6d07; margin-top:1.4em; font-size:0.98em;">
+        Cela peut prendre environ {{ delai_redirection }} secondes,<br>
+        merci de patienter sans recharger la page.
+    </div>
+    <button type="button" id="btn_annuler" class="annuler-btn hide">Annuler la demande</button>
+</div>
+<script>
+let elapsed=0, progress=0, total={delai_redirection}
+let jauge=document.getElementById('progressBar');
+function avancerJauge(){
+    progress=(elapsed/total)*100;
+    if(progress>100) progress=100;
+    jauge.style.width=progress+'%';
+    if(elapsed<total) {
+        elapsed++;
+        setTimeout(avancerJauge, 990);
+    } else {
+        window.location = "/correction/corrige/{{ demande_id }}/";
+    }
+}
+avancerJauge();
+
+setTimeout(()=>{
+    document.getElementById('btn_annuler').classList.remove('hide');
+}, 180000); // 180 sec = 3 min
+
+document.getElementById('btn_annuler').onclick = function(){
+    window.location = "{% url 'correction:historique' %}";
+};
+</script>
+{% endblock %}
