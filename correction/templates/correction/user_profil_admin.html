@@ -126,6 +126,20 @@ td {
         <li><b>Date création :</b> {{ user.date_joined }}</li>
         <li><b>Total corrigés demandés :</b> <a href="{% url 'correction:user_corrections' user.id %}" style="color:#008060;font-weight:600;">{{ user.demandecorrection_set.count }}</a></li>
     </ul>
+    {% with abos=user.userabonnement_set.all %}
+  {% if abos %}
+  <hr style="margin:1.1em 0">
+  <b style="font-size:1.09em;color:#007964;">Abonnements utilisateur :</b>
+  <ul style="font-size:1em; margin:0.5em 0 1.3em 0;">
+    {% for abo in abos %}
+      <li>
+        <b>{{ abo.abonnement.nom }}</b>
+        (début {{ abo.date_debut|date:"d/m/Y" }}, fin {{ abo.date_fin|date:"d/m/Y" }}, crédits: {{ abo.exercice_restants }}, statut: <span style="color:#137952">{{ abo.statut }}</span>)
+      </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% endwith %}
     <div style="text-align:center; margin-top:1.1em">
         <a href="javascript:history.back()" class="quick-btn">⬅️ Revenir</a>
     </div>

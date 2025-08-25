@@ -1,0 +1,1 @@
+default_auto_field = 'correction.apps.Correction'

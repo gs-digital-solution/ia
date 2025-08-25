@@ -169,6 +169,27 @@ a.hist-link:hover { color: #008060; background:#eafaf4; }
 
 <div class="hist-section">
     <div class="hist-header">Mes exercices soumis</div>
+    {% if abonnement %}
+<div style="max-width:540px;margin:11px auto 23px auto;padding:1.15em 1em .6em 1em;background:#f7ffe3;border-radius:13px; border:1.3px solid #c9e98c;">
+  <div style="font-size:1.13em;color:#137952;font-weight:700;margin-bottom:.77em;">Mon abonnement actuel</div>
+  <ul style="padding-left:0.4em;font-size:1.07em; margin:0;">
+    <li><b>Type :</b> {{ abonnement.abonnement.nom }}</li>
+    <li><b>Date de début :</b> {{ abonnement.date_debut|date:"d/m/Y" }}</li>
+    <li><b>Date de fin :</b> {{ abonnement.date_fin|date:"d/m/Y" }}</li>
+    <li><b>Crédits restants :</b> {{ abonnement.exercice_restants }}</li>
+    <li><b>Statut :</b>
+      {% if abonnement.statut == "actif" %}<span style="color:green;font-weight:bold;">Actif</span>
+      {% elif abonnement.statut == "epuise" %}<span style="color:#e53260;font-weight:bold;">Épuisé</span>
+      {% else %}<span style="color:#a86802;font-weight:bold;">Expiré</span>
+      {% endif %}
+    </li>
+  </ul>
+</div>
+{% else %}
+<div style="max-width:540px;margin:11px auto 23px auto;padding:1.11em 1em .7em 1em;background:#fff6f3;border-radius:13px; border:1.3px solid #eea3a3;color:#a43200;font-weight:700;">
+  Aucun abonnement actif.
+</div>
+{% endif %}
     {% if demandes %}
         {% for demande in demandes %}
             <div class="exo-plaque">

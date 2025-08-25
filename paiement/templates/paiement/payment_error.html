@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width:480px;background:#ffe5e0;border:2px solid #ff958a;padding:2em;margin:2em auto;border-radius:11px;text-align:center;">
+    <h2 style="color:#b0001c;">❌ Paiement échoué</h2>
+    <p>
+        Une erreur est survenue lors de la tentative de paiement.<br>
+        <b>Détail :</b> {{ error }}
+    </p>
+    <a href="{% url 'paiement:start_payment' %}" class="quick-btn">Réessayer</a>
+</div>
+{% endblock %}

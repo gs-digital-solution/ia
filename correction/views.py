@@ -1,6 +1,8 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
+
+from abonnement.models import UserAbonnement
 from .forms import DemandeCorrectionForm, ProfilUserForm
 from .models import DemandeCorrection
 from resources.models import SousSysteme, Departement, Classe, Matiere, TypeExercice, Lecon, ExerciceCorrige
@@ -13,6 +15,8 @@ from .forms import CustomUserCreationForm, SECRET_QUESTIONS  # Import la liste
 from resources.models import Pays, SousSysteme
 from django.contrib.auth import get_user_model
 from .decorators import role_required
+from django.urls import reverse
+from abonnement.services import user_abonnement_actif
 
 from .decorators import only_admin
 from .models import CustomUser
@@ -21,6 +25,7 @@ from .ia_utils import generer_corrige_ia_et_graphique_async
 
 from .models import FeedbackCorrection, DemandeCorrection
 from .forms import FeedbackCorrectionForm
+from django.utils import timezone
 
 
 # AJAX views (inchangées)
@@ -71,6 +76,20 @@ def soumettre_exercice(request):
         msg = app_config.message_bloquant or "La fonctionnalité correction est temporairement indisponible. Merci de mettre à jour l'application ou de réessayer plus tard."
         return render(request, 'correction/blocage_correction.html', {'message_bloquant': msg})
 
+    # ---- AJOUT ICI : vérification abonnement ---
+    # Vérification abonnement et quota
+    abonnement = UserAbonnement.objects.filter(
+        utilisateur=request.user,
+        statut='actif',
+        exercice_restants__gt=0,
+        date_fin__gt=timezone.now()
+    ).first()
+
+    if not abonnement:
+        # Aucun abonnement actif ou quota épuisé
+        if not abonnement:
+            return redirect('correction:plus_de_credit')
+
     if request.method == "POST":
         form = DemandeCorrectionForm(request.POST, request.FILES)
         if form.is_valid():
@@ -95,6 +114,7 @@ def soumettre_exercice(request):
                     type_exercice=demande.type_exercice,
                 ).values_list('contenu_corrige', flat=True)[:3]
             )
+
             texte_enonce = extraire_texte_fichier(
                 demande.fichier
             ) if demande.fichier else "Aucun énoncé soumis ou extraction impossible."
@@ -109,9 +129,12 @@ def soumettre_exercice(request):
             )
             demande.corrigé = corrige_txt
             demande.save()
-        return redirect('correction:voir_corrige', demande_id=demande.id)
-    # -------- Redirige VERS la page d'attente animée --------
-    # return redirect('correction:attente_traitement', demande_id=demande.id)
+            # Décrémenter le quota
+            abonnement.exercice_restants -= 1
+            if abonnement.exercice_restants <= 0:
+                abonnement.statut = 'epuise'
+            abonnement.save()
+            return redirect('correction:voir_corrige', demande_id=demande.id)
     else:
         # Préremplissage intelligent (pays, sous-système via User)
         user = request.user
@@ -122,9 +145,11 @@ def soumettre_exercice(request):
             initial['sous_systeme'] = user.sous_systeme_id
         form = DemandeCorrectionForm(initial=initial)
 
-    # En GET ou en erreur de formulaire, on revient sur la page soumettre classique
-    return render(request, "correction/soumettre.html", {"form": form})
-
+    # En GET ou en erreur de formulaire, on revient sur la page soumettre classique en affichant credit restant
+        return render(request, "correction/soumettre.html", {
+       "form": form,
+       "credit_restants": abonnement.exercice_restants if abonnement else 0
+   })
 
 # Vue de consultation du corrigé (inchangée)
 @login_required
@@ -158,6 +183,15 @@ def voir_corrige(request, demande_id):
 def historique(request):
     demandes = DemandeCorrection.objects.filter(user=request.user).order_by('-date_soumission')
     return render(request, "correction/historique.html", {'demandes': demandes})
+    # Récupère l’abonnement actif ou le dernier abonnement utilisé
+    abonnement = (
+    UserAbonnement.objects.filter(utilisateur=request.user)
+        .order_by('-date_debut').first()
+    )
+    return render(request, "correction/historique.html", {
+        'demandes': demandes,
+        'abonnement': abonnement
+    })
 
 # Suppression d'une correction (inchangé)
 @login_required
@@ -374,4 +408,16 @@ def etat_traitement_ajax(request, demande_id):
     # On vérifie : corrigé présent/non nul ?
     done = (demande.corrigé and demande.corrigé.strip() != "")
     return JsonResponse({"done": done})
+
+
+
+
+@login_required
+def plus_de_credit(request):
+    """
+    Affiche un message d'avertissement UX + boutons vers le paiement et les codes promo.
+    """
+    return render(request, "correction/plus_de_credit.html")
+
+
 

@@ -24,6 +24,7 @@ button.submit-btn:hover { background: #00a484; }
     <a href="{% url 'correction:login' %}" class="quick-btn">Déconnexion</a>
     <a href="{% url 'correction:profil' %}" class="quick-btn">Mon profil</a>
 
+
 {% if user.is_authenticated and user.role == 'prof' %}
     <a href="{% url 'correction:espace_prof' %}" class="quick-btn">Espace Prof</a>
 {% endif %}
@@ -33,6 +34,15 @@ button.submit-btn:hover { background: #00a484; }
 </div>
 <div class="form-section">
     <div class="form-header">📤 Soumettre un exercice</div>
+    {% if credit_restants > 0 %}
+    <div style="color:#008060; font-weight:600; margin-bottom:1.2em;">
+        Crédits restants : {{ credit_restants }}
+    </div>
+{% else %}
+    <div style="color:red; font-weight:600; margin-bottom:1.2em;">
+        Vous n'avez plus de crédits d'abonnement. Veuillez activer ou renouveler votre abonnement !
+    </div>
+{% endif %}
     <form method="post" enctype="multipart/form-data" id="soumission-form" autocomplete="off">
         {% csrf_token %}
         <label for="id_pays">Pays</label>
@@ -63,7 +73,8 @@ button.submit-btn:hover { background: #00a484; }
             Prends une photo nette, bien éclairée & de texte imprimé si possible.<br>
             Sur ordinateur, tu peux choisir un fichier PDF, JPG ou PNG.
         </span>
-        <button type="submit" class="submit-btn">Soumettre</button>
+        <button type="submit" class="submit-btn" {% if credit_restants == 0 %}disabled
+                style="opacity:0.7;cursor:not-allowed"{% endif %}>Soumettre</button>
         <div id="bloc-lecons" class="lecon-checkbox-block" style="display:none;"></div>
     </form>
 </div>

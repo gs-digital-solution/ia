@@ -54,6 +54,7 @@ class CustomUser(AbstractUser):
     secret_answer = models.CharField(max_length=128)
     first_name = models.CharField(max_length=64)
     gmail = models.EmailField(max_length=254, unique=True, blank=True, null=True)
+    device_id = models.CharField(max_length=150, blank=True, null=True)
     code_promo = models.CharField(max_length=6, unique=True, blank=True, null=True)
     ROLE_CHOICES = [
         ('eleve', 'Élève'),
@@ -84,3 +85,42 @@ class FeedbackCorrection(models.Model):
 
     def __str__(self):
         return f"FB by {self.user} on {self.correction} - {self.note}"
+
+### *B. Modèle Historique des connexions device*
+class DeviceConnectionHistory(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="device_histories")
+    device_id = models.CharField(max_length=150)
+    connection_date = models.DateTimeField(auto_now_add=True)
+    successful = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"{self.user} - {self.device_id} - {self.connection_date} - {'OK' if self.successful else 'REFUSÉ'}"
+
+### *C. Modèle pour la demande de migration device*
+class DeviceMigrationRequest(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='migration_requests')
+    previous_device_id = models.CharField(max_length=150)
+    new_device_id = models.CharField(max_length=150)
+    justification = models.TextField(blank=True)  # Raison invoquée par l’utilisateur
+    status = models.CharField(max_length=18, choices=[
+        ("pending", "En attente"),
+        ("accepted", "Validée"),
+        ("rejected", "Refusée"),
+    ], default="pending")
+    request_date = models.DateTimeField(auto_now_add=True)
+    decision_date = models.DateTimeField(blank=True, null=True)
+    admin_comment = models.TextField(blank=True, null=True)
+    # Champ pour date de création du compte utilisateur concerné
+    user_date_joined = models.DateTimeField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # Si pas déjà renseigné, ajoute la date inscrite du user
+        if not self.user_date_joined and self.user:
+            self.user_date_joined = self.user.date_joined
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Migration {self.user} : {self.previous_device_id} -> {self.new_device_id} ({self.status})"
+
+    def __str__(self):
+        return f"Migration {self.user} : {self.previous_device_id} -> {self.new_device_id} ({self.status})"

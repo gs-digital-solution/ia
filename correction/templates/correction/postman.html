@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guide Postman - Test d'API</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            background-color: #f5f7f9;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        header {
+            background: #FF6C37;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+        .content {
+            display: flex;
+            flex-wrap: wrap;
+            padding: 20px;
+        }
+        .instructions {
+            flex: 1;
+            min-width: 300px;
+            padding: 20px;
+        }
+        .postman-visual {
+            flex: 1;
+            min-width: 300px;
+            padding: 20px;
+            background: #2d3a4b;
+            color: white;
+            border-radius: 8px;
+        }
+        h2 {
+            margin: 20px 0 15px;
+            color: #FF6C37;
+            border-bottom: 2px solid #FF6C37;
+            padding-bottom: 5px;
+        }
+        h3 {
+            margin: 15px 0 10px;
+            color: #2d3a4b;
+        }
+        .postman-visual h3 {
+            color: #FF6C37;
+        }
+        ol, ul {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .code-block {
+            background: #273142;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            overflow-x: auto;
+            font-family: monospace;
+        }
+        .postman-interface {
+            background: #273142;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+        .tabs {
+            display: flex;
+            background: #1a2332;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+            overflow: hidden;
+        }
+        .tab {
+            padding: 10px 15px;
+            background: #1a2332;
+            cursor: pointer;
+            border-right: 1px solid #2d3a4b;
+        }
+        .tab.active {
+            background: #FF6C37;
+        }
+        .tab-content {
+            padding: 15px;
+            background: #2d3a4b;
+            border-bottom-left-radius: 5px;
+            border-bottom-right-radius: 5px;
+        }
+        .input-field {
+            background: #3c4b60;
+            border: 1px solid #55657c;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: white;
+            width: 100%;
+        }
+        .button {
+            background: #FF6C37;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .note {
+            background: #fff3cd;
+            color: #856404;
+            padding: 10px;
+            border-left: 4px solid #ffeeba;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        @media (max-width: 768px) {
+            .content {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Guide de Test d'API avec Postman</h1>
+            <p class="subtitle">Comment configurer une requête API avec seulement une URL et du JSON</p>
+        </header>
+
+        <div class="content">
+            <div class="instructions">
+                <h2>Étapes à Suivre</h2>
+                <ol>
+                    <li><strong>Ouvrez Postman</strong> et créez une nouvelle requête</li>
+                    <li><strong>Sélectionnez la méthode HTTP</strong> (GET, POST, etc.) selon les besoins de votre API</li>
+                    <li><strong>Collez l'URL de l'API</strong> dans le champ prévu à cet effet</li>
+                    <li><strong>Cliquez sur l'onglet "Body"</strong> (s'il n'est pas visible, cherchez dans les options)</li>
+                    <li><strong>Sélectionnez "raw"</strong> et choisissez "JSON" dans le menu déroulant</li>
+                    <li><strong>Collez votre JSON</strong> dans la zone de texte</li>
+                    <li><strong>Ajoutez les en-têtes nécessaires</strong> dans l'onglet "Headers" (Content-Type: application/json est souvent requis)</li>
+                    <li><strong>Cliquez sur "Send"</strong> pour exécuter la requête</li>
+                </ol>
+
+                <h2>Conseils Importants</h2>
+                <ul>
+                    <li>Si vous ne voyez pas l'onglet "Body", cherchez un bouton pour afficher plus d'options</li>
+                    <li>Pour les requêtes POST, PUT, PATCH, le corps (body) est généralement requis</li>
+                    <li>Pour les requêtes GET, vous utiliserez généralement l'onglet "Params" plutôt que "Body"</li>
+                    <li>Vérifiez la documentation de l'API pour connaître les exigences spécifiques</li>
+                </ul>
+
+                <div class="note">
+                    <strong>Note :</strong> Vous avez raison, les points 4 et 5 de la configuration (Headers et Authorization) ne sont pas toujours obligatoires. Beaucoup d'APIs fonctionnent avec seulement l'URL et le JSON correctement formaté.
+                </div>
+
+                <h2>Exemple de JSON pour le Body</h2>
+                <div class="code-block">
+                    {<br>
+                    &nbsp;&nbsp;"username": "votre_nom_utilisateur",<br>
+                    &nbsp;&nbsp;"email": "votre@email.com",<br>
+                    &nbsp;&nbsp;"password": "votre_mot_de_passe"<br>
+                    }
+                </div>
+            </div>
+
+            <div class="postman-visual">
+                <h2>Interface Postman</h2>
+                <p>Voici à quoi devrait ressembler votre configuration dans Postman :</p>
+
+                <div class="postman-interface">
+                    <div class="tabs">
+                        <div class="tab">Params</div>
+                        <div class="tab">Authorization</div>
+                        <div class="tab active">Headers</div>
+                        <div class="tab">Body</div>
+                    </div>
+
+                    <div class="tab-content">
+                        <h3>Body</h3>
+                        <div>
+                            <input type="radio" id="none" name="body" checked>
+                            <label for="none">none</label>
+
+                            <input type="radio" id="form-data" name="body">
+                            <label for="form-data">form-data</label>
+
+                            <input type="radio" id="x-www-form-urlencoded" name="body">
+                            <label for="x-www-form-urlencoded">x-www-form-urlencoded</label>
+
+                            <input type="radio" id="raw" name="body" checked>
+                            <label for="raw">raw</label>
+
+                            <input type="radio" id="binary" name="body">
+                            <label for="binary">binary</label>
+                        </div>
+
+                        <select class="input-field">
+                            <option selected>JSON</option>
+                            <option>Text</option>
+                            <option>JavaScript</option>
+                            <option>HTML</option>
+                            <option>XML</option>
+                        </select>
+
+                        <div class="code-block">
+                            {<br>
+                            &nbsp;&nbsp;"key1": "value1",<br>
+                            &nbsp;&nbsp;"key2": "value2",<br>
+                            &nbsp;&nbsp;"key3": {<br>
+                            &nbsp;&nbsp;&nbsp;&nbsp;"subkey1": "subvalue1"<br>
+                            &nbsp;&nbsp;}<br>
+                            }
+                        </div>
+
+                        <button class="button">Send</button>
+                    </div>
+                </div>
+
+                <h3>Où trouver l'onglet Body?</h3>
+                <p>Si vous ne voyez pas l'onglet Body, il se peut qu'il soit caché dans un menu déroulant ou que votre fenêtre Postman ne soit pas assez large. Essayez de redimensionner la fenêtre ou de chercher un bouton "▼" qui pourrait afficher plus d'options.</p>
+
+                <h3>Résultat attendu</h3>
+                <p>Après avoir cliqué sur "Send", vous devriez voir la réponse de l'API dans la partie inférieure de la fenêtre Postman, avec le code de statut, le corps de la réponse et les en-têtes.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
