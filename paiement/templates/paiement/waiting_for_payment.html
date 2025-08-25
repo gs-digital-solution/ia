@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width:480px;background:#fff9e0;border:2px solid #ffe372;padding:2em;margin:2em auto;border-radius:11px;text-align:center;">
+    <h2 style="color:#c39000;">⌛ Paiement en attente…</h2>
+    <p>
+        Nous attendons la confirmation de votre paiement.<br>
+        Veuillez terminer le paiement sur votre téléphone.<br>
+        <b>Numéro cible :</b> {{ transaction.phone }}<br>
+        <b>Montant :</b> {{ transaction.amount }} FCFA<br>
+        <b>Abonnement :</b> {{ transaction.abonnement.nom }}
+    </p>
+    <p style="margin-top:1.3em;">Après validation, vous recevrez votre abonnement automatiquement.</p>
+    <a href="{% url 'abonnement:mon_abonnement' %}" class="quick-btn">Revenir à mon espace</a>
+</div>
+{% endblock %}

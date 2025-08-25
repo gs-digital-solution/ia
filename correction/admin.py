@@ -4,6 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import CustomUser
 from .models import FeedbackCorrection
+from .models import DeviceConnectionHistory, DeviceMigrationRequest
 
 @admin.register(AppConfig)
 class AppConfigAdmin(admin.ModelAdmin):
@@ -53,3 +54,31 @@ class FeedbackCorrectionAdmin(admin.ModelAdmin):
     list_display = ("correction", "user", "note", "created_at")
     list_filter = ("note", "created_at")
     search_fields = ("comment",)
+
+
+##*3. Admin Django – pour valider/voir/modifier les demandes et historique*
+@admin.register(DeviceConnectionHistory)
+class DeviceConnectionHistoryAdmin(admin.ModelAdmin):
+    list_display = ("user", "device_id", "connection_date", "successful")
+    list_filter = ("user", "device_id", "successful")
+    search_fields = ("user__username", "device_id")
+    date_hierarchy = "connection_date"
+
+@admin.register(DeviceMigrationRequest)
+class DeviceMigrationRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "previous_device_id",
+        "new_device_id",
+        "status",
+        "request_date",
+        "decision_date",
+        "user_date_joined",
+        "get_migration_count"
+    )
+    list_filter = ("status", "request_date")
+    search_fields = ("user__first_name", "previous_device_id", "new_device_id")
+
+    def get_migration_count(self, obj):
+        return obj.user.migration_requests.count()
+    get_migration_count.short_description = "Nb demandes migration"

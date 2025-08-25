@@ -142,4 +142,10 @@ path(
     'etat-traitement/<int:demande_id>/',
     views.etat_traitement_ajax,
     name='etat_traitement_ajax'),
+
+path(
+    'plus-de-credit/',
+    views.plus_de_credit,
+    name='plus_de_credit'),
 ]
+

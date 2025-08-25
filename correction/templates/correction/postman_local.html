@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Résolution Problème Postman Localhost</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        header {
+            background: #FF6C37;
+            color: white;
+            padding: 25px;
+            text-align: center;
+        }
+        h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 18px;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+        .content {
+            display: flex;
+            flex-wrap: wrap;
+            padding: 30px;
+        }
+        .problem-section, .solutions-section {
+            flex: 1;
+            min-width: 300px;
+            padding: 20px;
+        }
+        h2 {
+            margin: 25px 0 15px;
+            color: #FF6C37;
+            border-bottom: 2px solid #FF6C37;
+            padding-bottom: 8px;
+        }
+        h3 {
+            margin: 20px 0 12px;
+            color: #2d3a4b;
+        }
+        p {
+            margin-bottom: 15px;
+        }
+        ul, ol {
+            margin-left: 25px;
+            margin-bottom: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+            padding-left: 5px;
+        }
+        .code-block {
+            background: #273142;
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            overflow-x: auto;
+            font-family: monospace;
+            line-height: 1.5;
+        }
+        .warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-left: 5px solid #ffc107;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-left: 5px solid #28a745;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #FF6C37;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .step-number {
+            display: inline-block;
+            background: #FF6C37;
+            color: white;
+            width: 30px;
+            height: 30px;
+            text-align: center;
+            line-height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .illustration {
+            text-align: center;
+            margin: 25px 0;
+        }
+        .illustration img {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        .caption {
+            font-style: italic;
+            color: #6c757d;
+            margin-top: 8px;
+        }
+        @media (max-width: 768px) {
+            .content {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Problème d'Accès à Localhost avec Postman</h1>
+            <p class="subtitle">Résoudre l'erreur d'agent Postman pour les API locales</p>
+        </header>
+
+        <div class="content">
+            <div class="problem-section">
+                <h2>Le Problème</h2>
+                <p>Vous essayez de tester une API locale (localhost) avec Postman, mais vous rencontrez ce message d'erreur :</p>
+
+                <div class="warning">
+                    <strong>"Lors du test d'une API localement, vous devez utiliser l'agent de bureau Postman. Vous avez actuellement un agent différent sélectionné, qui ne peut pas envoyer de demandes à Localhost."</strong>
+                </div>
+
+                <h3>Pourquoi cela arrive-t-il ?</h3>
+                <p>Postman propose deux modes pour envoyer des requêtes :</p>
+                <ul>
+                    <li><strong>L'agent de bureau</strong> : Utilise l'application Postman installée sur votre ordinateur</li>
+                    <li><strong>L'agent cloud</strong> : Envoie les requêtes via les serveurs de Postman (par défaut dans certaines versions)</li>
+                </ul>
+
+                <p>Les requêtes vers <code>localhost</code> ou <code>127.0.0.1</code> ne peuvent pas être traitées par l'agent cloud car celui-ci ne peut pas accéder à votre machine locale.</p>
+
+                <div class="illustration">
+                    <div style="background:#273142; color:white; padding:20px; border-radius:8px; text-align:left; display:inline-block;">
+                        <div style="margin-bottom:15px; color:#FF6C37;">Postman Interface</div>
+                        <div style="background:#3c4b60; padding:10px; border-radius:5px; margin-bottom:10px;">
+                            <span style="color:#FF6C37;">GET</span>
+                            <span style="color:white;">http://localhost:3000/api/users</span>
+                            <span style="background:#FF6C37; color:white; padding:2px 6px; border-radius:3px; font-size:12px; margin-left:10px;">Send</span>
+                        </div>
+                        <div style="background:#d4edda; color:#155724; padding:15px; border-radius:5px;">
+                            <div style="color:#28a745; font-weight:bold;">✓ Agent de bureau connecté</div>
+                            <div style="margin-top:8px; font-size:14px;">Les requêtes locales seront envoyées via l'application Postman</div>
+                        </div>
+                    </div>
+                    <p class="caption">Interface Postman avec l'agent de bureau activé</p>
+                </div>
+            </div>
+
+            <div class="solutions-section">
+                <h2>Solutions</h2>
+                <p>Voici comment résoudre ce problème :</p>
+
+                <div class="step">
+                    <span class="step-number">1</span>
+                    <strong>Téléchargez et installez l'application Postman Desktop</strong>
+                    <p>Si vous utilisez la version web de Postman, vous devez installer l'application de bureau.</p>
+                    <p>Rendez-vous sur <a href="https://www.postman.com/downloads/" target="_blank">https://www.postman.com/downloads/</a> et téléchargez la version pour votre système d'exploitation.</p>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">2</span>
+                    <strong>Ouvrez Postman Desktop</strong>
+                    <p>Lancez l'application Postman que vous venez d'installer. Elle peut se synchroniser avec votre compte Postman existant.</p>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">3</span>
+                    <strong>Changez l'agent dans Postman Web</strong>
+                    <p>Si vous préférez utiliser Postman dans votre navigateur :</p>
+                    <ol>
+                        <li>Ouvrez Postman Web</li>
+                        <li>Cliquez sur l'icône d'agent en bas à droite de la fenêtre</li>
+                        <li>Sélectionnez "Agent de bureau"</li>
+                        <li>Assurez-vous que l'application Postman Desktop est ouverte</li>
+                    </ol>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">4</span>
+                    <strong>Utilisez votre IP locale au lieu de localhost</strong>
+                    <p>Une alternative est d'utiliser votre adresse IP locale au lieu de <code>localhost</code> :</p>
+                    <div class="code-block">
+                        # Au lieu de :
+                        http://localhost:3000/api
+
+                        # Utilisez (sur Windows) :
+                        http://127.0.0.1:3000/api
+
+                        # Ou trouvez votre IP locale avec ipconfig (Windows) ou ifconfig (Mac/Linux)
+                        # et utilisez-la :
+                        http://192.168.1.XX:3000/api
+                    </div>
+                </div>
+
+                <div class="success">
+                    <strong>Conseil supplémentaire :</strong> Assurez-vous que votre serveur local est bien démarré et écoute sur le port que vous essayez d'interroger avec Postman.
+                </div>
+
+                <h3>Vérification</h3>
+                <p>Après avoir appliqué l'une de ces solutions, votre requête vers localhost devrait fonctionner correctement. Vous verrez un indicateur en bas à droite de Postman confirmant que l'agent de bureau est utilisé.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Petit script pour rendre les étapes plus interactives
+        document.addEventListener('DOMContentLoaded', function() {
+            const steps = document.querySelectorAll('.step');
+
+            steps.forEach(step => {
+                step.addEventListener('click', function() {
+                    this.classList.toggle('highlight');
+                });
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+{% block content %}
+
+<!-- ----------- STYLES ------------- -->
+<style>
+.quick-nav {
+    width: 100%;
+    max-width: 540px;
+    margin: 0 auto 1.1em auto;
+    display: flex;
+    justify-content: center;
+    gap: 1em;
+    flex-wrap: wrap;
+}
+.quick-btn {
+    background: #00a484;
+    color: #fff;
+    font-size: 1.08em;
+    font-weight: 600;
+    border: none;
+    border-radius: 25px;
+    padding: 0.44em 1.2em 0.46em 1.2em;
+    margin:0;
+    box-shadow: 0 1px 6px #00806044;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    transition: background .18s, color .18s, box-shadow .2s;
+}
+.quick-btn:hover, .quick-btn:focus {
+    background: #008060;
+    color: #efefef;
+}
+@media (max-width: 700px) {
+    .quick-nav { max-width:98vw; gap:0.32em;}
+    .quick-btn { width: 95vw; max-width:99vw; text-align:center; margin: 0.09em auto;}
+}
+
+.form-section {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    padding: 2rem 1.5rem;
+    max-width: 540px;
+    margin: 2rem auto;
+}
+
+.form-header {
+    color: #008060;
+    font-weight: 700;
+    font-size: 2em;
+    letter-spacing: 1px;
+    margin-bottom: 1.5rem;
+    text-align: center;
+}
+
+label {
+    color: #008060;
+    font-weight: 500;
+    margin-top: 1rem;
+    display: block;
+    margin-bottom: 0.5rem;
+}
+input[type="text"], select, input[type="file"] {
+    width: 100%;
+    border: 1.5px solid #008060;
+    border-radius: 5px;
+    padding: 0.6em;
+    margin-bottom: 1.2em;
+    background: #f6fefb;
+    font-size: 1em;
+    transition: border-color 0.2s;
+}
+input:disabled, select:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    background: #e3f2ed;
+}
+button.submit-btn {
+    width: 100%;
+    background: #008060;
+    color: #fff;
+    font-weight: 600;
+    font-size: 1.2em;
+    border: none;
+    border-radius: 5px;
+    padding: 0.8em 0.5em;
+    margin-top: 1em;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+button.submit-btn:hover { background: #00a484; }
+.message-error { color: red; margin-bottom: 1em; }
+.message-success { color: green; margin-bottom: 1em; }
+@media (max-width: 700px) {
+    .form-section { max-width: 99vw; padding: 1.2rem 0.5rem; }
+    .form-header { font-size: 1.35em; }
+}
+</style>
+
+<!-- ----------- NAV BAR ------------- -->
+<div class="quick-nav">
+    <a href="{% url 'correction:soumettre' %}" class="quick-btn">corriger un sujet avec CIS</a>
+    <a href="{% url 'correction:historique' %}" class="quick-btn">Historique</a>
+    <a href="{% url 'correction:profil' %}" class="quick-btn">Mon profil</a>
+    <a href="{% url 'correction:login' %}" class="quick-btn">Déconnexion</a>
+    {% if user.is_authenticated and user.role == 'admin' %}
+        <a href="{% url 'correction:admin_dashboard' %}" class="quick-btn">Dashboard admin</a>
+    {% endif %}
+</div>
+
+<!-- ----------- FORMULAIRE ACTIVATION ABONNEMENT ------------- -->
+<div class="form-section">
+    <div class="form-header">🎫 Activer mon abonnement avec un code promo</div>
+    <form method="post" autocomplete="off">
+        {% csrf_token %}
+        {% if messages %}
+          {% for message in messages %}
+            <div class="{% if message.tags == 'error' %}message-error{% else %}message-success{% endif %}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+        <label for="id_code_promo">Code promo reçu</label>
+        {{ form.code_promo }}
+
+        <button type="submit" class="submit-btn">Activer l'abonnement gratuit</button>
+    </form>
+    <div style="margin-top:1.5em;font-size:0.98em;color:#007964;">
+        Saisis ici le code promo partagé par un ami ou un enseignant pour activer ton quota gratuit.<br>
+        <span style="color:#333;">Besoin d'aide ? Contacte-nous !</span>
+    </div>
+</div>
+{% endblock %}

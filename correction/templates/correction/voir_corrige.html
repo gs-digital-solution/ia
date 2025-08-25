@@ -107,7 +107,7 @@ a.django-link:hover { color: #00a484; }
     <a href="{% url 'correction:soumettre' %}" class="quick-btn">corriger un sujet avec CIS</a>
     <a href="{% url 'correction:historique' %}" class="quick-btn">Historique</a>
     <a href="{% url 'correction:profil' %}" class="quick-btn">Mon profil</a>
-    <a href="{% url 'correction:logout' %}" class="quick-btn">Déconnexion</a>
+    <a href="{% url 'correction:login' %}" class="quick-btn">Déconnexion</a>
     {% if user.is_authenticated and user.role == 'admin' %}
         <a href="{% url 'correction:admin_dashboard' %}" class="quick-btn">Dashboard admin</a>
     {% endif %}

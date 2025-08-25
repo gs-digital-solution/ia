@@ -31,7 +31,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 #pour passer en production et travailler en local aussi
 ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
 #pour faire des tests en local
@@ -54,7 +54,9 @@ INSTALLED_APPS = [
     'ckeditor',
     'ckeditor_uploader',
     'smart_selects',
-
+    'abonnement',
+    'paiement',
+    'rest_framework',
 ]
 
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"   # Dossier où seront stockées les images
@@ -193,3 +195,16 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"               # Ton provider SMTP réel
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = "e.biblio24@gmail.com"     # Email technique utilisé pour l'envoi
+EMAIL_HOST_PASSWORD = "smrw rjcz qbxa wzhv"      # Mot de passe ou app-password
+DEFAULT_FROM_EMAIL = "CIS  <e.biblio24@gmail.com>"
+
+
+# Email d’alerte admin CIS après chaque paiement
+PAYMENT_ADMIN_EMAIL = "groupe.siewe.digital.solution@gmail.com"   # Mets ici le/les emails des admins ou du staff
