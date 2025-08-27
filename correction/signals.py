@@ -5,6 +5,7 @@ from django.dispatch import receiver
 from .models import DeviceMigrationRequest, CustomUser
 from django.utils import timezone
 
+
 def generate_unique_promo_code():
     """ Génère un code promo unique à 6 caractères """
     from .models import CustomUser
@@ -30,3 +31,17 @@ def handle_migration_accept(sender, instance, created, **kwargs):
         instance.decision_date = timezone.now()  # Met à jour la date si besoin
         instance.save()
         # (Optionnel : logge l'acceptation ou envoie une notif admin/user)
+
+
+
+#pour changer les deviced id des utilisateurs dont la demande de mgration a été validée par l'admin
+@receiver(post_save, sender=DeviceMigrationRequest)
+def handle_migration_accept(sender, instance, created, **kwargs):
+    # On ne traite QUE quand une migration passe à "accepted" (et n'est pas déjà traitée)
+    if not created and instance.status == "accepted":
+        user = instance.user
+        if user.device_id != instance.new_device_id:
+            user.device_id = instance.new_device_id
+            user.save()
+            instance.decision_date = timezone.now()
+            instance.save()

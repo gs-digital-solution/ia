@@ -3,6 +3,8 @@ from .api_views import UserRegisterAPIView
 from .api_views import UserLoginAPIView
 from .api_views import CreateDeviceMigrationRequestAPIView
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
+from .api_views import PasswordResetAPI
+from .api_views import ProfileAPIView
 
 urlpatterns = [
     path(
@@ -26,4 +28,14 @@ urlpatterns = [
         'sous-systeme/',
         SousSystemeListAPIView.as_view(),
         name='api_soussysteme_list'),
+
+    path(
+        'password-reset/',
+        PasswordResetAPI.as_view(),
+        name='api_password_reset'),
+
+    path(
+        'profile/',
+        ProfileAPIView.as_view(),
+        name='api_profile'),
 ]

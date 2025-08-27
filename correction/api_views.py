@@ -5,6 +5,7 @@ from .serializers import UserRegisterSerializer
 from .models import CustomUser, DeviceConnectionHistory
 from .models import DeviceMigrationRequest
 from rest_framework.permissions import IsAuthenticated
+from .models import  Pays, SousSysteme
 
 class UserRegisterAPIView(APIView):
     # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
@@ -68,3 +69,60 @@ class CreateDeviceMigrationRequestAPIView(APIView):
             status="pending"
         )
         return Response({"success": True, "message": "Demande de migration envoyée."})
+
+
+ # vue de réinitialisation de mot de pass sur flutter
+class PasswordResetAPI(APIView):
+    permission_classes = []  # ou [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        whatsapp = request.data.get('whatsapp_number')
+        answer = request.data.get('secret_answer')
+        new_pwd = request.data.get('new_password')
+
+        user = CustomUser.objects.filter(whatsapp_number=whatsapp).first()
+        if not user:
+            return Response({'success': False, 'error': "Numéro WhatsApp inconnu."}, status=404)
+
+        if request.data.get('check_only'):
+            # On affiche juste la question secrète (pour le premier POST)
+            return Response({'success': True, 'question': user.secret_question})
+        else:
+            # Ici, on vérifie la réponse et réinitialise si bon
+            if user.check_secret(answer):
+                user.set_password(new_pwd)
+                user.save()
+                return Response({'success': True, 'message': "Mot de passe réinitialisé avec succès."})
+            return Response({'success': False, 'error': "Réponse à la question secrète incorrecte."}, status=400)
+
+
+
+# vue pour le profil coté flutter
+class ProfileAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        data = {
+            "first_name": user.first_name,
+            "pays": user.pays.id if user.pays else None,
+            "sous_systeme": user.sous_systeme.id if user.sous_systeme else None,
+            "gmail": user.gmail,
+            "whatsapp_number": user.whatsapp_number,
+        }
+        return Response(data)
+
+    def put(self, request):
+        user = request.user
+        first_name = request.data.get("first_name")
+        pays_id = request.data.get("pays")
+        sous_systeme_id = request.data.get("sous_systeme")
+        if first_name:
+            user.first_name = first_name.strip()
+        if pays_id:
+            user.pays = Pays.objects.filter(pk=pays_id).first()
+        if sous_systeme_id:
+            user.sous_systeme = SousSysteme.objects.filter(pk=sous_systeme_id).first()
+        user.save()
+        return Response({"success": True, "message": "Profil mis à jour."})
