@@ -5,6 +5,7 @@ from .api_views import CreateDeviceMigrationRequestAPIView
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from .api_views import PasswordResetAPI
 from .api_views import ProfileAPIView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 urlpatterns = [
     path(
@@ -38,4 +39,13 @@ urlpatterns = [
         'profile/',
         ProfileAPIView.as_view(),
         name='api_profile'),
+
+    path(
+        'token/',
+        TokenObtainPairView.as_view(),
+        name='token_obtain_pair'),
+    path(
+        'token/refresh/',
+        TokenRefreshView.as_view(),
+        name='token_refresh'),
 ]

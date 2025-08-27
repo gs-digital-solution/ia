@@ -7,6 +7,7 @@ from .models import DeviceMigrationRequest
 from rest_framework.permissions import IsAuthenticated
 from .models import  Pays, SousSysteme
 
+
 class UserRegisterAPIView(APIView):
     # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
 

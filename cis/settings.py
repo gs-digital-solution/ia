@@ -59,6 +59,12 @@ INSTALLED_APPS = [
     'rest_framework',
 ]
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    )
+}
+
 CKEDITOR_UPLOAD_PATH = "uploads_ckeditor/"   # Dossier où seront stockées les images
 CKEDITOR_IMAGE_BACKEND = "pillow"            # Nécessite pip install pillow
 CKEDITOR_ALLOW_NONIMAGE_FILES = False
