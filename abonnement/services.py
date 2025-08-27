@@ -63,3 +63,21 @@ def user_abonnement_actif(user):
         statut='actif',
         date_fin__gt=timezone.now()
     ).exists()
+
+# gestion credit depuis flutter
+def debiter_credit_abonnement(user):
+    """
+    Débite un crédit de l'abonnement actif de l'utilisateur
+    """
+    abonnement_actif = UserAbonnement.objects.filter(
+        utilisateur=user,
+        exercice_restants__gt=0,
+        statut='actif',
+        date_fin__gt=timezone.now()
+    ).first()
+
+    if abonnement_actif:
+        abonnement_actif.exercice_restants -= 1
+        abonnement_actif.save()
+        return True
+    return False

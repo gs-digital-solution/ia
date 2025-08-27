@@ -6,6 +6,7 @@ from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from .api_views import PasswordResetAPI
 from .api_views import ProfileAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from .api_views import SoumissionExerciceAPIView, StatutSoumissionAPIView
 
 urlpatterns = [
     path(
@@ -48,4 +49,13 @@ urlpatterns = [
         'token/refresh/',
         TokenRefreshView.as_view(),
         name='token_refresh'),
+
+    path(
+        'soumission/',
+        SoumissionExerciceAPIView.as_view(),
+        name='api_soumission'),
+    path(
+        'soumission/<int:soumission_id>/status/',
+        StatutSoumissionAPIView.as_view(),
+        name='api_soumission_status'),
 ]

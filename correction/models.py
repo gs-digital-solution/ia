@@ -122,5 +122,23 @@ class DeviceMigrationRequest(models.Model):
     def __str__(self):
         return f"Migration {self.user} : {self.previous_device_id} -> {self.new_device_id} ({self.status})"
 
-    def __str__(self):
-        return f"Migration {self.user} : {self.previous_device_id} -> {self.new_device_id} ({self.status})"
+class SoumissionIA(models.Model):
+        user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+        demande = models.ForeignKey(DemandeCorrection, on_delete=models.CASCADE)
+        statut = models.CharField(max_length=200, choices=[
+            ('en_attente', 'En attente'),
+            ('extraction', 'Extraction texte'),
+            ('analyse_ia', 'Analyse IA'),
+            ('generation_graphiques', 'Génération graphiques'),
+            ('formatage_pdf', 'Formatage PDF'),
+            ('termine', 'Terminé'),
+            ('erreur', 'Erreur')
+        ], default='en_attente')
+        progression = models.IntegerField(default=0)  # 0-100
+        date_creation = models.DateTimeField(auto_now_add=True)
+        date_maj = models.DateTimeField(auto_now=True)
+        resultat_json = models.JSONField(null=True, blank=True)
+
+        def __str__(self):
+            return f"{self.user.username} - {self.statut} ({self.progression}%)"
+

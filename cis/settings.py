@@ -31,7 +31,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG =False
+DEBUG =True
 #pour passer en production et travailler en local aussi
 ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
 #pour faire des tests en local

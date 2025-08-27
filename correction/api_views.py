@@ -7,6 +7,12 @@ from .models import DeviceMigrationRequest
 from rest_framework.permissions import IsAuthenticated
 from .models import  Pays, SousSysteme
 
+from rest_framework.views import APIView
+from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
+from .models import DemandeCorrection, SoumissionIA
+from .ia_utils import generer_corrige_ia_et_graphique_async
+import json
+
 
 class UserRegisterAPIView(APIView):
     # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
@@ -127,3 +133,74 @@ class ProfileAPIView(APIView):
             user.sous_systeme = SousSysteme.objects.filter(pk=sous_systeme_id).first()
         user.save()
         return Response({"success": True, "message": "Profil mis à jour."})
+
+# vue pour la soumission coté flutter
+class SoumissionExerciceAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # Vérifier l'abonnement actif
+        if not user_abonnement_actif(request.user):
+            return Response(
+                {"error": "Abonnement requis pour soumettre un exercice"},
+                status=status.HTTP_402_PAYMENT_REQUIRED
+            )
+
+        # Récupérer les données
+        pays_id = request.data.get('pays')
+        sous_systeme_id = request.data.get('sous_systeme')
+        classe_id = request.data.get('classe')
+        matiere_id = request.data.get('matiere')
+        type_exercice_id = request.data.get('type_exercice')
+        enonce_texte = request.data.get('enonce_texte')
+        fichier = request.FILES.get('fichier')
+
+        # Créer la demande
+        demande = DemandeCorrection.objects.create(
+            user=request.user,
+            pays_id=pays_id,
+            sous_systeme_id=sous_systeme_id,
+            classe_id=classe_id,
+            matiere_id=matiere_id,
+            type_exercice_id=type_exercice_id,
+            fichier=fichier
+        )
+
+        # Créer le suivi IA
+        soumission = SoumissionIA.objects.create(
+            user=request.user,
+            demande=demande,
+            statut='en_attente'
+        )
+
+        # Lancer le traitement async
+        generer_corrige_ia_et_graphique_async.delay(
+            enonce_texte,
+            f"Exercice de {demande.matiere.nom} - {demande.classe.nom}",
+            matiere_id=matiere_id,
+            demande_id=demande.id
+        )
+
+        # Débiter le crédit
+        debiter_credit_abonnement(request.user)
+
+        return Response({
+            "success": True,
+            "soumission_id": soumission.id,
+            "message": "Exercice soumis avec succès. Traitement en cours..."
+        })
+
+
+class StatutSoumissionAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, soumission_id):
+        try:
+            soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
+            return Response({
+                "statut": soumission.statut,
+                "resultat": soumission.resultat_json,
+                "date_creation": soumission.date_creation
+            })
+        except SoumissionIA.DoesNotExist:
+            return Response({"error": "Soumission non trouvée"}, status=404)
