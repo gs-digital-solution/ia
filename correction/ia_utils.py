@@ -147,8 +147,8 @@ def tracer_graphique(graphique_dict, output_name):
 def convertir_latex_vers_html(corrige_text):
     """Convertit le LaTeX en HTML avec MathJax"""
     # Conversion basique LaTeX → HTML MathJax
-    corrige_text = corrige_text.replace('\[', '\\[').replace('\]', '\\]')
-    corrige_text = corrige_text.replace('\(', '\\(').replace('\)', '\\)')
+    corrige_text = corrige_text.replace(r'\[', r'\[').replace(r'\]', r'\]')
+    corrige_text = corrige_text.replace(r'\(', r'\(').replace(r'\)', r'\)')
     return corrige_text
 
 
