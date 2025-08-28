@@ -159,7 +159,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         exemples_corriges = []
 
     # PROMPT IA personnalisable par matière
-    DEFAULT_SYSTEM_PROMPT = """
+    DEFAULT_SYSTEM_PROMPT =r"""
 Tu es un professeur expert chargé de corriger des exercices de façon structurée, claire et rigoureuse.
 Règles incontournables :
 - Structure chaque corrigé sans sauter d'étapes
