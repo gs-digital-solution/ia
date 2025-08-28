@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from .models import DemandeCorrection, SoumissionIA
 from .ia_utils import generer_corrige_ia_et_graphique_async
+from resources.models import Pays, SousSysteme, Classe, Matiere, TypeExercice,Lecon,Departement
 import json
 
 
@@ -174,12 +175,8 @@ class SoumissionExerciceAPIView(APIView):
         )
 
         # Lancer le traitement async
-        generer_corrige_ia_et_graphique_async.delay(
-            enonce_texte,
-            f"Exercice de {demande.matiere.nom} - {demande.classe.nom}",
-            matiere_id=matiere_id,
-            demande_id=demande.id
-        )
+        from .ia_utils import generer_corrige_ia_et_graphique_async
+        generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
 
         # Débiter le crédit
         debiter_credit_abonnement(request.user)
@@ -204,3 +201,79 @@ class StatutSoumissionAPIView(APIView):
             })
         except SoumissionIA.DoesNotExist:
             return Response({"error": "Soumission non trouvée"}, status=404)
+
+
+class DepartementsListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        pays_id = request.query_params.get('pays')
+        departements = Departement.objects.all()
+        if pays_id:
+            departements = departements.filter(pays_id=pays_id)
+        data = [{"id": d.id, "nom": d.nom} for d in departements]
+        return Response(data)
+
+
+class ClassesListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sous_systeme_id = request.query_params.get('sous_systeme')
+        classes = Classe.objects.all()
+        if sous_systeme_id:
+            classes = classes.filter(sous_systeme_id=sous_systeme_id)
+        data = [{"id": c.id, "nom": c.nom} for c in classes]
+        return Response(data)
+
+
+class MatieresListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        classe_id = request.query_params.get('classe')
+        matieres = Matiere.objects.all()
+        if classe_id:
+            matieres = matieres.filter(classe_id=classe_id)
+        data = [{"id": m.id, "nom": m.nom} for m in matieres]
+        return Response(data)
+
+
+class TypesExerciceListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        departement_id = request.query_params.get('departement')
+        types = TypeExercice.objects.all()
+        if departement_id:
+            types = types.filter(departement_id=departement_id)
+        data = [{"id": t.id, "nom": t.nom} for t in types]
+        return Response(data)
+
+
+class LeconsListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        matiere_id = request.query_params.get('matiere')
+        lecons = Lecon.objects.all()
+        if matiere_id:
+            lecons = lecons.filter(matiere_id=matiere_id)
+        data = [{"id": l.id, "titre": l.titre} for l in lecons]
+        return Response(data)
+
+#vue corrige
+class DownloadCorrigeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, soumission_id):
+        try:
+            soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
+            if soumission.statut != 'termine':
+                return Response({"error": "Corrigé non prêt"}, status=400)
+
+            pdf_url = soumission.resultat_json.get('pdf_url')
+            return Response({"pdf_url": pdf_url})
+
+        except SoumissionIA.DoesNotExist:
+            return Response({"error": "Non trouvé"}, status=404)

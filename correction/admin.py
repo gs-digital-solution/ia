@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import CustomUser
 from .models import FeedbackCorrection
-from .models import DeviceConnectionHistory, DeviceMigrationRequest
+from .models import DeviceConnectionHistory, DeviceMigrationRequest,SoumissionIA
 
 @admin.register(AppConfig)
 class AppConfigAdmin(admin.ModelAdmin):
@@ -82,3 +82,10 @@ class DeviceMigrationRequestAdmin(admin.ModelAdmin):
     def get_migration_count(self, obj):
         return obj.user.migration_requests.count()
     get_migration_count.short_description = "Nb demandes migration"
+
+
+@admin.register(SoumissionIA)
+class SoumissionIAAdmin(admin.ModelAdmin):
+    list_display = ['user', 'demande', 'statut', 'progression', 'date_creation']
+    list_filter = ['statut', 'date_creation']
+    readonly_fields = ['date_creation', 'date_maj']

@@ -6,7 +6,10 @@ from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from .api_views import PasswordResetAPI
 from .api_views import ProfileAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .api_views import SoumissionExerciceAPIView, StatutSoumissionAPIView
+from .api_views import (SoumissionExerciceAPIView, StatutSoumissionAPIView ,
+                        ClassesListAPIView,MatieresListAPIView,
+                        TypesExerciceListAPIView,DepartementsListAPIView,
+                        LeconsListAPIView,DownloadCorrigeAPIView)
 
 urlpatterns = [
     path(
@@ -58,4 +61,30 @@ urlpatterns = [
         'soumission/<int:soumission_id>/status/',
         StatutSoumissionAPIView.as_view(),
         name='api_soumission_status'),
+
+    path(
+        'departements/',
+        DepartementsListAPIView.as_view(),
+        name='api_departements'),
+    path(
+        'classes/',
+        ClassesListAPIView.as_view(),
+        name='api_classes'),
+    path(
+        'matieres/',
+        MatieresListAPIView.as_view(),
+        name='api_matieres'),
+    path(
+        'types-exercice/',
+         TypesExerciceListAPIView.as_view(),
+         name='api_types_exercice'),
+    path(
+        'lecons/',
+        LeconsListAPIView.as_view(),
+        name='api_lecons'),
+
+    path(
+        'soumission/<int:soumission_id>/download/',
+        DownloadCorrigeAPIView.as_view(),
+        name='api_download_corrige'),
 ]
