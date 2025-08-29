@@ -20,6 +20,8 @@ class DemandeCorrection(models.Model):
     # On peut ajouter le corrigé ici après traitement
     corrigé = models.TextField(blank=True)  # Stockage d’un corrigé (format texte/HTML)
     from django.conf import settings
+    enonce_texte = models.TextField(blank=True, default="")
+
 
     def __str__(self):
         return f"{self.user.username} - {self.date_soumission:%d/%m/%Y %H:%M}"
