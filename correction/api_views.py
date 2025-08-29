@@ -13,6 +13,9 @@ from .models import DemandeCorrection, SoumissionIA
 from .ia_utils import generer_corrige_ia_et_graphique_async
 from resources.models import Pays, SousSysteme, Classe, Matiere, TypeExercice,Lecon,Departement
 import json
+from rest_framework.parsers import MultiPartParser, JSONParser
+from django.shortcuts import get_object_or_404
+
 
 
 class UserRegisterAPIView(APIView):
@@ -138,57 +141,86 @@ class ProfileAPIView(APIView):
 # vue pour la soumission coté flutter
 class SoumissionExerciceAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, JSONParser]
 
     def post(self, request):
-        # Vérifier l'abonnement actif
-        # COMMENTÉ TEMPORAIREMENT - DÉVERROUILLAGE POUR TESTS
-        # if not user_abonnement_actif(request.user):
-        #     return Response(
-        #         {"error": "Abonnement requis pour soumettre un exercice"},
-        #         status=status.HTTP_402_PAYMENT_REQUIRED
-        #     )
+        try:
+            # Vérifier l'abonnement actif (commenté temporairement)
+            # if not user_abonnement_actif(request.user):
+            #     return Response(
+            #         {"error": "Abonnement requis pour soumettre un exercice"},
+            #         status=status.HTTP_402_PAYMENT_REQUIRED
+            #     )
 
-        # Récupérer les données
-        pays_id = request.data.get('pays')
-        sous_systeme_id = request.data.get('sous_systeme')
-        classe_id = request.data.get('classe')
-        matiere_id = request.data.get('matiere')
-        type_exercice_id = request.data.get('type_exercice')
-        enonce_texte = request.data.get('enonce_texte')
-        fichier = request.FILES.get('fichier')
+            # Récupérer les données
+            pays_id = request.data.get('pays')
+            sous_systeme_id = request.data.get('sous_systeme')
+            classe_id = request.data.get('classe')
+            matiere_id = request.data.get('matiere')
+            type_exercice_id = request.data.get('type_exercice')
+            departement_id = request.data.get('departement')
+            enonce_texte = request.data.get('enonce_texte', '')
+            fichier = request.FILES.get('fichier')
 
-        # Créer la demande
-        demande = DemandeCorrection.objects.create(
-            user=request.user,
-            pays_id=pays_id,
-            sous_systeme_id=sous_systeme_id,
-            classe_id=classe_id,
-            matiere_id=matiere_id,
-            type_exercice_id=type_exercice_id,
-            fichier=fichier
-        )
+            # Récupérer les leçons sélectionnées
+            lecons_ids = request.data.get('lecons_ids', [])
+            if isinstance(lecons_ids, str):
+                try:
+                    lecons_ids = json.loads(lecons_ids)
+                except json.JSONDecodeError:
+                    lecons_ids = []
 
-        # Créer le suivi IA
-        soumission = SoumissionIA.objects.create(
-            user=request.user,
-            demande=demande,
-            statut='en_attente'
-        )
+            # Validation des données requises
+            if not matiere_id or not fichier:
+                return Response(
+                    {"error": "Matière et fichier sont obligatoires"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        # Lancer le traitement async
-        from .ia_utils import generer_corrige_ia_et_graphique_async
-        generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
+            # Créer la demande
+            demande = DemandeCorrection.objects.create(
+                user=request.user,
+                pays_id=pays_id,
+                sous_systeme_id=sous_systeme_id,
+                classe_id=classe_id,
+                matiere_id=matiere_id,
+                departement_id=departement_id,
+                type_exercice_id=type_exercice_id,
+                fichier=fichier,
+                enonce_texte=enonce_texte
+            )
 
-        # Débiter le crédit
-        # COMMENTÉ TEMPORAIREMENT - PAS DE DÉBIT PENDANT LES TESTS
-        # debiter_credit_abonnement(request.user)
+            # Ajouter les leçons sélectionnées
+            if lecons_ids:
+                lecons = Lecon.objects.filter(id__in=lecons_ids)
+                demande.lecons.set(lecons)
 
-        return Response({
-            "success": True,
-            "soumission_id": soumission.id,
-            "message": "Exercice soumis avec succès. Traitement en cours..."
-        })
+            # Créer le suivi IA
+            soumission = SoumissionIA.objects.create(
+                user=request.user,
+                demande=demande,
+                statut='en_attente'
+            )
 
+            # Lancer le traitement async
+            from .ia_utils import generer_corrige_ia_et_graphique_async
+            generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
+
+            # Débiter le crédit (commenté temporairement)
+            # debiter_credit_abonnement(request.user)
+
+            return Response({
+                "success": True,
+                "soumission_id": soumission.id,
+                "message": "Exercice soumis avec succès. Traitement en cours..."
+            })
+
+        except Exception as e:
+            print(f"Erreur lors de la soumission: {e}")
+            return Response(
+                {"error": f"Erreur serveur: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -279,3 +311,52 @@ class DownloadCorrigeAPIView(APIView):
 
         except SoumissionIA.DoesNotExist:
             return Response({"error": "Non trouvé"}, status=404)
+
+
+
+
+class HistoriqueCorrectionsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        demandes = DemandeCorrection.objects.filter(user=request.user).order_by('-date_soumission')
+        data = []
+        for demande in demandes:
+            soumission = SoumissionIA.objects.filter(demande=demande).first()
+            data.append({
+                "id": demande.id,
+                "matiere": demande.matiere.nom if demande.matiere else "",
+                "date": demande.date_soumission.strftime("%d/%m/%Y %H:%M"),
+                "statut": soumission.statut if soumission else "inconnu"
+            })
+        return Response(data)
+
+
+class FeedbackAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, correction_id):
+        demande = get_object_or_404(DemandeCorrection, id=correction_id, user=request.user)
+        note = request.data.get('note')
+        comment = request.data.get('comment', '')
+
+        feedback, created = FeedbackCorrection.objects.get_or_create(
+            user=request.user,
+            correction=demande,
+            defaults={'note': note, 'comment': comment}
+        )
+
+        if not created:
+            feedback.note = note
+            feedback.comment = comment
+            feedback.save()
+
+        return Response({"success": True, "message": "Feedback enregistré"})
+
+
+class PartagerCorrigeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, soumission_id):
+        # À implémenter avec un service de partage
+        return Response({"success": True, "message": "Fonctionnalité de partage à venir"})

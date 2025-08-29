@@ -9,7 +9,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .api_views import (SoumissionExerciceAPIView, StatutSoumissionAPIView ,
                         ClassesListAPIView,MatieresListAPIView,
                         TypesExerciceListAPIView,DepartementsListAPIView,
-                        LeconsListAPIView,DownloadCorrigeAPIView)
+                        LeconsListAPIView,DownloadCorrigeAPIView ,
+                        HistoriqueCorrectionsAPIView,FeedbackAPIView,
+                        PartagerCorrigeAPIView)
 
 urlpatterns = [
     path(
@@ -87,4 +89,17 @@ urlpatterns = [
         'soumission/<int:soumission_id>/download/',
         DownloadCorrigeAPIView.as_view(),
         name='api_download_corrige'),
+
+    path(
+    'historique/',
+    HistoriqueCorrectionsAPIView.as_view(),
+    name='api_historique'),
+    path(
+    'feedback/<int:correction_id>/',
+    FeedbackAPIView.as_view(),
+    name='api_feedback'),
+    path(
+    'partager/<int:soumission_id>/',
+    PartagerCorrigeAPIView.as_view(),
+    name='api_partager'),
 ]

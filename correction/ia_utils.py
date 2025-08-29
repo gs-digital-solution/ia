@@ -28,15 +28,39 @@ def extraire_texte_pdf(fichier_path):
 def extraire_texte_image(fichier_path):
     try:
         image = Image.open(fichier_path)
-        image = image.convert("L").filter(ImageFilter.MedianFilter())
+
+        # Prétraitement amélioré de l'image
+        # Conversion en niveaux de gris
+        image = image.convert("L")
+
+        # Amélioration du contraste
         enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.2)
-        image = image.point(lambda x: 0 if x < 150 else 255, '1')
-        texte = pytesseract.image_to_string(image, lang="fra+eng")
-        return texte.strip()
+        image = enhancer.enhance(2.0)
+
+        # Réduction du bruit
+        image = image.filter(ImageFilter.MedianFilter(size=3))
+
+        # Seuillage adaptatif
+        image = image.point(lambda x: 0 if x < 180 else 255, '1')
+
+        # Configuration Tesseract améliorée
+        custom_config = r'--oem 3 --psm 6 -l fra+eng'
+
+        texte = pytesseract.image_to_string(image, config=custom_config)
+
+        if not texte.strip():
+            # Essayer avec différents modes PSM
+            for psm_mode in [6, 7, 8, 11]:
+                custom_config = f'--oem 3 --psm {psm_mode} -l fra+eng'
+                texte = pytesseract.image_to_string(image, config=custom_config)
+                if texte.strip():
+                    break
+
+        return texte.strip() if texte else "(Texte non extrait de l'image)"
+
     except Exception as e:
         print("Erreur extraction image:", e)
-        return ""
+        return f"(Erreur lors de l'extraction: {str(e)})"
 
 
 def extraire_texte_fichier(fichier_field):
@@ -145,10 +169,20 @@ def tracer_graphique(graphique_dict, output_name):
 
 
 def convertir_latex_vers_html(corrige_text):
-    """Convertit le LaTeX en HTML avec MathJax"""
+    """Convertit le LaTeX en HTML avec MathJax de manière plus robuste"""
+    if not corrige_text:
+        return ""
+
     # Conversion basique LaTeX → HTML MathJax
-    corrige_text = corrige_text.replace(r'\[', r'\[').replace(r'\]', r'\]')
-    corrige_text = corrige_text.replace(r'\(', r'\(').replace(r'\)', r'\)')
+    corrige_text = corrige_text.replace(r'\[', '\\[').replace(r'\]', '\\]')
+    corrige_text = corrige_text.replace(r'\(', '\\(').replace(r'\)', '\\)')
+
+    # Gérer les environnements mathématiques
+    corrige_text = re.sub(r'\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}',
+                          r'\\[\1\\]', corrige_text, flags=re.DOTALL)
+    corrige_text = re.sub(r'\\begin\{align\*?\}(.*?)\\end\{align\*?\}',
+                          r'\\begin{aligned}\1\\end{aligned}', corrige_text, flags=re.DOTALL)
+
     return corrige_text
 
 
