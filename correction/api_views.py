@@ -141,11 +141,12 @@ class SoumissionExerciceAPIView(APIView):
 
     def post(self, request):
         # Vérifier l'abonnement actif
-        if not user_abonnement_actif(request.user):
-            return Response(
-                {"error": "Abonnement requis pour soumettre un exercice"},
-                status=status.HTTP_402_PAYMENT_REQUIRED
-            )
+        # COMMENTÉ TEMPORAIREMENT - DÉVERROUILLAGE POUR TESTS
+        # if not user_abonnement_actif(request.user):
+        #     return Response(
+        #         {"error": "Abonnement requis pour soumettre un exercice"},
+        #         status=status.HTTP_402_PAYMENT_REQUIRED
+        #     )
 
         # Récupérer les données
         pays_id = request.data.get('pays')
@@ -179,7 +180,8 @@ class SoumissionExerciceAPIView(APIView):
         generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
 
         # Débiter le crédit
-        debiter_credit_abonnement(request.user)
+        # COMMENTÉ TEMPORAIREMENT - PAS DE DÉBIT PENDANT LES TESTS
+        # debiter_credit_abonnement(request.user)
 
         return Response({
             "success": True,
