@@ -11,7 +11,7 @@ from .api_views import (SoumissionExerciceAPIView, StatutSoumissionAPIView ,
                         TypesExerciceListAPIView,DepartementsListAPIView,
                         LeconsListAPIView,DownloadCorrigeAPIView ,
                         HistoriqueCorrectionsAPIView,FeedbackAPIView,
-                        PartagerCorrigeAPIView)
+                        PartagerCorrigeAPIView, DebugExtractionAPIView)
 
 urlpatterns = [
     path(
@@ -102,4 +102,9 @@ urlpatterns = [
     'partager/<int:soumission_id>/',
     PartagerCorrigeAPIView.as_view(),
     name='api_partager'),
+
+path(
+    'debug-extraction/',
+    DebugExtractionAPIView.as_view(),
+    name='api_debug_extraction'),
 ]

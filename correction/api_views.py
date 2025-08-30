@@ -360,3 +360,26 @@ class PartagerCorrigeAPIView(APIView):
     def post(self, request, soumission_id):
         # À implémenter avec un service de partage
         return Response({"success": True, "message": "Fonctionnalité de partage à venir"})
+
+
+class DebugExtractionAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """Endpoint pour tester l'extraction"""
+        fichier = request.FILES.get('fichier')
+
+        if not fichier:
+            return Response({"error": "Aucun fichier"}, status=400)
+
+        from .ia_utils import extraire_texte_fichier
+        texte_extraite = extraire_texte_fichier(fichier)
+
+        return Response({
+            "success": True,
+            "texte_extraite": texte_extraite,
+            "type_fichier": fichier.content_type,
+            "taille_fichier": fichier.size
+        })
+
+

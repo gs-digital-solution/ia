@@ -66,23 +66,39 @@ def extraire_texte_image(fichier_path):
 def extraire_texte_fichier(fichier_field):
     if not fichier_field:
         return ""
+
     temp_dir = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
-    with open(temp_path, "wb") as f:
-        for chunk in fichier_field.chunks():
-            f.write(chunk)
-    ext = os.path.splitext(fichier_field.name)[1].lower()
-    texte = ""
-    if ext == ".pdf":
-        texte = extraire_texte_pdf(temp_path)
-    elif ext in [".jpg", ".jpeg", ".png"]:
-        texte = extraire_texte_image(temp_path)
-    try:
-        os.remove(temp_path)
-    except Exception:
-        pass
-    return texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
 
+    try:
+        with open(temp_path, "wb") as f:
+            for chunk in fichier_field.chunks():
+                f.write(chunk)
+
+        ext = os.path.splitext(fichier_field.name)[1].lower()
+        texte = ""
+
+        print(f"Extraction fichier: {fichier_field.name}, type: {ext}")
+
+        if ext == ".pdf":
+            texte = extraire_texte_pdf(temp_path)
+            print(f"PDF extrait: {len(texte)} caractères")
+        elif ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
+            texte = extraire_texte_image(temp_path)
+            print(f"Image extraite: {len(texte)} caractères")
+        else:
+            texte = f"Format non supporté: {ext}"
+
+        return texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
+
+    except Exception as e:
+        print(f"Erreur extraction fichier {fichier_field.name}: {e}")
+        return f"(Erreur lors de l'extraction: {str(e)})"
+    finally:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
 
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
