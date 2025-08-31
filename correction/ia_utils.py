@@ -193,11 +193,25 @@ def convertir_latex_vers_html(corrige_text):
     corrige_text = corrige_text.replace(r'\[', '\\[').replace(r'\]', '\\]')
     corrige_text = corrige_text.replace(r'\(', '\\(').replace(r'\)', '\\)')
 
-    # Gérer les environnements mathématiques
+    # Gérer les environnements mathématiques complexes
     corrige_text = re.sub(r'\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}',
                           r'\\[\1\\]', corrige_text, flags=re.DOTALL)
     corrige_text = re.sub(r'\\begin\{align\*?\}(.*?)\\end\{align\*?\}',
                           r'\\begin{aligned}\1\\end{aligned}', corrige_text, flags=re.DOTALL)
+
+    # Gérer les environnements array/tabular
+    corrige_text = re.sub(r'\\begin\{array\}(.*?)\\end\{array\}',
+                          r'\\begin{array}\1\\end{array}', corrige_text, flags=re.DOTALL)
+
+    # Gérer les fractions et autres symboles
+    corrige_text = corrige_text.replace(r'\frac', r'\\frac')
+    corrige_text = corrige_text.replace(r'\sqrt', r'\\sqrt')
+    corrige_text = corrige_text.replace(r'\sum', r'\\sum')
+    corrige_text = corrige_text.replace(r'\int', r'\\int')
+
+    # Gérer les textes en gras et italique
+    corrige_text = re.sub(r'\\textbf\{(.*?)\}', r'<strong>\1</strong>', corrige_text)
+    corrige_text = re.sub(r'\\textit\{(.*?)\}', r'<em>\1</em>', corrige_text)
 
     return corrige_text
 
@@ -214,9 +228,11 @@ Tu es un professeur expert chargé de corriger des exercices de façon structur�
 Règles incontournables :
 - Structure chaque corrigé sans sauter d'étapes
 - Toutes les formules doivent être en LaTeX avec \( \) pour inline et \[ \] pour display
-- Pour chaque question : **Énoncé**, **Méthode**, **Calculs**, puis **[Réponse]** encadrée
-- Pour les équations, utilise \(\implies\) ou \(\iff\) à chaque étape
+- NE PAS répéter l'énoncé des questions avant chaque réponse
+- Pour chaque question : aller directement à **Méthode**, **Calculs**, puis **[Réponse]** encadrée
+- Pour les équations, utiliser \(\implies\) ou \(\iff\) à chaque étape
 - Les tableaux en Markdown avec alignement correct
+- Utiliser un langage clair et pédagogique
 """
 
     system_prompt = DEFAULT_SYSTEM_PROMPT
