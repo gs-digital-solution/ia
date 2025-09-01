@@ -222,15 +222,25 @@ class SoumissionExerciceAPIView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, soumission_id):
         try:
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
+
+            # Formater le texte pour flutter_tex si le corrigé est prêt
+            resultat = soumission.resultat_json or {}
+            if resultat.get('corrige_text'):
+                from .ia_utils import convertir_latex_vers_html
+                resultat['corrige_text_formatted'] = convertir_latex_vers_html(
+                    resultat['corrige_text']
+                )
+
             return Response({
                 "statut": soumission.statut,
-                "resultat": soumission.resultat_json,
+                "resultat": resultat,
                 "date_creation": soumission.date_creation
             })
         except SoumissionIA.DoesNotExist:

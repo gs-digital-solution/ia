@@ -14,6 +14,7 @@ from django.conf import settings
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import re
+from .pdf_generator import pdf_generator
 
 
 def extraire_texte_pdf(fichier_path):
@@ -185,38 +186,33 @@ def tracer_graphique(graphique_dict, output_name):
 
 
 def convertir_latex_vers_html(corrige_text):
-    """Convertit le LaTeX en HTML avec MathJax de manière plus robuste"""
+    """Convertit le LaTeX en format compatible avec flutter_tex"""
     if not corrige_text:
         return ""
 
-    # Conversion basique LaTeX → HTML MathJax
-    corrige_text = corrige_text.replace(r'\[', '\\[').replace(r'\]', '\\]')
-    corrige_text = corrige_text.replace(r'\(', '\\(').replace(r'\)', '\\)')
+    # Conversion basique LaTeX → format TeX
+    corrige_text = corrige_text.replace(r'\[', r'\\[').replace(r'\]', r'\\]')
+    corrige_text = corrige_text.replace(r'\(', r'\\(').replace(r'\)', r'\\)')
 
-    # Gérer les environnements mathématiques complexes
+    # Gérer les environnements mathématiques
     corrige_text = re.sub(r'\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}',
                           r'\\[\1\\]', corrige_text, flags=re.DOTALL)
     corrige_text = re.sub(r'\\begin\{align\*?\}(.*?)\\end\{align\*?\}',
                           r'\\begin{aligned}\1\\end{aligned}', corrige_text, flags=re.DOTALL)
 
-    # Gérer les environnements array/tabular
+    # Gérer les tableaux
     corrige_text = re.sub(r'\\begin\{array\}(.*?)\\end\{array\}',
                           r'\\begin{array}\1\\end{array}', corrige_text, flags=re.DOTALL)
 
-    # Gérer les fractions et autres symboles
-    corrige_text = corrige_text.replace(r'\frac', r'\\frac')
-    corrige_text = corrige_text.replace(r'\sqrt', r'\\sqrt')
-    corrige_text = corrige_text.replace(r'\sum', r'\\sum')
-    corrige_text = corrige_text.replace(r'\int', r'\\int')
-
-    # Gérer les textes en gras et italique
-    corrige_text = re.sub(r'\\textbf\{(.*?)\}', r'<strong>\1</strong>', corrige_text)
-    corrige_text = re.sub(r'\\textit\{(.*?)\}', r'<em>\1</em>', corrige_text)
+    # Échapper les caractères spéciaux
+    corrige_text = corrige_text.replace('&', '&amp;')
+    corrige_text = corrige_text.replace('<', '&lt;')
+    corrige_text = corrige_text.replace('>', '&gt;')
 
     return corrige_text
 
 
-def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None):
+def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None, demande=None):
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
@@ -315,7 +311,6 @@ Règles incontournables :
     except Exception as e:
         return f"Erreur API: {str(e)}", None
 
-
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
@@ -360,7 +355,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 
         # Génération PDF
         from .pdf_utils import generer_pdf_corrige
-        pdf_path = generer_pdf_corrige(corrige_txt, graph_list, demande)
+        pdf_path = pdf_generator.generate_corrige_pdf(corrige_txt, graph_list, demande)
 
         soumission.statut = 'termine'
         soumission.progression = 100

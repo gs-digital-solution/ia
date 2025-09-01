@@ -214,3 +214,7 @@ DEFAULT_FROM_EMAIL = "CIS  <e.biblio24@gmail.com>"
 
 # Email d’alerte admin CIS après chaque paiement
 PAYMENT_ADMIN_EMAIL = "groupe.siewe.digital.solution@gmail.com"   # Mets ici le/les emails des admins ou du staff
+
+
+# Configuration MathJax (si vous voulez vraiment l'utiliser)
+MATHJAX_PATH = os.path.join(BASE_DIR, 'node_modules', 'mathjax')
