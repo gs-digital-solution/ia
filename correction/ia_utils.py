@@ -355,7 +355,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 
         # Génération PDF
         from .pdf_utils import generer_pdf_corrige
-        pdf_path = pdf_generator.generate_corrige_pdf(corrige_txt, graph_list, demande)
+        pdf_path = pdf_path = generer_pdf_corrige(corrige_txt, graph_list, demande)
 
         soumission.statut = 'termine'
         soumission.progression = 100
