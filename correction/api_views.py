@@ -15,6 +15,7 @@ from resources.models import Pays, SousSysteme, Classe, Matiere, TypeExercice,Le
 import json
 from rest_framework.parsers import MultiPartParser, JSONParser
 from django.shortcuts import get_object_or_404
+import markdown
 
 
 
@@ -228,15 +229,20 @@ class StatutSoumissionAPIView(APIView):
 
     def get(self, request, soumission_id):
         try:
+            from markdown import markdown  # <--- Ajoute l'import ici pour la convertion
+
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
 
-            # Formater le texte pour flutter_tex si le corrigé est prêt
             resultat = soumission.resultat_json or {}
             if resultat.get('corrige_text'):
-                from .ia_utils import convertir_latex_vers_html
-                resultat['corrige_text_formatted'] = convertir_latex_vers_html(
-                    resultat['corrige_text']
+                corrige_md = resultat['corrige_text']
+                # Conversion Markdown -> HTML tout en gardant latex inchangé
+                html_corrige = markdown(
+                    corrige_md,
+                    extensions=['extra', 'tables'],
+                    output_format='html5'
                 )
+                resultat['corrige_text'] = html_corrige  # remplace le champ par du HTML
 
             return Response({
                 "statut": soumission.statut,
@@ -245,7 +251,6 @@ class StatutSoumissionAPIView(APIView):
             })
         except SoumissionIA.DoesNotExist:
             return Response({"error": "Soumission non trouvée"}, status=404)
-
 
 class DepartementsListAPIView(APIView):
     permission_classes = [IsAuthenticated]

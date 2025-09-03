@@ -34,7 +34,7 @@ def handle_migration_accept(sender, instance, created, **kwargs):
 
 
 
-#pour changer les deviced id des utilisateurs dont la demande de mgration a été validée par l'admin
+#pour changer les deviced id des utilisateurs dont la demande de migration a été validée par l'admin
 @receiver(post_save, sender=DeviceMigrationRequest)
 def handle_migration_accept(sender, instance, created, **kwargs):
     # On ne traite QUE quand une migration passe à "accepted" (et n'est pas déjà traitée)
