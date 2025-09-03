@@ -226,23 +226,31 @@ class SoumissionExerciceAPIView(APIView):
 
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
-
     def get(self, request, soumission_id):
         try:
-            from markdown import markdown  # <--- Ajoute l'import ici pour la convertion
+            from markdown import markdown
+            import re
 
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
-
             resultat = soumission.resultat_json or {}
+
             if resultat.get('corrige_text'):
                 corrige_md = resultat['corrige_text']
-                # Conversion Markdown -> HTML tout en gardant latex inchangé
                 html_corrige = markdown(
                     corrige_md,
                     extensions=['extra', 'tables'],
                     output_format='html5'
                 )
-                resultat['corrige_text'] = html_corrige  # remplace le champ par du HTML
+                # Nettoyage (remplace tous les [ ... ] seuls par \[ ... \])
+                html_corrige = re.sub(
+                    r'(\s|^)\[\s*([^]]+?)\s*\](\s|$)',
+                    lambda m: f"{m.group(1)}\\[{m.group(2).strip()}\\]{m.group(3)}",
+                    html_corrige
+                )
+                # Optionnel: réduire les retours à la ligne pour garantir la robustesse WebView
+                html_corrige = re.sub(r'[\r\n]+', '\n', html_corrige)
+                html_corrige = html_corrige.replace('\xa0', ' ')  # Nettoie les NBSP éventuels
+                resultat['corrige_text'] = html_corrige
 
             return Response({
                 "statut": soumission.statut,

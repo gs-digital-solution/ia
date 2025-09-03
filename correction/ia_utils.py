@@ -225,7 +225,8 @@ Règles incontournables :
 - Structure chaque corrigé sans sauter d'étapes
 - Toutes les formules doivent être en LaTeX avec \( \) pour inline et \[ \] pour display
 - NE PAS répéter l'énoncé des questions avant chaque réponse
-- Pour chaque question : aller directement à **Méthode**, **Calculs**, puis **[Réponse]** encadrée
+- Pour chaque question : aller directement à **Méthode**, **Calculs**, puis **Réponse** non encadrée
+-évite de mettre entre crochets quoique ce soit, seuls le latex aura les balises décrites ci-dessus
 - Pour les équations, utiliser \(\implies\) ou \(\iff\) à chaque étape
 - Les tableaux en Markdown avec alignement correct
 - Utiliser un langage clair et pédagogique
