@@ -15,6 +15,79 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import re
 from .pdf_generator import pdf_generator
+from django.utils.safestring import mark_safe
+
+def preprocess_and_format_latex(text):
+    """
+    - Protège (temporairement) les formules latex déjà bien balisées
+    - Corrige tous les mauvais balisages, crochets seuls, dollars, etc.
+    - Met tous les display sur une ligne, pas de retour chariot intempestif
+    - Replace dans du texte HTML simple
+    """
+    protected = []
+
+    def protect_formula(match):
+        protected.append(match.group(0))
+        return f"@@PROT{len(protected)-1}@@"
+
+    # Protéger les bonnes balises
+    text = re.sub(r'\\\([^\(\)]+\\\)', protect_formula, text)
+    text = re.sub(r'\\\[[^\[\]]+\\\]', protect_formula, text)
+    text = re.sub(r'\$\$[^\$]+\$\$', protect_formula, text)
+    text = re.sub(r'\$[^\$]+\$', protect_formula, text)
+
+    # Correction de tout le reste
+    lines = text.splitlines()
+    fixed_lines = []
+    for line in lines:
+        l = line.strip()
+        if re.match(r'^([=+\-*/^()\[\]\\{}0-9a-zA-Z\s\.,\:\;\_]+)?\\[a-zA-Z]+', l) and not l.startswith('@@PROT'):
+            # On la met en display si seule sur la ligne
+            l = r'\[' + l + r'\]'
+        fixed_lines.append(l)
+    text = '\n'.join(fixed_lines)
+
+    # Correction inline (pour des expressions a^2+b^2=c^2)
+    text = re.sub(r'(?<!@@PROT)(?<!\w)([a-zA-Z0-9\(\)\-\+=\^*/\\]{5,}[=+\-*/^]+[a-zA-Z0-9\\{}\[\]]+)', r'\\(\1\\)', text)
+
+    # Remet les formules protégées
+    for idx, prot in enumerate(protected):
+        text = text.replace(f'@@PROT{idx}@@', prot)
+
+    # Correction des balisages $$.$$ → \[...\], $...$ → \(...)
+    text = re.sub(r'\$\$\s*([\s\S]+?)\s*\$\$', lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]', text)
+    text = re.sub(r'\$\s*([^$]+?)\s*\$', lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)', text)
+    text = re.sub(r'(?<!\\)\[\s*([\s\S]*?)\s*\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]', text)
+    text = re.sub(r'\\\[\s*([\s\S]*?)\s*\\\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\]', text)
+    text = re.sub(r'\\\(\s*([\s\S]*?)\s*\\\)', lambda m: r'\(' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\)', text)
+    text = text.replace('\\backslash', '\\')
+    text = text.replace('\xa0', ' ')
+    return text
+
+def generate_corrige_html(corrige_text):
+    """Retourne du HTML + LaTeX bien compatible flutter_tex"""
+    html_output = []
+    lines = corrige_text.strip().split('\n')
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        if re.search(r'\\\[.*?\\\]', line):
+            line = re.sub(r'\\\[(\s*)(.*?)(\s*)\\\]', r'\[\2\]', line)
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        elif re.match(r'^\d+\.', line):
+            html_output.append(f'<h2>{line}</h2>'); i += 1
+        elif re.match(r'^[a-z]\)', line):
+            html_output.append(f'<p><strong>{line}</strong></p>'); i += 1
+        elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
+            html_output.append(f'<ul><li>{line[1:].strip()}</li></ul>'); i += 1
+        else:
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+    return mark_safe("".join(html_output))
 
 
 def extraire_texte_pdf(fichier_path):

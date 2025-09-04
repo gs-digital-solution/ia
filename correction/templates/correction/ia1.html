@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corrigé - Fonction rationnelle</title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #2980b9;
+            border-left: 4px solid #3498db;
+            padding-left: 10px;
+            margin-top: 30px;
+        }
+        .question {
+            background-color: #e8f4fc;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .solution {
+            background-color: #f9f9f9;
+            border-left: 4px solid #2ecc71;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .step {
+            margin-bottom: 15px;
+        }
+        .emphasis {
+            font-weight: bold;
+            color: #c0392b;
+        }
+        .table-container {
+            overflow-x: auto;
+            margin: 20px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: center;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .final-answer {
+            background-color: #e8f8f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 1px solid #2ecc71;
+        }
+        .mjx-chtml {
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Corrigé de l'exercice sur la fonction \(f(x)=\frac{x-1}{x+2}\)</h1>
+
+        <div class="question">
+            <h2>1. Étude de la fonction \(f\) et construction de sa courbe représentative</h2>
+        </div>
+
+        <div class="solution">
+            <div class="step">
+                <p><strong>a) Domaine de définition :</strong></p>
+                <p>La fonction \(f\) est définie pour \(x\neq-2\).</p>
+                <p>Domaine : \(\mathcal{D}_f=\mathbb{R}\setminus\{-2\}\).</p>
+            </div>
+
+            <div class="step">
+                <p><strong>b) Limites et asymptotes :</strong></p>
+                <p>Limite en \(-2\) :</p>
+                <p>\[\lim_{x\to-2^-}f(x)=-\infty,\quad\lim_{x\to-2^+}f(x)=+\infty\]</p>
+                <p>⇒ <span class="emphasis">Asymptote verticale</span> : \(x=-2\).</p>
+
+                <p>Limite en \(\pm\infty\) :</p>
+                <p>\[\lim_{x\to\pm\infty}f(x)=\lim_{x\to\pm\infty}\frac{x}{x}=1\]</p>
+                <p>⇒ <span class="emphasis">Asymptote horizontale</span> : \(y=1\).</p>
+            </div>
+
+            <div class="step">
+                <p><strong>c) Dérivée et variations :</strong></p>
+                <p>\[f'(x)=\frac{(1)(x+2)-(x-1)(1)}{(x+2)^2}=\frac{3}{(x+2)^2}\]</p>
+                <p>\(f'(x)>0\) pour tout \(x\neq-2\) ⇒ \(f\) est <span class="emphasis">strictement croissante</span> sur \(]-\infty,-2[\) et \(]-2,+\infty[\).</p>
+            </div>
+
+            <div class="step">
+                <p><strong>d) Tableau de variations :</strong></p>
+                <div class="table-container">
+                    <table>
+                        <tr>
+                            <th>\(x\)</th>
+                            <th>\(-\infty\)</th>
+                            <th></th>
+                            <th>\(-2\)</th>
+                            <th></th>
+                            <th>\(+\infty\)</th>
+                        </tr>
+                        <tr>
+                            <td>\(f'(x)\)</td>
+                            <td>+</td>
+                            <td></td>
+                            <td>ND</td>
+                            <td>+</td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>\(f(x)\)</td>
+                            <td>\(1\)</td>
+                            <td>↗</td>
+                            <td>\(-\infty\mid+\infty\)</td>
+                            <td>↗</td>
+                            <td>\(1\)</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="step">
+                <p><strong>e) Courbe représentative :</strong></p>
+                <p>- La courbe \((\epsilon)\) admet une asymptote verticale en \(x=-2\) et une asymptote horizontale en \(y=1\).</p>
+                <p>- Elle est croissante sur chaque intervalle de son domaine.</p>
+                <p>- Points remarquables : \(f(1)=0\), \(f(0)=-\frac{1}{2}\), \(f(-1)=-2\).</p>
+            </div>
+        </div>
+
+        <div class="question">
+            <h2>2. Résolution graphique et algébrique du système d'inéquations :</h2>
+            <p>\[0<\frac{x-1}{x+2}<4\]</p>
+        </div>
+
+        <div class="solution">
+            <div class="step">
+                <p><strong>a) Résolution graphique :</strong></p>
+                <p>On cherche les valeurs de \(x\) pour lesquelles la courbe \((\epsilon)\) est strictement entre les droites \(y=0\) et \(y=4\).</p>
+                <p>Graphiquement, on observe que cela correspond à :</p>
+                <p>\[x\in]-\infty,-3[\cup]1,+\infty[\]</p>
+            </div>
+
+            <div class="step">
+                <p><strong>b) Résolution par le calcul :</strong></p>
+                <p>Première inéquation : \(\frac{x-1}{x+2}>0\)</p>
+                <p>Étude du signe :</p>
+                <div class="table-container">
+                    <table>
+                        <tr>
+                            <th>\(x\)</th>
+                            <th>\(-\infty\)</th>
+                            <th>\(-2\)</th>
+                            <th>\(1\)</th>
+                            <th>\(+\infty\)</th>
+                        </tr>
+                        <tr>
+                            <td>\(x-1\)</td>
+                            <td>-</td>
+                            <td>-</td>
+                            <td>0</td>
+                            <td>+</td>
+                        </tr>
+                        <tr>
+                            <td>\(x+2\)</td>
+                            <td>-</td>
+                            <td>0</td>
+                            <td>+</td>
+                            <td>+</td>
+                        </tr>
+                        <tr>
+                            <td>\(f(x)\)</td>
+                            <td>+</td>
+                            <td>ND</td>
+                            <td>0</td>
+                            <td>+</td>
+                        </tr>
+                    </table>
+                </div>
+                <p>⇒ \(f(x)>0\) pour \(x\in]-\infty,-2[\cup]1,+\infty[\)</p>
+
+                <p>Deuxième inéquation : \(\frac{x-1}{x+2}<4\)</p>
+                <p>\[\frac{x-1}{x+2}-4<0\Rightarrow\frac{x-1-4(x+2)}{x+2}<0\Rightarrow\frac{-3x-9}{x+2}<0\]</p>
+                <p>Simplification :</p>
+                <p>\[\frac{-3(x+3)}{x+2}<0\Rightarrow\frac{x+3}{x+2}>0\]</p>
+                <p>Étude du signe :</p>
+                <div class="table-container">
+                    <table>
+                        <tr>
+                            <th>\(x\)</th>
+                            <th>\(-\infty\)</th>
+                            <th>\(-3\)</th>
+                            <th>\(-2\)</th>
+                            <th>\(+\infty\)</th>
+                        </tr>
+                        <tr>
+                            <td>\(x+3\)</td>
+                            <td>-</td>
+                            <td>0</td>
+                            <td>+</td>
+                            <td>+</td>
+                        </tr>
+                        <tr>
+                            <td>\(x+2\)</td>
+                            <td>-</td>
+                            <td>-</td>
+                            <td>0</td>
+                            <td>+</td>
+                        </tr>
+                        <tr>
+                            <td>\(\frac{x+3}{x+2}\)</td>
+                            <td>+</td>
+                            <td>0</td>
+                            <td>-</td>
+                            <td>+</td>
+                        </tr>
+                    </table>
+                </div>
+                <p>⇒ \(\frac{x+3}{x+2}>0\) pour \(x\in]-\infty,-3[\cup]-2,+\infty[\)</p>
+
+                <p>Intersection des deux conditions :</p>
+                <p>- \(f(x)>0\) pour \(x\in]-\infty,-2[\cup]1,+\infty[\)</p>
+                <p>- \(f(x)<4\) pour \(x\in]-\infty,-3[\cup]-2,+\infty[\)</p>
+                <p>⇒ Solution : \(x\in]-\infty,-3[\cup]1,+\infty[\)</p>
+            </div>
+
+            <div class="final-answer">
+                <p><strong>Solution finale :</strong></p>
+                <p>\[0<\frac{x-1}{x+2}<4\quad\Leftrightarrow\quad x\in]-\infty,-3[\cup]1,+\infty[\]</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

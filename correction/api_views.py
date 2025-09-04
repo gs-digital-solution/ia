@@ -17,7 +17,7 @@ from rest_framework.parsers import MultiPartParser, JSONParser
 from django.shortcuts import get_object_or_404
 import markdown
 import re
-
+from .ia_utils import preprocess_and_format_latex, generate_corrige_html
 
 
 class UserRegisterAPIView(APIView):
@@ -227,53 +227,17 @@ class SoumissionExerciceAPIView(APIView):
 
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
-
     def get(self, request, soumission_id):
         try:
-            from markdown import markdown
-            import re
-
-            # Fonction de "sanity check" ultra stricte pour latex HTML
-            def sanitize_latex_corrige(html):
-                # Remplace tous les dollars et crochets seuls par balises latex correctes
-                html = re.sub(r'(\$\$|\[)\s*([^\$]*?)\s*(\$\$|\])',
-                              lambda m: r'\[' + m.group(2).replace('\n', ' ').strip() + r'\]',
-                              html)
-                html = re.sub(r'\$\s*([^$]*?)\s*\$',
-                              lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
-                              html)
-                html = html.replace('\\backslash', '\\')
-                # Met tout le contenu latex sur une seule ligne, pas de \n inutile
-                html = re.sub(
-                    r'\\\[\s*([\s\S]*?)\s*\\\]',
-                    lambda m: r'\[' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\]',
-                    html
-                )
-                html = re.sub(
-                    r'\\\(\s*([\s\S]*?)\s*\\\)',
-                    lambda m: r'\(' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\)',
-                    html
-                )
-                return html
-
-            # ----- Récupération de la correction
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
             resultat = soumission.resultat_json or {}
 
             if resultat.get('corrige_text'):
-                corrige_md = resultat['corrige_text']
-                html_corrige = markdown(
-                    corrige_md,
-                    extensions=['extra', 'tables'],
-                    output_format='html5'
-                )
-                # 👇 Correction/création html latex propre
-                html_corrige = sanitize_latex_corrige(html_corrige)
-                html_corrige = re.sub(r'[\r\n]+', '\n', html_corrige).replace('\xa0', ' ')
-
+                corrige_raw = resultat['corrige_text']
+                latex_clean = preprocess_and_format_latex(corrige_raw)
+                html_corrige = generate_corrige_html(latex_clean)
                 resultat['corrige_text'] = html_corrige
 
-            # --- Envoi de la réponse API
             return Response({
                 "statut": soumission.statut,
                 "resultat": resultat,
@@ -281,6 +245,7 @@ class StatutSoumissionAPIView(APIView):
             })
         except SoumissionIA.DoesNotExist:
             return Response({"error": "Soumission non trouvée"}, status=404)
+
 
 class DepartementsListAPIView(APIView):
     permission_classes = [IsAuthenticated]
