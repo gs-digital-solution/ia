@@ -229,6 +229,9 @@ Règles incontournables :
 -évite de mettre entre crochets quoique ce soit, seuls le latex aura les balises décrites ci-dessus
 - Pour les équations, utiliser \(\implies\) ou \(\iff\) à chaque étape
 - Les tableaux en Markdown avec alignement correct
+- Toutes les formules doivent être en LaTeX avec \( ... \) (inline) et \[ ... \] (display), SANS aucuns retours à la ligne dans ou autour des balises.
+- Pour les équations block : TOUJOURS une seule ligne \[ ... \]
+- Ne produis jamais de formule math, ni d'expression dans une simple parenthèse ou crochets. Toute équation doit être sous les balises latex décrites ci-dessus, sur une ligne stricte.
 - Utiliser un langage clair et pédagogique
 """
 
