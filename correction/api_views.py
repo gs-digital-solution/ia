@@ -233,41 +233,42 @@ class StatutSoumissionAPIView(APIView):
             from markdown import markdown
             import re
 
+            # Fonction de "sanity check" ultra stricte pour latex HTML
+            def sanitize_latex_corrige(html):
+                # Remplace tous les dollars et crochets seuls par balises latex correctes
+                html = re.sub(r'(\$\$|\[)\s*([^\$]*?)\s*(\$\$|\])',
+                              lambda m: r'\[' + m.group(2).replace('\n', ' ').strip() + r'\]',
+                              html)
+                html = re.sub(r'\$\s*([^$]*?)\s*\$',
+                              lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
+                              html)
+                html = html.replace('\\backslash', '\\')
+                # Met tout le contenu latex sur une seule ligne, pas de \n inutile
+                html = re.sub(
+                    r'\\\[\s*([\s\S]*?)\s*\\\]',
+                    lambda m: r'\[' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\]',
+                    html
+                )
+                html = re.sub(
+                    r'\\\(\s*([\s\S]*?)\s*\\\)',
+                    lambda m: r'\(' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\)',
+                    html
+                )
+                return html
+
             # ----- Récupération de la correction
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
             resultat = soumission.resultat_json or {}
 
             if resultat.get('corrige_text'):
                 corrige_md = resultat['corrige_text']
-
-                # 1️⃣ Conversion du Markdown vers HTML
                 html_corrige = markdown(
                     corrige_md,
                     extensions=['extra', 'tables'],
                     output_format='html5'
                 )
-
-                # 2️⃣ Nettoyage ultra strict des blocs latex :
-                #    - supprime les sauts de ligne/espaces autour des balises \[ \] et \( \)
-                #    - met tout contenu sur une ligne
-                def fix_latex_block_syntax(html):
-                    # Block latex
-                    html = re.sub(
-                        r'\\\[\s*([\s\S]*?)\s*\\\]',
-                        lambda m: r'\[' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\]',
-                        html
-                    )
-                    # Inline latex
-                    html = re.sub(
-                        r'\\\(\s*([\s\S]*?)\s*\\\)',
-                        lambda m: r'\(' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\)',
-                        html
-                    )
-                    return html
-
-                html_corrige = fix_latex_block_syntax(html_corrige)
-
-                # 3️⃣ (optionnel) Nettoyage espaces parasites/nbsp
+                # 👇 Correction/création html latex propre
+                html_corrige = sanitize_latex_corrige(html_corrige)
                 html_corrige = re.sub(r'[\r\n]+', '\n', html_corrige).replace('\xa0', ' ')
 
                 resultat['corrige_text'] = html_corrige
