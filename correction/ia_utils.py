@@ -80,7 +80,31 @@ def detect_and_format_math_expressions(text):
     # Nettoie les backslash parasites
     text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
 
-    return text
+    # ramener les balises et leurs contenus sur la mème ligne
+    def flatten_multiline_latex_blocks(text):
+        """
+        Mets TOUT bloc \[ ... \] et \(...\) sur une seule ligne
+        (aucun saut de ligne entre les balises et le contenu)
+        """
+
+        def block_replacer(match):
+            contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
+            contents = re.sub(r' {2,}', ' ', contents)
+            return r'\[' + contents.strip() + r'\]'
+
+        def inline_replacer(match):
+            contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
+            contents = re.sub(r' {2,}', ' ', contents)
+            return r'\(' + contents.strip() + r'\)'
+
+        # Aplatir \[ ... \]
+        text = re.sub(r'\\\[\s*([\s\S]*?)\s*\\\]', block_replacer, text)
+        # Aplatir \( ... \)
+        text = re.sub(r'\\\(\s*([\s\S]*?)\s*\\\)', inline_replacer, text)
+        # Si tu veux aussi gérer les dollars à la volée (option) :
+        text = re.sub(r'\$\$\s*([\s\S]*?)\s*\$\$', block_replacer, text)
+        text = re.sub(r'\$\s*([^\$]*?)\s*\$', inline_replacer, text)
+        return text
 
 
 def format_table_markdown(table_text):
