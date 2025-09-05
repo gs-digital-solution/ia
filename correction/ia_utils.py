@@ -22,12 +22,12 @@ from django.utils.safestring import mark_safe
 
 # --- les fonctions qui suivent sont les convertiseurs corrigé vers html+latex  ---
 def detect_and_format_math_expressions(text):
-    """Transforme le texte brut du corrigé :
-    - protège les formules latex déjà balisées (\[...\], \(...\))
-    - détecte/regroupe/balise les formules stand-alone et inline
-    - protège les tableaux markdown et environnements LaTeX complexes
-    """
-
+    # --- """Transforme le texte brut du corrigé :
+    # --- - protège les formules latex déjà balisées (\[...\], \(...\))
+    # --- - détecte/regroupe/balise les formules stand-alone et inline
+    # ---  - protège les tableaux markdown et environnements LaTeX complexes
+    # --- """
+    if not text: return ""
     # --- Protéger les tableaux markdown multi-lignes ---
     protected_blocks = []
 
@@ -82,10 +82,10 @@ def detect_and_format_math_expressions(text):
 
     # ramener les balises et leurs contenus sur la mème ligne
     def flatten_multiline_latex_blocks(text):
-        """
-        Mets TOUT bloc \[ ... \] et \(...\) sur une seule ligne
-        (aucun saut de ligne entre les balises et le contenu)
-        """
+        # --- """
+        # ---Mets TOUT bloc \[ ... \] et \(...\) sur une seule ligne
+        # ---(aucun saut de ligne entre les balises et le contenu)
+        # ---"""
 
         def block_replacer(match):
             contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
