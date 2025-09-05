@@ -218,3 +218,29 @@ PAYMENT_ADMIN_EMAIL = "groupe.siewe.digital.solution@gmail.com"   # Mets ici le/
 
 # Configuration MathJax (si vous voulez vraiment l'utiliser)
 MATHJAX_PATH = os.path.join(BASE_DIR, 'node_modules', 'mathjax')
+
+
+# paramétrage du serveur pour afficher les erreurs mème en production
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        # Ecrit tout dans un fichier d'erreur dédié
+        'file': {
+            'level': 'ERROR',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'django-error.log'),
+        },
+        'console': {
+            'class': 'logging.StreamHandler',
+            'level': 'ERROR',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['file', 'console'],
+            'level': 'ERROR',
+            'propagate': True,
+        },
+    },
+}
