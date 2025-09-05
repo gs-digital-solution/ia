@@ -17,58 +17,41 @@ import matplotlib.pyplot as plt
 from .pdf_generator import pdf_generator
 
 # --- Conversion et sanitation latex/markdown vers HTML+LaTeX ---
+def flatten_multiline_latex_blocks(text):
+    """
+    Remplace tout bloc latex (\[...\] ou \(...\)) multi-ligne par la même balise sur UNE SEULE ligne.
+    """
+    if not text: return ""
+    def block_replacer(match):
+        contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
+        contents = re.sub(r' {2,}', ' ', contents)
+        return r'\[' + contents.strip() + r'\]'
+    def inline_replacer(match):
+        contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
+        contents = re.sub(r' {2,}', ' ', contents)
+        return r'\(' + contents.strip() + r'\)'
+    # Flatten les display latex
+    text = re.sub(r'\\\[\s*([\s\S]*?)\s*\\\]', block_replacer, text)
+    # Inline aussi
+    text = re.sub(r'\\\(\s*([\s\S]*?)\s*\\\)', inline_replacer, text)
+    return text
 
 def detect_and_format_math_expressions(text):
     """
-    Smart sanitation : protège, reformate et balise tout latex, y compris multi-lignes, tableaux, et environnements complexes.
+    Sanitize latex : met tous les blocs latex (display / inline) sur une seule ligne
+    Évite de masquer/protéger plus que nécessaire — traite tout ce qui traîne.
     """
-    if not text:
-        return ""
-    # [1] Protéger les tableaux markdown multi-lignes
-    protected_blocks = []
-    def protect_block(match):
-        protected_blocks.append(match.group(0))
-        return f"@@BLOCK_{len(protected_blocks)-1}@@"
-    text = re.sub(r'(\n([ \t]*\|[^\n]*\|[ \t]*\n)+)', protect_block, text)
-    # [2] Protéger environnements LaTeX multi-lignes
-    text = re.sub(r'(\\begin\{[a-zA-Z*]+\}.*?\\end\{[a-zA-Z*]+\})', protect_block, text, flags=re.DOTALL)
-    # [3] Protéger math déjà balisés latex
-    protected_patterns = []
-    def protect_formula(match):
-        protected_patterns.append(match.group(0))
-        return f"@@PROTECTED_{len(protected_patterns)-1}@@"
-    text = re.sub(r'\\\([^\)]*?\\\)', protect_formula, text, flags=re.DOTALL)
-    text = re.sub(r'\\\[.*?\\\]', protect_formula, text, flags=re.DOTALL)
-    text = re.sub(r'\$\$[^\$]*?\$\$', protect_formula, text)
-    text = re.sub(r'\$[^\$]*?\$', protect_formula, text)
+    if not text: return ""
 
-    # [4] Correction des balises
-    text = re.sub(r'\$\$\s*([\s\S]+?)\s*\$\$', lambda m: r'\[' + m.group(1).replace('\n',' ').strip() + r'\]', text, flags=re.DOTALL)
-    text = re.sub(r'\$\s*([^$]+?)\s*\$', lambda m: r'\(' + m.group(1).replace('\n',' ').strip() + r'\)', text)
+    # Correction de balises erronées issues de l'IA ou Markdown :
+    text = re.sub(r'\$\$\s*([\s\S]+?)\s*\$\$', lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]', text, flags=re.DOTALL)
+    text = re.sub(r'\$\s*([^$]+?)\s*\$', lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)', text)
     text = re.sub(r'(?<!\\)\[\s*([\s\S]+?)\s*\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]', text)
 
-    # [5] Multi-lignes display/inline → 1 ligne
-    def flatten_multiline_latex_blocks(text):
-        def block_replacer(match):
-            contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
-            contents = re.sub(r' {2,}', ' ', contents)
-            return r'\[' + contents.strip() + r'\]'
-        def inline_replacer(match):
-            contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
-            contents = re.sub(r' {2,}', ' ', contents)
-            return r'\(' + contents.strip() + r'\)'
-        text = re.sub(r'\\\[\s*([\s\S]*?)\s*\\\]', block_replacer, text)
-        text = re.sub(r'\\\(\s*([\s\S]*?)\s*\\\)', inline_replacer, text)
-        return text
+    # Mets tous les blocs latex (display/inline) sur UNE SEULE ligne
     text = flatten_multiline_latex_blocks(text)
-
-    # [6] Nettoyage \backslash indésirable
+    # Clean backslash parasite, caractères invisibles
     text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
-    # [7] Restaure protégés
-    for i, protected in enumerate(protected_patterns):
-        text = text.replace(f'@@PROTECTED_{i}@@', protected)
-    for i, block in enumerate(protected_blocks):
-        text = text.replace(f'@@BLOCK_{i}@@', block)
     return text
 
 def format_table_markdown(table_text):
@@ -127,8 +110,7 @@ def generate_corrige_html(corrige_text):
             continue
         if re.search(r'\\\[.*?\\\]', line):
             line = re.sub(r'\\\[(\s*)(.*?)(\s*)\\\]', r'\[\2\]', line)
-            html_output.append(f'<p>{line}</p>')
-            i += 1
+            html_output.append(f'<p>{line}</p>'); i += 1
         elif re.match(r'^\d+\.', line):
             html_output.append(f'<h2>{line}</h2>'); i += 1
         elif re.match(r'^[a-z]\)', line):
@@ -140,10 +122,8 @@ def generate_corrige_html(corrige_text):
             line = re.sub(r'\\\[\s*([^]]*?)\s*\\\]', r'\[\1\]', line)
             html_output.append(f'<p>{line}</p>'); i += 1
         else:
-            html_output.append(f'<p>{line}</p>')
-            i += 1
+            html_output.append(f'<p>{line}</p>'); i += 1
     return mark_safe("".join(html_output))
-
 # --- Fin sanitation/converter ---
 
 def extraire_texte_pdf(fichier_path):
