@@ -230,21 +230,24 @@ class StatutSoumissionAPIView(APIView):
 
     def get(self, request, soumission_id):
         try:
+            from .ia_utils import detect_and_format_math_expressions, generate_corrige_html
+
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
             resultat = soumission.resultat_json or {}
 
-            if resultat.get('corrige_text'):
-                corrige_raw = resultat['corrige_text'] or ""
-                print("==== DEBUG: corrige_text avant sanitation ====")
-                print(repr(corrige_raw))
-            else:
-                print("==== DEBUG: AUCUN corrigé renvoyé ====")
-                print(resultat)  # pour vérifier ce qui est transmis
+            # Corrigé existant = string, sinon chaîne vide
+            corrige_raw = resultat.get('corrige_text') or ""
+            print("==== DEBUG: corrige_text avant sanitation ====")
+            print(repr(corrige_raw))
 
-            # 🏆 Sanitation intelligente :
-            latex_clean = detect_and_format_math_expressions(corrige_raw)
-            html_corrige = generate_corrige_html(latex_clean)
-            resultat['corrige_text'] = html_corrige
+            # 🏆 Sanitation ONLY if string is not empty
+            if corrige_raw.strip() != "":
+                latex_clean = detect_and_format_math_expressions(corrige_raw)
+                html_corrige = generate_corrige_html(latex_clean)
+                resultat['corrige_text'] = html_corrige
+            else:
+                print("==== DEBUG: AUCUN corrigé renvoyé ou string vide ====")
+                resultat['corrige_text'] = ""  # Renvoyer une chaîne vide
 
             return Response({
                 "statut": soumission.statut,
