@@ -227,6 +227,7 @@ class SoumissionExerciceAPIView(APIView):
 
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
+
     def get(self, request, soumission_id):
         try:
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
@@ -234,19 +235,25 @@ class StatutSoumissionAPIView(APIView):
 
             if resultat.get('corrige_text'):
                 corrige_raw = resultat['corrige_text'] or ""
-                # 🏆 Sanitation intelligente :
-                latex_clean = detect_and_format_math_expressions(corrige_raw)
-                html_corrige = generate_corrige_html(latex_clean)
-                resultat['corrige_text'] = html_corrige
+                print("==== DEBUG: corrige_text avant sanitation ====")
+                print(repr(corrige_raw))
+            else:
+                print("==== DEBUG: AUCUN corrigé renvoyé ====")
+                print(resultat)  # pour vérifier ce qui est transmis
+
+            # 🏆 Sanitation intelligente :
+            latex_clean = detect_and_format_math_expressions(corrige_raw)
+            html_corrige = generate_corrige_html(latex_clean)
+            resultat['corrige_text'] = html_corrige
 
             return Response({
                 "statut": soumission.statut,
                 "resultat": resultat,
                 "date_creation": soumission.date_creation
             })
+
         except SoumissionIA.DoesNotExist:
             return Response({"error": "Soumission non trouvée"}, status=404)
-
 
 class DepartementsListAPIView(APIView):
     permission_classes = [IsAuthenticated]
