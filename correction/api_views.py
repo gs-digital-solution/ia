@@ -17,7 +17,7 @@ from rest_framework.parsers import MultiPartParser, JSONParser
 from django.shortcuts import get_object_or_404
 import markdown
 import re
-from .ia_utils import preprocess_and_format_latex, generate_corrige_html
+from .ia_utils import detect_and_format_math_expressions, generate_corrige_html
 
 
 class UserRegisterAPIView(APIView):
@@ -234,7 +234,8 @@ class StatutSoumissionAPIView(APIView):
 
             if resultat.get('corrige_text'):
                 corrige_raw = resultat['corrige_text']
-                latex_clean = preprocess_and_format_latex(corrige_raw)
+                # 🏆 Sanitation intelligente :
+                latex_clean = detect_and_format_math_expressions(corrige_raw)
                 html_corrige = generate_corrige_html(latex_clean)
                 resultat['corrige_text'] = html_corrige
 

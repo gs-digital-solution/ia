@@ -17,77 +17,162 @@ import re
 from .pdf_generator import pdf_generator
 from django.utils.safestring import mark_safe
 
-def preprocess_and_format_latex(text):
+import re
+from django.utils.safestring import mark_safe
+
+# --- les fonctions qui suivent sont les convertiseurs corrigé vers html+latex  ---
+def detect_and_format_math_expressions(text):
+    """Transforme le texte brut du corrigé :
+    - protège les formules latex déjà balisées (\[...\], \(...\))
+    - détecte/regroupe/balise les formules stand-alone et inline
+    - protège les tableaux markdown et environnements LaTeX complexes
     """
-    - Protège (temporairement) les formules latex déjà bien balisées
-    - Corrige tous les mauvais balisages, crochets seuls, dollars, etc.
-    - Met tous les display sur une ligne, pas de retour chariot intempestif
-    - Replace dans du texte HTML simple
-    """
-    protected = []
+
+    # --- Protéger les tableaux markdown multi-lignes ---
+    protected_blocks = []
+
+    def protect_block(match):
+        protected_blocks.append(match.group(0))
+        return f"@@BLOCK_{len(protected_blocks) - 1}@@"
+
+    text = re.sub(r'(\n([ \t]\|[^\n]\|[ \t]\n)+)', protect_block, text)
+
+    # --- Protéger les environnements LaTeX multi-lignes (comme array, matrix, etc.) ---
+    text = re.sub(r'(\\begin\{[a-z]+\?\}.?\\end\{[a-z]+\?\})', protect_block, text, flags=re.DOTALL)
+
+    # --- Protéger les formules déjà correctes ---
+    protected_patterns = []
 
     def protect_formula(match):
-        protected.append(match.group(0))
-        return f"@@PROT{len(protected)-1}@@"
+        protected_patterns.append(match.group(0))
+        return f"@@PROTECTED_{len(protected_patterns) - 1}@@"
 
-    # Protéger les bonnes balises
-    text = re.sub(r'\\\([^\(\)]+\\\)', protect_formula, text)
-    text = re.sub(r'\\\[[^\[\]]+\\\]', protect_formula, text)
+    text = re.sub(r'\\\(.?\\\)', protect_formula, text, flags=re.DOTALL)
+    text = re.sub(r'\\\[.?\\\]', protect_formula, text, flags=re.DOTALL)
     text = re.sub(r'\$\$[^\$]+\$\$', protect_formula, text)
     text = re.sub(r'\$[^\$]+\$', protect_formula, text)
 
-    # Correction de tout le reste
-    lines = text.splitlines()
-    fixed_lines = []
-    for line in lines:
-        l = line.strip()
-        if re.match(r'^([=+\-*/^()\[\]\\{}0-9a-zA-Z\s\.,\:\;\_]+)?\\[a-zA-Z]+', l) and not l.startswith('@@PROT'):
-            # On la met en display si seule sur la ligne
-            l = r'\[' + l + r'\]'
-        fixed_lines.append(l)
-    text = '\n'.join(fixed_lines)
+    # === Balisage smart (exemple minimal, plus de hooks à adapter si besoin) ===
+    # (Tu peux ici ajouter des regex pour baliser les vrais maths vs texte pur selon ta logique métier.)
 
-    # Correction inline (pour des expressions a^2+b^2=c^2)
-    text = re.sub(r'(?<!@@PROT)(?<!\w)([a-zA-Z0-9\(\)\-\+=\^*/\\]{5,}[=+\-*/^]+[a-zA-Z0-9\\{}\[\]]+)', r'\\(\1\\)', text)
+    # --- Restaure les formules protégées ---
+    for i, protected in enumerate(protected_patterns):
+        text = text.replace(f'@@PROTECTED_{i}@@', protected)
 
-    # Remet les formules protégées
-    for idx, prot in enumerate(protected):
-        text = text.replace(f'@@PROT{idx}@@', prot)
+    for i, block in enumerate(protected_blocks):
+        text = text.replace(f'@@BLOCK_{i}@@', block)
 
-    # Correction des balisages $$.$$ → \[...\], $...$ → \(...)
+    # --- Nettoyage latex ---
+    # Tous les crochets seuls ou dollars --> latex natif
     text = re.sub(r'\$\$\s*([\s\S]+?)\s*\$\$', lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]', text)
-    text = re.sub(r'\$\s*([^$]+?)\s*\$', lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)', text)
-    text = re.sub(r'(?<!\\)\[\s*([\s\S]*?)\s*\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]', text)
-    text = re.sub(r'\\\[\s*([\s\S]*?)\s*\\\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\]', text)
-    text = re.sub(r'\\\(\s*([\s\S]*?)\s*\\\)', lambda m: r'\(' + ' '.join(m.group(1).splitlines()).replace("  ", " ").strip() + r'\)', text)
-    text = text.replace('\\backslash', '\\')
-    text = text.replace('\xa0', ' ')
+    text = re.sub(r'\$\s*([^\$]+?)\s*\$', lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)', text)
+    text = re.sub(r'(?<!\\)\[\s*([\s\S]?)\s\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]',
+                  text)
+
+    # Tous les display sur 1 seule ligne
+    text = re.sub(r'\\\[\s*([\s\S]?)\s\\\]',
+                  lambda m: r'\[' + ' '.join(m.group(1).splitlines()).replace(" ", " ").strip() + r'\]', text)
+
+    # Inline aussi
+    text = re.sub(r'\\\(\s*([\s\S]?)\s\\\)',
+                  lambda m: r'\(' + ' '.join(m.group(1).splitlines()).replace(" ", " ").strip() + r'\)', text)
+
+    # Nettoie les backslash parasites
+    text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
+
     return text
 
+
+def format_table_markdown(table_text):
+    """Prend une chaîne contenant un tableau markdown, retourne du HTML <table>"""
+
+    lines = table_text.strip().split('\n')
+    html_table = ['<div class="table-container"><table>']
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or not line.startswith('|'):
+            continue
+
+        line = re.sub(r'^\|\s*', '', line)
+        line = re.sub(r'\s*\|$', '', line)
+        cells = [cell.strip() for cell in line.split('|')]
+
+        if i == 0:
+            html_table.append('<thead><tr>')
+            for cell in cells:
+                html_table.append(f'<th>{cell}</th>')
+            html_table.append('</tr></thead><tbody>')
+        elif all(re.match(r'^[\s:\-]+$', cell) for cell in cells):
+            continue  # ignore ligne de séparation
+        else:
+            html_table.append('<tr>')
+            for cell in cells:
+                html_table.append(f'<td>{cell}</td>')
+            html_table.append('</tr>')
+
+    html_table.append('</tbody></table></div>')
+    return ''.join(html_table)
+
+
 def generate_corrige_html(corrige_text):
-    """Retourne du HTML + LaTeX bien compatible flutter_tex"""
+    """Transforme le corrigé latex/texte en HTML+latex propre pour flutter_tex
+    - Tableaux markdown -> HTML
+    - Block latex sur une ligne
+    - Titres/questions/puces bien affichés
+    """
+
+    formatted_text = detect_and_format_math_expressions(corrige_text)
+    lines = formatted_text.strip().split('\n')
     html_output = []
-    lines = corrige_text.strip().split('\n')
     i = 0
+
     while i < len(lines):
         line = lines[i].strip()
         if not line:
             i += 1
             continue
-        if re.search(r'\\\[.*?\\\]', line):
-            line = re.sub(r'\\\[(\s*)(.*?)(\s*)\\\]', r'\[\2\]', line)
+
+        # Tableaux markdown
+        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
+            table_lines = []
+            j = i
+            while j < len(lines) and lines[j].startswith('|'):
+                table_lines.append(lines[j])
+                j += 1
+
+            table_text = '\n'.join(table_lines)
+            html_table = format_table_markdown(table_text)
+            html_output.append(html_table)
+            i = j
+            continue
+
+        # Affiche block latex
+        if re.search(r'\\\[.?\\\]', line):
+            line = re.sub(r'\s\\\[(.?)\\\]\s', r'\[\1\]', line)
             html_output.append(f'<p>{line}</p>')
             i += 1
         elif re.match(r'^\d+\.', line):
-            html_output.append(f'<h2>{line}</h2>'); i += 1
+            html_output.append(f'<h2>{line}</h2>')
+            i += 1
         elif re.match(r'^[a-z]\)', line):
-            html_output.append(f'<p><strong>{line}</strong></p>'); i += 1
+            html_output.append(f'<p><strong>{line}</strong></p>')
+            i += 1
         elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
-            html_output.append(f'<ul><li>{line[1:].strip()}</li></ul>'); i += 1
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        elif '\\(' in line or '\\[' in line:
+            line = re.sub(r'\\\(\s*([^)]?)\s\\\)', r'\\(\1\\)', line)
+            line = re.sub(r'\\\[\s*([^]]?)\s\\\]', r'\[\1\]', line)
+            html_output.append(f'<p>{line}</p>')
+            i += 1
         else:
             html_output.append(f'<p>{line}</p>')
             i += 1
+
     return mark_safe("".join(html_output))
+# --- fin des fonctions convertisseurs---
+
 
 
 def extraire_texte_pdf(fichier_path):
@@ -173,6 +258,8 @@ def extraire_texte_fichier(fichier_field):
             os.remove(temp_path)
         except Exception:
             pass
+
+
 
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
