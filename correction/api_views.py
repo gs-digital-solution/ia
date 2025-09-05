@@ -233,7 +233,7 @@ class StatutSoumissionAPIView(APIView):
             resultat = soumission.resultat_json or {}
 
             if resultat.get('corrige_text'):
-                corrige_raw = resultat['corrige_text']
+                corrige_raw = resultat['corrige_text'] or ""
                 # 🏆 Sanitation intelligente :
                 latex_clean = detect_and_format_math_expressions(corrige_raw)
                 html_corrige = generate_corrige_html(latex_clean)

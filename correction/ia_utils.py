@@ -145,7 +145,7 @@ def generate_corrige_html(corrige_text):
     - Block latex sur une ligne
     - Titres/questions/puces bien affichés
     """
-
+    if not corrige_text: return ""
     formatted_text = detect_and_format_math_expressions(corrige_text)
     lines = formatted_text.strip().split('\n')
     html_output = []
