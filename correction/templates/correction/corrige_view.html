@@ -1,0 +1,68 @@
+html
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ titre_corrige|default:"Corrigé CIS" }}</title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async
+      src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+            background: #f8f9fa;
+            color: #212529;
+            margin: 0;
+            max-width: 720px;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .header {
+            background: #208060;
+            color: white;
+            padding: 16px 11px;
+            font-size: 1.9em;
+            font-weight: bold;
+            position: sticky; top: 0; z-index: 10;
+            border-radius: 0 0 5px 5px;
+        }
+        .corrige-content {
+            background: white;
+            padding: 20px 14px;
+            border-radius: 8px;
+            margin: 16px 0;
+        }
+        h2, h3 {
+            color: #2b8074;
+            margin-top: 28px;
+            font-weight: bold;
+        }
+        h4 { color: #2c3e50; }
+        p, ul, ol { font-size: 20px; margin: 14px 0;}
+        .math-block { font-size: 22px; text-align: center; margin: 14px 0; }
+        .image-block { margin: 17px auto 14px auto; display:block; max-width:98%; border-radius:7px; }
+        table {
+            border-collapse: collapse;
+            margin: 15px 0;
+            width: 100%;
+            font-size: 18px;
+        }
+        th, td { border: 1px solid #bbb; padding: 8px; }
+        th { background: #208060; color: white; }
+        @media (max-width: 640px) {
+            body { font-size: 17px; }
+            .corrige-content { padding: 8px 3px; }
+            h2 { font-size: 22px;}
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        {{ titre_corrige|default:"Corrigé mathématique CIS" }}
+    </div>
+    <div class="corrige-content">
+        {{ corrige_html|safe }}
+    </div>
+</body>
+</html>
