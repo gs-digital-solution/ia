@@ -24,6 +24,8 @@ from django.utils.decorators import method_decorator
 from correction.models import SoumissionIA
 from django.http import HttpResponse
 from weasyprint import HTML as WeasyHTML
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 
 
 
@@ -413,39 +415,47 @@ class DebugExtractionAPIView(APIView):
 #vue pour afficher le corrigé sur une page web dans le mobile ( nouvelle approche)
 #mais son url (route) se trouve dans correction/url.py et non api_urls.py car c'est pour le web
 
-@method_decorator(login_required, name='dispatch')
 class CorrigeHTMLView(APIView):
     """
-    Vue qui affiche le corrigé en HTML/LaTeX stylé, sécurisé pour le user connecté.
+    Affiche le corrigé HTML/MathJax pour un user authentifié via JWT.
     """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, soumission_id):
+        soumission = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
+        titre_corrige = f"Corrigé CIS – Exercice {soumission.demande.id if soumission.demande else ''}"
+        raw_corrige = soumission.resultat_json.get('corrige_text') or ""
+        # Sanitize et conversion en HTML
+        latex_fixed = detect_and_format_math_expressions(raw_corrige)
+        corrige_html = generate_corrige_html(latex_fixed)
+        return render(
+            request,
+            "correction/corrige_view.html",
+            {"titre_corrige": titre_corrige, "corrige_html": corrige_html}
+        )
+
+
+class CorrigePDFView(APIView):
+    """
+    Renvoie le PDF du corrigé pour un user authentifié via JWT.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, soumission_id):
         soumission = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
         titre_corrige = f"Corrigé CIS – Exercice {soumission.demande.id if soumission.demande else ''}"
         raw_corrige = soumission.resultat_json.get('corrige_text') or ""
         latex_fixed = detect_and_format_math_expressions(raw_corrige)
         corrige_html = generate_corrige_html(latex_fixed)
-        return render(
+        # Génère le PDF en mémoire
+        html_content = render(
             request,
             "correction/corrige_view.html",
-            {
-                "titre_corrige": titre_corrige,
-                "corrige_html": corrige_html
-            }
-        )
-
-
-
-@login_required
-def pdf_corrige_view(request, soumission_id):
-    soumission = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
-    titre_corrige = f"Corrigé CIS – Exercice {soumission.demande.id if soumission.demande else ''}"
-    raw_corrige = soumission.resultat_json.get('corrige_text') or ""
-    latex_fixed = detect_and_format_math_expressions(raw_corrige)
-    corrige_html = generate_corrige_html(latex_fixed)
-    html = render(request, "correction/corrige_view.html",
-                  {"titre_corrige": titre_corrige, "corrige_html": corrige_html}
-                 ).content.decode()
-    pdf_file = WeasyHTML(string=html).write_pdf()
-    response = HttpResponse(pdf_file, content_type='application/pdf')
-    response['Content-Disposition'] = f'filename="corrige_CIS_{soumission_id}.pdf"'
-    return response
+            {"titre_corrige": titre_corrige, "corrige_html": corrige_html}
+        ).content.decode()
+        pdf_file = WeasyHTML(string=html_content).write_pdf()
+        response = HttpResponse(pdf_file, content_type='application/pdf')
+        response["Content-Disposition"] = f'attachment; filename="corrige_CIS_{soumission_id}.pdf"'
+        return response

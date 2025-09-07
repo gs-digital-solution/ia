@@ -4,7 +4,7 @@ from django.contrib.auth import views as auth_views
 from django.contrib.auth.views import PasswordChangeView
 from django.contrib.auth.views import PasswordChangeDoneView
 from correction.views import admin_dashboard, admin_users_list, user_toggle_active, user_delete
-from .api_views import CorrigeHTMLView,pdf_corrige_view
+from .api_views import CorrigeHTMLView, CorrigePDFView
 
 app_name = 'correction'
 
@@ -149,16 +149,16 @@ path(
     views.plus_de_credit,
     name='plus_de_credit'),
 # route pour la vraie page web qui sera affichée sur flutter
-path(
-    'corrige/<int:soumission_id>/view/',
-    CorrigeHTMLView.as_view(),
-    name='corrige_html_view'),
+      path(
+            'corrige/<int:soumission_id>/view/',
+             CorrigeHTMLView.as_view(),
+             name = 'corrige_html_view'),
 
 # route pour imprimer la  page web qui sera affichée sur flutter
 path(
-    'corrige/<int:soumission_id>/pdf/',
-    pdf_corrige_view,
-    name='corrige_pdf_view'),
+     'corrige/<int:soumission_id>/pdf/',
+      CorrigePDFView.as_view(),
+      name='corrige_pdf_view'),
 
 ]
 
