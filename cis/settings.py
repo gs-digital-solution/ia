@@ -33,9 +33,8 @@ SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG =False
 #pour passer en production et travailler en local aussi
-#ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost',
-#    'speed.cloudflare.com']
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
+#ALLOWED_HOSTS = ['*','speed.cloudflare.com']
 #pour faire des tests en local
 #ALLOWED_HOSTS = ['127.0.0.1:8000','host']
 #Cette config de ckeditor permet l’upload d’images depuis le back-office ou le front si tu ouvres les droits.
