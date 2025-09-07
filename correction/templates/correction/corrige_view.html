@@ -1,68 +1,127 @@
-html
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ titre_corrige|default:"Corrigé CIS" }}</title>
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
-    <script id="MathJax-script" async
-      src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    <style>
-        body {
-            font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
-            background: #f8f9fa;
-            color: #212529;
-            margin: 0;
-            max-width: 720px;
-            min-height: 100vh;
-            box-sizing: border-box;
-        }
-        .header {
-            background: #208060;
-            color: white;
-            padding: 16px 11px;
-            font-size: 1.9em;
-            font-weight: bold;
-            position: sticky; top: 0; z-index: 10;
-            border-radius: 0 0 5px 5px;
-        }
-        .corrige-content {
-            background: white;
-            padding: 20px 14px;
-            border-radius: 8px;
-            margin: 16px 0;
-        }
-        h2, h3 {
-            color: #2b8074;
-            margin-top: 28px;
-            font-weight: bold;
-        }
-        h4 { color: #2c3e50; }
-        p, ul, ol { font-size: 20px; margin: 14px 0;}
-        .math-block { font-size: 22px; text-align: center; margin: 14px 0; }
-        .image-block { margin: 17px auto 14px auto; display:block; max-width:98%; border-radius:7px; }
-        table {
-            border-collapse: collapse;
-            margin: 15px 0;
-            width: 100%;
-            font-size: 18px;
-        }
-        th, td { border: 1px solid #bbb; padding: 8px; }
-        th { background: #208060; color: white; }
-        @media (max-width: 640px) {
-            body { font-size: 17px; }
-            .corrige-content { padding: 8px 3px; }
-            h2 { font-size: 22px;}
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>{{ titre_corrige|default:"Corrigé CIS" }}</title>
+
+  <!-- MathJax en mode defer pour qu'il s'exécute après le parsing complet -->
+  <script id="MathJax-script" defer
+          src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+  </script>
+  <script>
+    // Après le chargement complet, on force le rendu MathJax
+    window.addEventListener('load', () => {
+      if (window.MathJax) {
+        MathJax.typesetPromise();
+      }
+    });
+  </script>
+
+  <style>
+    /* Reset minimal */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      background: #f0f4f5;
+      color: #333;
+      line-height: 1.5;
+      padding-bottom: 80px; /* place pour le footer PDF */
+    }
+
+    .header {
+      background: #208060;
+      color: white;
+      padding: 16px;
+      text-align: center;
+      font-size: 1.6em;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 20px auto;
+      padding: 0 10px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .card h2, .card h3 {
+      color: #2b8074;
+      margin-top: 24px;
+    }
+
+    .card p {
+      margin: 16px 0;
+      font-size: 1.1em;
+    }
+
+    .card table {
+      width: 100%; margin: 16px 0;
+      border-collapse: collapse; font-size: 1em;
+    }
+    .card th {
+      background: #208060; color: #fff;
+      padding: 8px; text-align: left;
+    }
+    .card td {
+      border: 1px solid #ddd;
+      padding: 8px;
+    }
+
+    img {
+      max-width: 100%; display: block;
+      margin: 16px auto;
+    }
+
+    /* Footer PDF fixe en bas */
+    .pdf-footer {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      background: #208060;
+      padding: 12px;
+      text-align: center;
+      z-index: 200;
+    }
+    .pdf-footer a {
+      color: white;
+      background: #ffa500;
+      padding: 10px 20px;
+      border-radius: 5px;
+      text-decoration: none;
+      font-weight: bold;
+      font-size: 1.1em;
+    }
+  </style>
 </head>
 <body>
-    <div class="header">
-        {{ titre_corrige|default:"Corrigé mathématique CIS" }}
+
+  <div class="header">
+    {{ titre_corrige|default:"Corrigé CIS" }}
+  </div>
+
+  <div class="container">
+    <div class="card">
+      {{ corrige_html|safe }}
     </div>
-    <div class="corrige-content">
-        {{ corrige_html|safe }}
-    </div>
+  </div>
+
+  <div class="pdf-footer">
+    <a href="{% url 'correction:corrige_pdf_view' soumission_id %}">
+      Télécharger le PDF
+    </a>
+  </div>
+
 </body>
 </html>
