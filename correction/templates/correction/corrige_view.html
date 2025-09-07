@@ -1,127 +1,129 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ titre_corrige }}</title>
 
-  <title>{{ titre_corrige|default:"Corrigé CIS" }}</title>
+    <!-- MathJax chargé en defer -->
+    <script id="MathJax-script" defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
-  <!-- MathJax en mode defer pour qu'il s'exécute après le parsing complet -->
-  <script id="MathJax-script" defer
-          src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
-  </script>
-  <script>
-    // Après le chargement complet, on force le rendu MathJax
-    window.addEventListener('load', () => {
-      if (window.MathJax) {
-        MathJax.typesetPromise();
-      }
-    });
-  </script>
+    <script>
+        window.addEventListener('load', () => {
+            if (window.MathJax) MathJax.typesetPromise();
+        });
+    </script>
 
-  <style>
-    /* Reset minimal */
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-    body {
-      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
-      background: #f0f4f5;
-      color: #333;
-      line-height: 1.5;
-      padding-bottom: 80px; /* place pour le footer PDF */
-    }
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: #f0f4f5;
+            padding-bottom: 80px;
+        }
 
-    .header {
-      background: #208060;
-      color: white;
-      padding: 16px;
-      text-align: center;
-      font-size: 1.6em;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
+        .header {
+            position: sticky;
+            top: 0;
+            background: #208060;
+            color: #fff;
+            padding: 16px;
+            text-align: center;
+            font-size: 1.4em;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
 
-    .container {
-      max-width: 720px;
-      margin: 20px auto;
-      padding: 0 10px;
-    }
+        .container {
+            max-width: 720px;
+            margin: 20px auto;
+            padding: 0 12px;
+        }
 
-    .card {
-      background: #fff;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-      padding: 24px;
-      margin-bottom: 24px;
-    }
+        .card {
+            background: #fff;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
 
-    .card h2, .card h3 {
-      color: #2b8074;
-      margin-top: 24px;
-    }
+        .card h2,
+        .card h3 {
+            color: #2b8074;
+            margin-top: 24px;
+        }
 
-    .card p {
-      margin: 16px 0;
-      font-size: 1.1em;
-    }
+        .card p {
+            margin: 16px 0;
+            font-size: 1.1em;
+            line-height: 1.6;
+        }
 
-    .card table {
-      width: 100%; margin: 16px 0;
-      border-collapse: collapse; font-size: 1em;
-    }
-    .card th {
-      background: #208060; color: #fff;
-      padding: 8px; text-align: left;
-    }
-    .card td {
-      border: 1px solid #ddd;
-      padding: 8px;
-    }
+        table {
+            width: 100%;
+            margin: 16px 0;
+            border-collapse: collapse;
+            font-size: 1em;
+        }
 
-    img {
-      max-width: 100%; display: block;
-      margin: 16px auto;
-    }
+        th {
+            background: #208060;
+            color: #fff;
+            padding: 8px;
+        }
 
-    /* Footer PDF fixe en bas */
-    .pdf-footer {
-      position: fixed;
-      left: 0; right: 0; bottom: 0;
-      background: #208060;
-      padding: 12px;
-      text-align: center;
-      z-index: 200;
-    }
-    .pdf-footer a {
-      color: white;
-      background: #ffa500;
-      padding: 10px 20px;
-      border-radius: 5px;
-      text-decoration: none;
-      font-weight: bold;
-      font-size: 1.1em;
-    }
-  </style>
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+
+        img {
+            max-width: 100%;
+            display: block;
+            margin: 16px auto;
+        }
+
+        .pdf-footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #208060;
+            padding: 12px;
+            text-align: center;
+            z-index: 100;
+        }
+
+        .pdf-footer a {
+            color: #fff;
+            background: #ffa500;
+            padding: 10px 20px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+    </style>
 </head>
+
 <body>
+    <div class="header">{{ titre_corrige }}</div>
 
-  <div class="header">
-    {{ titre_corrige|default:"Corrigé CIS" }}
-  </div>
-
-  <div class="container">
-    <div class="card">
-      {{ corrige_html|safe }}
+    <div class="container">
+        <div class="card">
+            {{ corrige_html|safe }}
+        </div>
     </div>
-  </div>
 
-  <div class="pdf-footer">
-    <a href="{% url 'correction:corrige_pdf_view' soumission_id %}">
-      Télécharger le PDF
-    </a>
-  </div>
-
+    <div class="pdf-footer">
+        <a href="{% url 'correction:corrige_pdf_view' soumission_id %}">
+            Télécharger le PDF
+        </a>
+    </div>
 </body>
 </html>
