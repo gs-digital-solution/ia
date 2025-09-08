@@ -33,7 +33,19 @@ SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG =False
 #pour passer en production et travailler en local aussi
-ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
+#ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
+ALLOWED_HOSTS = [
+    'cis.groupesiewe.com',
+    '185.215.167.178',
+    'speed.cloudflare.com',  # pour tes tests via Cloudflare Speed
+    '127.0.0.1',
+    'localhost',
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://cis.groupesiewe.com',
+    # tu peux ajouter ici d'autres origines si besoin
+]
 #ALLOWED_HOSTS = ['*','speed.cloudflare.com']
 #pour faire des tests en local
 #ALLOWED_HOSTS = ['127.0.0.1:8000','host']
