@@ -401,52 +401,72 @@ Règles incontournables :
     except Exception as e:
         return f"Erreur API: {str(e)}", None
 
+from celery import shared_task
+# … tes imports existants …
+
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
+    print(f"DEBUG ▶️ Tâche IA démarrée pour demande_id={demande_id}, matiere_id={matiere_id}")
     from correction.models import DemandeCorrection, SoumissionIA
-    from resources.models import Matiere
+    from resources.models   import Matiere
 
     try:
+        # Récupération des objets
         demande = DemandeCorrection.objects.get(id=demande_id)
         soumission = SoumissionIA.objects.get(demande=demande)
+        print("DEBUG    → DemandeCorrection et SoumissionIA récupérés")
 
-        # Mise à jour progression
+        # Étape 1 : extraction
         soumission.statut = 'extraction'
         soumission.progression = 20
         soumission.save()
+        print("DEBUG    • Statut « extraction » (20%)")
 
-        # Extraction texte
+        # Extraction du texte
         texte_enonce = ""
         if demande.fichier:
             texte_enonce = extraire_texte_fichier(demande.fichier)
         if not texte_enonce and hasattr(demande, 'enonce_texte'):
-            texte_enonce = getattr(demande, 'enonce_texte', '')
+            texte_enonce = demande.enonce_texte or ""
+        print(f"DEBUG    • Texte énoncé extrait ({len(texte_enonce)} caractères)")
 
+        # Étape 2 : analyse IA
         soumission.statut = 'analyse_ia'
         soumission.progression = 40
         soumission.save()
+        print("DEBUG    • Statut « analyse_ia » (40%)")
 
-        # Contexte
+        # Contexte IA
         matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
         contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
 
+        # Étape 3 : génération graphiques
         soumission.statut = 'generation_graphiques'
         soumission.progression = 60
         soumission.save()
+        print("DEBUG    • Statut « generation_graphiques » (60%)")
 
-        # Génération IA
+        # Appel de l’IA
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
             texte_enonce, contexte, matiere=matiere
         )
+        print("DEBUG    • IA renvoyé texte et éventuels graphiques")
 
+        # Étape 4 : formatage PDF
         soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
+        print("DEBUG    • Statut « formatage_pdf » (80%)")
 
-        # Génération PDF
+        # Génération du PDF
         from .pdf_utils import generer_pdf_corrige
-        pdf_path = pdf_path = generer_pdf_corrige(corrige_txt, graph_list, demande)
+        pdf_path = generer_pdf_corrige(
+            {"titre_corrige": contexte, "corrige_html": corrige_txt, "soumission_id": demande_id},
+            demande_id
+        )
+        print(f"DEBUG    • PDF généré à l’emplacement : {pdf_path}")
 
+        # Étape finale : terminé
         soumission.statut = 'termine'
         soumission.progression = 100
         soumission.resultat_json = {
@@ -455,15 +475,20 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             'graphiques': graph_list or []
         }
         soumission.save()
+        print("DEBUG ✔️ Tâche IA terminée (100%)")
 
-        # Mettre à jour la demande
+        # On met à jour la demande
         demande.corrigé = corrige_txt
         demande.save()
 
         return True
 
     except Exception as e:
-        print(f"Erreur traitement IA: {e}")
-        soumission.statut = 'erreur'
-        soumission.save()
+        print("DEBUG ❌ Erreur dans la tâche IA :", e)
+        # En cas d’erreur on met à jour le statut
+        try:
+            soumission.statut = 'erreur'
+            soumission.save()
+        except:
+            pass
         return False
