@@ -49,6 +49,9 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     # 3) Conversion en PDF
     options = {
         "enable-local-file-access": None,
+        "print-media-type": None,
+        "no-stop-slow-scripts": None,
+        "javascript-delay": "3000",  # <-- plus de temps (3s)
         "margin-top": "10mm",
         "margin-bottom": "10mm",
         "margin-left": "8mm",
