@@ -51,11 +51,12 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         "enable-local-file-access": None,
         "print-media-type": None,
         "no-stop-slow-scripts": None,
-        "javascript-delay": "3000",  # <-- plus de temps (3s)
-        "margin-top": "10mm",
-        "margin-bottom": "10mm",
-        "margin-left": "8mm",
-        "margin-right": "8mm",
+        "javascript-delay": "8000",  # le temps
+        "zoom": "1.2",  # Zoom pour agrandir le contenu
+        "margin-top": "2mm",
+        "margin-bottom": "2mm",
+        "margin-left": "1mm",
+        "margin-right": "1mm",
     }
     pdf_bytes = pdfkit.from_string(html_prerender, False, options=options)
 

@@ -5,119 +5,98 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ titre_corrige }}</title>
 
-  <!-- MathJax en defer pour ne s'exécuter qu'après parsing du DOM -->
   <script id="MathJax-script" defer
     src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
   </script>
   <script>
-    // À la fin du chargement, on force le rendu complet
     window.addEventListener('load', () => {
-      if (window.MathJax) {
-        MathJax.typesetPromise();
-      }
+      if (window.MathJax) MathJax.typesetPromise();
     });
   </script>
 
   <style>
-    /* Reset et box-sizing */
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* Reset */
+    * { box-sizing:border-box; margin:0; padding:0; }
 
-    /* Taille de base très grande pour faciliter la lecture */
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background: #f0f4f5;
-      font-size: 36px;      /* <--- TAILLE GLOBALE ! */
-      line-height: 1.4;
-      color: #333;
-      padding-bottom: 100px; /* Pour le footer PDF */
+    /* Corps 100% largeur et police très grande */
+    html, body {
+      width:100%; height:100%;
+      font-family:'Segoe UI',sans-serif;
+      font-size:36px;            /* taille globale augmentée */
+      line-height:1.4;
+      background:#f0f4f5;
+      padding-bottom:100px;      /* place pour footer */
     }
 
-    /* Header large */
+    /* Header */
     .header {
-      position: sticky; top: 0;
-      background: #208060;
-      color: #fff;
-      padding: 20px;
-      text-align: center;
-      font-size: 40px;      /* <--- TAILLE HEADER */
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      z-index: 10;
+      position:sticky; top:0;
+      background:#208060; color:#fff;
+      padding:20px; text-align:center;
+      font-size:40px;
+      z-index:10;
     }
 
+    /* Conteneur full-width */
     .container {
-      max-width: 720px;
-      margin: 20px auto;
-      padding: 0 12px;
+      width:100% !important;
+      max-width:none !important;
+      padding:0 12px;
     }
 
+    /* Card full-width */
     .card {
-      background: #fff;
-      border-radius: 8px;
-      padding: 32px;         /* Plus d’espace intérieur */
-      margin-bottom: 32px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-      position: relative;
-      z-index: 5;            /* Au-dessus du watermark */
+      background:#fff; border-radius:8px;
+      padding:32px; margin:20px 0;
+      box-shadow:0 2px 8px rgba(0,0,0,0.05);
+      width:100%;
     }
 
-    /* Titres d’étape */
+    /* Titres */
     .card h2, .card h3 {
-      color: #2b8074;
-      margin-top: 32px;
-      font-size: 40px;       /* Titres plus grands */
+      font-size:38px; color:#2b8074; margin-top:24px;
+      word-wrap: break-word;
     }
 
     /* Paragraphes */
     .card p {
-      margin: 24px 0;
-      font-size: 36px;       /* Texte très lisible */
+      font-size:36px; margin:24px 0;
+      word-wrap: break-word; overflow-wrap: break-word;
+    }
+
+    /* MathJax blocks */
+    .MathJax_Display, .MathJax {
+      white-space: normal !important;
+      overflow-wrap: break-word;
     }
 
     /* Tables */
     table {
-      width: 100%;
-      margin: 24px 0;
-      border-collapse: collapse;
-      font-size: 34px;       /* Ajuster également */
+      width:100%; margin:24px 0;
+      border-collapse:collapse; font-size:32px;
+      word-wrap: break-word;
     }
-    th {
-      background: #208060;
-      color: #fff;
-      padding: 12px;
-    }
-    td {
-      border: 1px solid #ddd;
-      padding: 12px;
-    }
+    th, td { padding:12px; border:1px solid #ddd; }
 
     /* Images */
     img {
-      max-width: 100%;
-      height: auto;
-      display: block;
-      margin: 24px auto;
+      max-width:100%; height:auto;
+      display:block; margin:24px auto;
     }
 
     /* Footer fixe */
     .pdf-footer {
-      position: fixed; bottom: 0; left: 0; right: 0;
-      background: #208060;
-      padding: 16px;
-      text-align: center;
-      z-index: 10;
+      position:fixed; bottom:0; left:0; right:0;
+      background:#208060; padding:16px; text-align:center;
+      z-index:10;
     }
     .pdf-footer a {
-      color: #fff;
-      background: #ffa500;
-      padding: 12px 24px;
-      border-radius: 6px;
-      text-decoration: none;
-      font-weight: bold;
-      font-size: 32px;
+      color:#fff; background:#ffa500;
+      padding:12px 24px; border-radius:6px;
+      text-decoration:none; font-size:32px;
     }
   </style>
 </head>
-
 <body>
 
   <div class="header">{{ titre_corrige }}</div>
