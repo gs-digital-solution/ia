@@ -28,6 +28,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from .models import SoumissionIA
 from .pdf_utils import generer_pdf_corrige
+from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 
 
 
@@ -160,13 +161,20 @@ class SoumissionExerciceAPIView(APIView):
 
     def post(self, request):
         try:
-            # Vérifier l'abonnement actif (commenté temporairement)
-            # if not user_abonnement_actif(request.user):
-            #     return Response(
-            #         {"error": "Abonnement requis pour soumettre un exercice"},
-            #         status=status.HTTP_402_PAYMENT_REQUIRED
-            #     )
+            # 1) Vérifier l'abonnement actif / crédits restants
+            if not user_abonnement_actif(request.user):
+                return Response(
+                    {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
+                    status=status.HTTP_402_PAYMENT_REQUIRED
+                )
 
+            # 2) Débite 1 crédit
+            debited = debiter_credit_abonnement(request.user)
+            if not debited:
+                return Response(
+                    {"error": "Impossible de débiter un crédit. Réessayez plus tard."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
             # Récupérer les données
             pays_id = request.data.get('pays')
             sous_systeme_id = request.data.get('sous_systeme')

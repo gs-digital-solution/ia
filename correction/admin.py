@@ -6,6 +6,7 @@ from .models import CustomUser
 from .models import FeedbackCorrection
 from .models import DeviceConnectionHistory, DeviceMigrationRequest,SoumissionIA
 
+#pour décider de rendre disponible le bouton télecharger plustard coté mobile
 @admin.register(AppConfig)
 class AppConfigAdmin(admin.ModelAdmin):
     list_display = ['pdf_enabled','correction_enabled']

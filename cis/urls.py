@@ -54,7 +54,18 @@ path(
     'api/',
     include('correction.api_urls')),
 
+    path(
+        'api/abonnement/',
+        include(('abonnement.api_urls', 'abonnement_api'),
+                                  namespace='abonnement_api')),
+
+    path(
+        'api/paiement/',
+        include(('paiement.api_urls', 'paiement_api'),
+                                  namespace='paiement_api')),
+
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+
