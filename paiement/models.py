@@ -14,11 +14,15 @@ class PaymentMethod(models.Model):
     code = models.CharField(max_length=64, unique=True)   # Ex: "PAIEMENTMARCHAND_MTN_CM"
     pays = models.ForeignKey(Pays, on_delete=models.CASCADE, related_name="payment_methods")
     nom_affiche = models.CharField(max_length=64)         # "MTN Mobile Money"
-    operateur = models.CharField(max_length=32)           # MTN, Orange, Wave...
-    ussd = models.CharField(max_length=32, blank=True)    # *126#, etc.
+    operateur = models.CharField(max_length=64)           # MTN, Orange, Wave...
+    ussd = models.CharField(max_length=64, blank=True)    # *126#, etc.
     logo_url = models.URLField(blank=True, null=True)
     description = models.TextField(blank=True)
     actif = models.BooleanField(default=True)
+    service_code = models.CharField(
+    max_length = 100, blank = True,null=True,
+    help_text = "Code Touchpay à passer (ex: PAIEMENTMARCHAND_MTN_CM)"
+                                   )
     extra_config = models.JSONField(blank=True, null=True)  # Autres params spécifiques par méthode
 
     def __str__(self):
