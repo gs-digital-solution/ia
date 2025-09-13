@@ -1,51 +1,41 @@
+import uuid, logging
 from .models import PaymentTransaction
 from .providers.factory import get_provider_for_method
-import uuid
-import django.utils.timezone as timezone
+
+logger = logging.getLogger('paiement')
 
 def process_payment(user, abonnement, phone, payment_method, callback_url):
-    """
-    Orchestrateur de paiement :
-     - Crée l’enregistrement PaymentTransaction (INITIATED)
-     - Délègue l’appel au provider (ex : TouchpayProvider)
-     - Met à jour la transaction d’après la réponse
-    """
-    # 1) Création initiale
-    unique_id = "init_" + str(uuid.uuid4()).replace("-", "")[:12]
+    logger.debug("→ process_payment begins")
     tx = PaymentTransaction.objects.create(
         user=user,
         abonnement=abonnement,
         payment_method=payment_method,
         amount=abonnement.prix_base,
         phone=phone,
-        transaction_id=unique_id,
+        transaction_id="init_"+str(uuid.uuid4())[:12],
         status="INITIATED"
     )
+    logger.debug(f"Tx init: {tx.transaction_id}")
 
-    # 2) Appel au provider sélectionné
     provider = get_provider_for_method(payment_method)
-    response = provider.initiate_payment(
-        amount=tx.amount,
-        phone=phone,
-        abonnement=abonnement,
-        user=user,
+    resp = provider.initiate_payment(
+        amount=tx.amount, phone=phone,
+        abonnement=abonnement, user=user,
         callback_url=callback_url
     )
+    logger.debug(f"Provider responded {resp.status_code}")
 
-    # 3) Sauvegarde du raw_response
     try:
-        tx.raw_response = response.json()
-    except Exception:
-        tx.raw_response = {"error": "no json", "text": response.text}
+        tx.raw_response = resp.json()
+    except:
+        tx.raw_response = {'text': resp.text}
+    logger.debug(f"raw_response: {tx.raw_response}")
 
-    # 4) Mise à jour du statut + idFromClient si fourni
-    if getattr(response, 'status_code', None) in (200, 201) and isinstance(tx.raw_response, dict):
-        # Touchpay renvoie 'idFromClient'
-        if tx.raw_response.get("idFromClient"):
-            tx.transaction_id = tx.raw_response["idFromClient"]
+    if resp.status_code in (200,201) and 'idFromClient' in tx.raw_response:
+        tx.transaction_id = tx.raw_response['idFromClient']
         tx.status = "PROCESSING"
     else:
         tx.status = "FAIL"
-
     tx.save()
+    logger.debug(f"Tx updated: {tx.status}")
     return tx
