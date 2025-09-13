@@ -7,6 +7,8 @@ from .api_views import PasswordResetAPI
 from .api_views import ProfileAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .api_views import (SoumissionExerciceAPIView, StatutSoumissionAPIView ,
+                        PaysListAPIView,
+                        SousSystemeListAPIView,
                         ClassesListAPIView,MatieresListAPIView,
                         TypesExerciceListAPIView,DepartementsListAPIView,
                         LeconsListAPIView,DownloadCorrigeAPIView ,

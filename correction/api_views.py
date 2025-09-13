@@ -279,6 +279,29 @@ class StatutSoumissionAPIView(APIView):
         except SoumissionIA.DoesNotExist:
             return Response({"error": "Soumission non trouvée"}, status=404)
 
+
+# 1) VUE PAYS
+class PaysListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        pays = Pays.objects.all()
+        data = [{"id": p.id, "code": p.code, "nom": p.nom} for p in pays]
+        return Response(data)
+
+
+# 2) VUE SOUS-SYSTEME
+class SousSystemeListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        pays_id = request.query_params.get('pays')
+        qs = SousSysteme.objects.all()
+        if pays_id:
+            qs = qs.filter(pays_id=pays_id)
+        data = [{"id": s.id, "nom": s.nom} for s in qs]
+        return Response(data)
+
+
 class DepartementsListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
