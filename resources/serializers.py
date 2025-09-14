@@ -7,8 +7,10 @@ class PaysSerializer(serializers.ModelSerializer):
         fields = ['id', 'nom', 'code', 'indicatif']
 
 class SousSystemeSerializer(serializers.ModelSerializer):
-    pays = PaysSerializer(read_only=True)
-    pays_id = serializers.PrimaryKeyRelatedField(queryset=Pays.objects.all(), source='pays', write_only=True)
+    pays    = PaysSerializer(read_only=True)
+    pays_id = serializers.PrimaryKeyRelatedField(
+        queryset=Pays.objects.all(), source='pays', write_only=True
+    )
     class Meta:
         model = SousSysteme
         fields = ['id', 'nom', 'pays', 'pays_id']
