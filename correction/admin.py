@@ -46,8 +46,8 @@ class CustomUserAdmin(UserAdmin):
         )
     add_fieldsets = UserAdmin.add_fieldsets + (
             ('Rôle et personnalisation', {'fields': ('role',)}),
-        )
-    list_display = ('username', 'role', 'is_staff', 'is_superuser')
+         )
+    # list_display = ('username', 'role', 'is_staff', 'is_superuser')
         # On NE met pas "role" dans le formulaire d'inscription user COTE PUBLIC, seulement côté admin.
 
 @admin.register(FeedbackCorrection)
