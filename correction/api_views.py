@@ -1,6 +1,6 @@
 
 # 1) VUE PAYS et SOUS SYSTEME DEPUIS RESOURCES/VIEWQ.PY
-from resources.api_views import PaysListAPIView, SousSystemeListAPIView
+#from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 #LA SUITE DES IMPORTS
 from rest_framework.views import APIView
 from rest_framework.response import Response
