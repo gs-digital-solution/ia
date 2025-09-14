@@ -1,18 +1,29 @@
 from django.contrib import admin
-from .models import AppConfig
-from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import CustomUser
-from .models import FeedbackCorrection
-from .models import DeviceConnectionHistory, DeviceMigrationRequest,SoumissionIA
 
-#pour décider de rendre disponible le bouton télecharger plustard coté mobile
-@admin.register(AppConfig)
-class AppConfigAdmin(admin.ModelAdmin):
-    list_display = ['pdf_enabled','correction_enabled']
+from .models import (
+    CustomUser,
+    AppConfig,
+    FeedbackCorrection,
+    DeviceConnectionHistory,
+    DeviceMigrationRequest,
+    SoumissionIA
+)
+from abonnement.models import PromoCode
+
+
+# Inline pour afficher les codes promo liés à l'utilisateur
+class PromoCodeInline(admin.TabularInline):
+    model = PromoCode
+    fk_name = 'proprietaire'  # champ ForeignKey vers CustomUser
+    extra = 0  # pas de lignes vides à l'ajout
+    readonly_fields = ('code', 'partage_count', 'date_creation')
+    can_delete = False
+
 
 @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
+    # On étend les fieldsets existants pour ajouter nos champs
     fieldsets = UserAdmin.fieldsets + (
         ('Champs personnalisés', {
             'fields': (
@@ -23,9 +34,11 @@ class CustomUserAdmin(UserAdmin):
                 'sous_systeme',
                 'secret_question',
                 'secret_answer',
+                'role',
             )
         }),
     )
+
     add_fieldsets = UserAdmin.add_fieldsets + (
         ('Champs personnalisés', {
             'fields': (
@@ -35,20 +48,41 @@ class CustomUserAdmin(UserAdmin):
                 'sous_systeme',
                 'secret_question',
                 'secret_answer',
+                'role',
             ),
         }),
     )
-    list_display = ('username', 'whatsapp_number', 'gmail', 'code_promo', 'first_name', 'is_staff')
-    readonly_fields = ('code_promo',)  # Empêcher la modif du code promo dans l’admin
 
-    fieldsets = UserAdmin.fieldsets + (
-            ('Rôle et personnalisation', {'fields': ('role',)}),
-        )
-    add_fieldsets = UserAdmin.add_fieldsets + (
-            ('Rôle et personnalisation', {'fields': ('role',)}),
-         )
-    # list_display = ('username', 'role', 'is_staff', 'is_superuser')
-        # On NE met pas "role" dans le formulaire d'inscription user COTE PUBLIC, seulement côté admin.
+    # Affichage en liste : on regroupe tout ici (une seule fois)
+    list_display = (
+        'username',
+        'first_name',
+        'whatsapp_number',
+        'gmail',
+        'code_promo',
+        'role',
+        'is_staff',
+        'is_superuser',
+    )
+
+    readonly_fields = ('code_promo',)
+
+    # L'Inline pour voir les PromoCode de l'utilisateur
+    inlines = [PromoCodeInline]
+
+    # Optionnel : empêcher la modification de certains champs
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(self.readonly_fields)
+        if obj:  # en modification
+            ro.append('username')  # par ex. empêcher de changer le username
+        return ro
+
+
+# Enregistrement des autres modèles
+@admin.register(AppConfig)
+class AppConfigAdmin(admin.ModelAdmin):
+    list_display = ['pdf_enabled', 'correction_enabled']
+
 
 @admin.register(FeedbackCorrection)
 class FeedbackCorrectionAdmin(admin.ModelAdmin):
@@ -57,13 +91,13 @@ class FeedbackCorrectionAdmin(admin.ModelAdmin):
     search_fields = ("comment",)
 
 
-##*3. Admin Django – pour valider/voir/modifier les demandes et historique*
 @admin.register(DeviceConnectionHistory)
 class DeviceConnectionHistoryAdmin(admin.ModelAdmin):
     list_display = ("user", "device_id", "connection_date", "successful")
     list_filter = ("user", "device_id", "successful")
-    search_fields = ("user__username", "device_id")
+    search_fields = ("user_username", "device_id")
     date_hierarchy = "connection_date"
+
 
 @admin.register(DeviceMigrationRequest)
 class DeviceMigrationRequestAdmin(admin.ModelAdmin):
@@ -77,11 +111,13 @@ class DeviceMigrationRequestAdmin(admin.ModelAdmin):
         "user_date_joined",
         "get_migration_count"
     )
+
     list_filter = ("status", "request_date")
-    search_fields = ("user__first_name", "previous_device_id", "new_device_id")
+    search_fields = ("user_first_name", "previous_device_id", "new_device_id")
 
     def get_migration_count(self, obj):
         return obj.user.migration_requests.count()
+
     get_migration_count.short_description = "Nb demandes migration"
 
 
