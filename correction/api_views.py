@@ -9,7 +9,6 @@ from .serializers import UserRegisterSerializer
 from .models import CustomUser, DeviceConnectionHistory
 from .models import DeviceMigrationRequest
 from rest_framework.permissions import IsAuthenticated
-from .models import  Pays, SousSysteme
 
 from rest_framework.views import APIView
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
@@ -34,6 +33,7 @@ from .models import SoumissionIA
 from .pdf_utils import generer_pdf_corrige
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from rest_framework.permissions import AllowAny
+from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 
 
 
