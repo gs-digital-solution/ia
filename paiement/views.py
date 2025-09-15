@@ -14,7 +14,6 @@ from abonnement.models import UserAbonnement
 from django.core.mail import send_mail
 from django.conf import settings
 
-
 def start_payment(request):
     if request.method == "POST":
         abo_id = request.POST.get("abonnement_id")
@@ -47,25 +46,19 @@ def start_payment(request):
         return render(request, "paiement/choix_offre.html", {"offres": offres, "pays": pays, "methods": methods})
 
 
-
-
 @csrf_exempt
 def payment_callback(request):
     """
-    Callback Touchpay : appelée par l'API lors de la finalisation/validation d'un paiement.
+    Callback Touchpay : appelée par l’API lors de la finalisation/validation d’un paiement.
     1. Met à jour la transaction en BDD.
-    2. Si succès, crédite/crée l'abonnement utilisateur.
+    2. Si succès, crédite/crée l’abonnement utilisateur.
     """
-    if request.method in ['POST', 'GET']:  # ACCEPTER GET ET POST
+    if request.method == 'POST':
         import json
         try:
-            # Gérer les données selon la méthode
-            if request.method == 'POST':
-                data = json.loads(request.body.decode())
-            else:  # GET
-                data = request.GET.dict()
+            data = json.loads(request.body.decode())
         except Exception:
-            return JsonResponse({"status": "fail", "error": "invalid data"}, status=400)
+            return JsonResponse({"status": "fail", "error": "invalid json"}, status=400)
 
         transaction_id = data.get('transaction_id') or data.get('idFromClient')
         status = data.get('status') or data.get('transactionStatus') or data.get('state')
@@ -86,9 +79,9 @@ def payment_callback(request):
         tx.raw_response = data  # Trace complète = utile support/remontée
         tx.save()
 
-        # 3. Si paiement validé -> crédit de l'abonnement/crédit
+        # 3. Si paiement validé -> crédit de l’abonnement/crédit
         if tx.status in ("SUCCESS", "PAID", "VALIDATED"):
-            # Vérifie s'il a déjà un abonnement actif équivalent (par sécurité)
+            # Vérifie s’il a déjà un abonnement actif équivalent (par sécurité)
             exists = UserAbonnement.objects.filter(
                 utilisateur=tx.user,
                 abonnement=tx.abonnement,
@@ -96,7 +89,7 @@ def payment_callback(request):
                 date_fin__gt=timezone.now()
             ).exists()
             if not exists:
-                # Crée/crédite un abonnement utilisateur, pile up si besoin !
+                # Crée/crédite un abonnement utilisateur, pile up si besoin !
                 UserAbonnement.objects.create(
                     utilisateur=tx.user,
                     abonnement=tx.abonnement,
@@ -109,7 +102,7 @@ def payment_callback(request):
                 # Email d'alerte ADMIN
                 subject = f"💰 Paiement CIS validé [{tx.user}]"
                 message = (
-                    f"Un paiement CIS vient d'être validé.\n\n"
+                    f"Un paiement CIS vient d’être validé.\n\n"
                     f"Utilisateur : {tx.user} (id {tx.user.id})\n"
                     f"Abonnement : {tx.abonnement.nom}\n"
                     f"Montant : {tx.amount} FCFA\n"
