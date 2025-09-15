@@ -9,6 +9,7 @@ from .serializers import (
 from .models import PaymentMethod, PaymentTransaction
 from .services import process_payment
 from abonnement.models import SubscriptionType
+from django.urls import reverse
 
 class PaymentMethodListAPI(generics.ListAPIView):
     serializer_class = PaymentMethodSerializer
@@ -31,7 +32,8 @@ class StartPaymentAPI(generics.GenericAPIView):
             pm  = PaymentMethod.objects.get(code=ser.validated_data['method_code'], actif=True)
         except:
             return Response({"detail":"Offre ou méthode invalide"}, status=400)
-        callback_url = request.build_absolute_uri('/api/paiement/callback/')
+        #callback_url = request.build_absolute_uri('/api/paiement/callback/')
+        callback_url = request.build_absolute_uri(reverse('paiement_api:callback'))
         tx = process_payment(request.user, abo, ser.validated_data['phone'], pm, callback_url)
         data = PaymentTransactionSerializer(tx).data
         return Response(data, status=201 if tx.status=="PROCESSING" else 400)
