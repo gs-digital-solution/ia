@@ -32,6 +32,7 @@ class StartPaymentAPI(generics.GenericAPIView):
         except:
             return Response({"detail":"Offre ou méthode invalide"}, status=400)
         callback_url = request.build_absolute_uri('/api/paiement/callback/')
+        print(f"📞 CALLBACK URL: {callback_url}")
         tx = process_payment(request.user, abo, ser.validated_data['phone'], pm, callback_url)
         data = PaymentTransactionSerializer(tx).data
         return Response(data, status=201 if tx.status=="PROCESSING" else 400)
