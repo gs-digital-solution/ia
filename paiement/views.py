@@ -5,11 +5,11 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
-
 from abonnement.models import SubscriptionType, UserAbonnement
 from resources.models import Pays
 from .models import PaymentMethod, PaymentTransaction
 from .services import process_payment
+from .models import PaymentTransaction
 
 def start_payment(request):
     if request.method == "POST":
@@ -48,87 +48,70 @@ def start_payment(request):
             {"offres": offres, "pays": pays_list, "methods": methods}
         )
 
+
+
+
 @csrf_exempt
 def payment_callback(request):
     """
-    Callback Touchpay : appelée par l’API lors de la finalisation d’un paiement.
-    Met à jour la transaction puis, en cas de succès, crédite/crée l’abonnement.
+    Callback Touchpay : appelée par l'API lors de la finalisation/validation d'un paiement.
+    Version ORIGINALE qui fonctionnait.
     """
-    if request.method != 'POST':
-        return JsonResponse({"status": "method_not_allowed"}, status=405)
+    if request.method == 'POST':
+        import json
+        try:
+            data = json.loads(request.body.decode())
+        except Exception:
+            return JsonResponse({"status": "fail", "error": "invalid json"}, status=400)
 
-    try:
-        data = json.loads(request.body.decode())
-    except Exception:
-        return JsonResponse({"status": "fail", "error": "invalid json"}, status=400)
+        transaction_id = data.get('transaction_id') or data.get('idFromClient')
+        status = data.get('status') or data.get('transactionStatus') or data.get('state')
 
-    # Plusieurs clés possibles pour l'ID et le statut
-    transaction_id = (
-        data.get('transaction_id')
-        or data.get('idFromClient')
-        or data.get('idClient')
-        or data.get('transactionId')
-    )
-    status_value = (
-        data.get('status')
-        or data.get('transactionStatus')
-        or data.get('transactionState')
-        or data.get('state')
-    )
-    status_value = (status_value or "UNKNOWN").upper()
+        print("Callback reçu :", transaction_id, status, data)
 
-    print("Callback reçu :", transaction_id, status_value, data)
+        if not transaction_id:
+            return JsonResponse({"status": "fail", "error": "no id"}, status=400)
 
-    if not transaction_id:
-        return JsonResponse({"status": "fail", "error": "no id"}, status=400)
+        # 1. On retrouve la transaction concernée
+        try:
+            tx = PaymentTransaction.objects.get(transaction_id=transaction_id)
+        except PaymentTransaction.DoesNotExist:
+            return JsonResponse({"status": "fail", "error": "tx not found"}, status=404)
 
-    try:
-        tx = PaymentTransaction.objects.get(transaction_id=transaction_id)
-    except PaymentTransaction.DoesNotExist:
-        return JsonResponse({"status": "fail", "error": "tx not found"}, status=404)
+        # 2. On met à jour la transaction avec le statut et le payload complet
+        tx.status = (status or "UNKNOWN").upper()
+        tx.raw_response = data
+        tx.save()
 
-    # Mise à jour de la transaction
-    tx.status = status_value
-    tx.raw_response = data
-    tx.save()
-
-    # En cas de succès, on (re)crédite l’abonnement
-    if tx.status in ("SUCCESS", "PAID", "VALIDATED"):
-        exists = UserAbonnement.objects.filter(
-            utilisateur=tx.user,
-            abonnement=tx.abonnement,
-            statut='actif',
-            date_fin__gt=timezone.now()
-        ).exists()
-        if not exists:
-            UserAbonnement.objects.create(
+        # 3. Si paiement validé -> crédit de l'abonnement/crédit
+        if tx.status in ("SUCCESS", "PAID", "VALIDATED"):
+            exists = UserAbonnement.objects.filter(
                 utilisateur=tx.user,
                 abonnement=tx.abonnement,
-                code_promo_utilise=None,
-                exercice_restants=tx.abonnement.nombre_exercices_total,
-                date_debut=timezone.now(),
-                date_fin=timezone.now() + timezone.timedelta(days=tx.abonnement.duree_jours),
-                statut='actif'
-            )
-            # Envoi d’un mail d’alerte admin
-            subject = f"💰 Paiement CIS validé [{tx.user}]"
-            message = (
-                f"Un paiement CIS vient d’être validé.\n\n"
-                f"Utilisateur : {tx.user} (id {tx.user.id})\n"
-                f"Abonnement : {tx.abonnement.nom}\n"
-                f"Montant : {tx.amount} FCFA\n"
-                f"Méthode de paiement : {tx.payment_method.nom_affiche}\n"
-                f"Téléphone : {tx.phone}\n"
-                f"Date : {tx.updated.strftime('%d/%m/%Y %H:%M')}\n"
-                f"Transaction ID : {tx.transaction_id}\n"
-                f"Statut Provider : {tx.status}\n"
-            )
-            send_mail(
-                subject,
-                message,
-                None,  # DEFAULT_FROM_EMAIL
-                [settings.PAYMENT_ADMIN_EMAIL],
-                fail_silently=True
-            )
+                statut='actif',
+                date_fin__gt=timezone.now()
+            ).exists()
+            if not exists:
+                UserAbonnement.objects.create(
+                    utilisateur=tx.user,
+                    abonnement=tx.abonnement,
+                    code_promo_utilise=None,
+                    exercice_restants=tx.abonnement.nombre_exercices_total,
+                    date_debut=timezone.now(),
+                    date_fin=timezone.now() + timezone.timedelta(days=tx.abonnement.duree_jours),
+                    statut='actif'
+                )
+                subject = f"💰 Paiement CIS validé [{tx.user}]"
+                message = f"Un paiement CIS vient d'être validé.\n\nUtilisateur : {tx.user}\nAbonnement : {tx.abonnement.nom}\nMontant : {tx.amount} FCFA"
+                send_mail(
+                    subject,
+                    message,
+                    None,
+                    [settings.PAYMENT_ADMIN_EMAIL],
+                    fail_silently=True
+                )
 
-    return JsonResponse({"status": "ok", "app_status": tx.status})
+        return JsonResponse({"status": "ok", "app_status": tx.status})
+
+    else:
+        return JsonResponse({"status": "method_not_allowed"}, status=405)
