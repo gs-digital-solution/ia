@@ -8,51 +8,36 @@ logger = logging.getLogger('paiement')
 
 def process_payment(user, abonnement, phone, payment_method, callback_url):
     logger.debug("→ process_payment begins")
-    # Création de la transaction initiale
     tx = PaymentTransaction.objects.create(
         user=user,
         abonnement=abonnement,
         payment_method=payment_method,
         amount=abonnement.prix_base,
         phone=phone,
-        transaction_id="init_" + str(uuid.uuid4())[:12],
+        transaction_id="init_"+str(uuid.uuid4())[:12],
         status="INITIATED"
     )
-    logger.debug(f"Tx init: {tx.transaction_id}")
 
-    # Appel au provider Touchpay
     provider = get_provider_for_method(payment_method)
     resp = provider.initiate_payment(
-        amount=tx.amount,
-        phone=phone,
-        abonnement=abonnement,
-        user=user,
+        amount=tx.amount, phone=phone,
+        abonnement=abonnement, user=user,
         callback_url=callback_url
     )
-    logger.debug(f"Provider responded {resp.status_code}")
 
-    # Récupération du payload brut
     try:
         tx.raw_response = resp.json()
-    except Exception:
-        tx.raw_response = {'text': resp.text}
-    logger.debug(f"raw_response: {tx.raw_response}")
+    except:
+        tx.raw_response = {'text': resp.text, 'status_code': resp.status_code}
 
-    # On accepte plusieurs clés possibles pour l'ID renvoyé
+    # ✅ CORRECTION : Logique plus flexible pour Touchpay
     if resp.status_code in (200, 201):
-        new_id = (
-            tx.raw_response.get('idFromClient')
-            or tx.raw_response.get('idClient')
-            or tx.raw_response.get('transactionId')
-        )
-        if new_id:
-            tx.transaction_id = new_id
-            tx.status = "PROCESSING"
-        else:
-            tx.status = "FAIL"
+        if 'idFromClient' in tx.raw_response:
+            tx.transaction_id = tx.raw_response['idFromClient']
+        tx.status = "PROCESSING"
     else:
         tx.status = "FAIL"
+        logger.error(f"Échec initiation paiement: {resp.status_code} - {tx.raw_response}")
 
     tx.save()
-    logger.debug(f"Tx updated: {tx.status}")
     return tx
