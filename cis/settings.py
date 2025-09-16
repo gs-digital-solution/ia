@@ -16,6 +16,7 @@ load_dotenv()
 from django.urls import reverse_lazy
 #print("DB_USER:", os.getenv('DB_USER'))
 #print("DB_PASSWORD:", os.getenv('DB_PASSWORD'))
+from datetime import timedelta
 
 
 
@@ -261,3 +262,24 @@ LOGGING = {
 #pour forcer Django à générer correctement les URLs HTTPS derrière un proxy
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST      = True
+
+#gestion durée des tokens
+# ——————————————————————————————————————————————————————
+# Configuration Simple JWT pour allonger la durée des tokens
+SIMPLE_JWT = {
+    # Durée de vie de l’access token (par ex. 365 jours ici)
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=365),
+
+    # Durée de vie du refresh token (par ex. 365 jours ici)
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=365),
+
+    # Si True, génère un nouveau refresh à chaque utilisation de /token/refresh/
+    'ROTATE_REFRESH_TOKENS': False,
+
+    # Désactive le listing des refresh dans la blacklist
+    'BLACKLIST_AFTER_ROTATION': False,
+
+    # Type d’en-tête attendu
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+# ——————————————————————————————————————————————————————
