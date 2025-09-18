@@ -3,10 +3,10 @@ import os
 
 def get_touchpay_config_for_method(payment_method):
     """
-    Récupère la config sensitive (dans .env) selon le payment_method.
-    Version ORIGINALE qui fonctionnait.
+    Récupère la config sensitive (dans .env) selon le payment_method (objet PaymentMethod).
     """
-    country_code = payment_method.pays.code.upper() if payment_method.pays else "CMR"
+    # Utiliser le code du pays depuis l'objet payment_method
+    country_code = payment_method.pays.code.upper() if payment_method.pays else "CMR"  # Fallback
 
     prefix = f"TOUCHPAY_{country_code}_"
 

@@ -1,6 +1,4 @@
-import uuid
-import logging
-
+import uuid, logging
 from .models import PaymentTransaction
 from .providers.factory import get_provider_for_method
 
@@ -17,6 +15,7 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
         transaction_id="init_"+str(uuid.uuid4())[:12],
         status="INITIATED"
     )
+    logger.debug(f"Tx init: {tx.transaction_id}")
 
     provider = get_provider_for_method(payment_method)
     resp = provider.initiate_payment(
@@ -24,20 +23,19 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
         abonnement=abonnement, user=user,
         callback_url=callback_url
     )
+    logger.debug(f"Provider responded {resp.status_code}")
 
     try:
         tx.raw_response = resp.json()
     except:
-        tx.raw_response = {'text': resp.text, 'status_code': resp.status_code}
+        tx.raw_response = {'text': resp.text}
+    logger.debug(f"raw_response: {tx.raw_response}")
 
-    # ✅ CORRECTION : Logique plus flexible pour Touchpay
-    if resp.status_code in (200, 201):
-        if 'idFromClient' in tx.raw_response:
-            tx.transaction_id = tx.raw_response['idFromClient']
+    if resp.status_code in (200,201) and 'idFromClient' in tx.raw_response:
+        tx.transaction_id = tx.raw_response['idFromClient']
         tx.status = "PROCESSING"
     else:
         tx.status = "FAIL"
-        logger.error(f"Échec initiation paiement: {resp.status_code} - {tx.raw_response}")
-
     tx.save()
+    logger.debug(f"Tx updated: {tx.status}")
     return tx

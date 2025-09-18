@@ -1,4 +1,3 @@
-
 from django.utils import timezone
 from .models import PromoCode, SubscriptionType, UserAbonnement, GlobalSubscriptionConfig
 

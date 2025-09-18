@@ -9,7 +9,6 @@ from .serializers import (
 from .models import PaymentMethod, PaymentTransaction
 from .services import process_payment
 from abonnement.models import SubscriptionType
-from django.urls import reverse
 
 class PaymentMethodListAPI(generics.ListAPIView):
     serializer_class = PaymentMethodSerializer
@@ -21,42 +20,21 @@ class PaymentMethodListAPI(generics.ListAPIView):
             qs = qs.filter(pays_id=pid)
         return qs
 
-
 class StartPaymentAPI(generics.GenericAPIView):
     serializer_class = PaymentStartSerializer
     permission_classes = [IsAuthenticated]
-
     def post(self, request):
-        # AJOUTEZ CES 2 LIGNES POUR DEBUG
-        print(f"🎯 DONNÉES REÇUES: {request.data}")
-
         ser = self.get_serializer(data=request.data)
-        if not ser.is_valid():
-            print(f"❌ ERREURS VALIDATION: {ser.errors}")  # AJOUTEZ CETTE LIGNE
-            return Response({"detail": "Données invalides", "errors": ser.errors}, status=400)
-
+        ser.is_valid(raise_exception=True)
         try:
             abo = SubscriptionType.objects.get(pk=ser.validated_data['abonnement_id'], actif=True)
-            pm = PaymentMethod.objects.get(code=ser.validated_data['method_code'], actif=True)
-            print(f"✅ ABONNEMENT TROUVÉ: {abo}")
-            print(f"✅ MÉTHODE TROUVÉE: {pm}")
-        except SubscriptionType.DoesNotExist:
-            print(f"❌ ABONNEMENT INTROUVABLE: ID {ser.validated_data['abonnement_id']}")
-            return Response({"detail": "Offre invalide"}, status=400)
-        except PaymentMethod.DoesNotExist:
-            print(f"❌ MÉTHODE INTROUVABLE: CODE {ser.validated_data['method_code']}")
-            return Response({"detail": "Méthode de paiement invalide"}, status=400)
-        except Exception as e:
-            print(f"❌ ERREUR INATTENDUE: {e}")
-            return Response({"detail": "Offre ou méthode invalide"}, status=400)
-
+            pm  = PaymentMethod.objects.get(code=ser.validated_data['method_code'], actif=True)
+        except:
+            return Response({"detail":"Offre ou méthode invalide"}, status=400)
         callback_url = request.build_absolute_uri('/api/paiement/callback/')
-        print(f"📞 CALLBACK URL: {callback_url}")
-
         tx = process_payment(request.user, abo, ser.validated_data['phone'], pm, callback_url)
         data = PaymentTransactionSerializer(tx).data
-
-        return Response(data, status=201 if tx.status == "PROCESSING" else 400)
+        return Response(data, status=201 if tx.status=="PROCESSING" else 400)
 
 class PaymentStatusAPI(generics.RetrieveAPIView):
     queryset = PaymentTransaction.objects.all()

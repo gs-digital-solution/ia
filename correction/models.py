@@ -2,9 +2,9 @@ from django.db import models
 
 # Create your models here.
 from django.db import models
-from django.conf import settings
+from resources.models import (Pays, SousSysteme, Classe, Matiere, Lecon,Departement,TypeExercice)
 from django.contrib.auth.models import AbstractUser
-from resources.models import Pays, SousSysteme, Classe, Matiere, Lecon, Departement, TypeExercice
+from django.conf import settings
 
 class DemandeCorrection(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -143,4 +143,3 @@ class SoumissionIA(models.Model):
 
         def __str__(self):
             return f"{self.user.username} - {self.statut} ({self.progression}%)"
-

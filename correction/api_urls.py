@@ -19,46 +19,44 @@ from .api_views import (
     FeedbackAPIView,
     PartagerCorrigeAPIView,
     DebugExtractionAPIView,
-    PaysListAPIView,            # import direct depuis resources/api_views
-    SousSystemeListAPIView      # idem
 )
 
-app_name = 'correction_api'
+# On importe les routes d’abonnement/paiement/ressources ici
 urlpatterns = [
-    # Auth & JWT
-    path('register/',      UserRegisterAPIView.as_view(),          name='api_register'),
-    path('login/',         UserLoginAPIView.as_view(),             name='api_login'),
+    # Authentification & profil
+    path('register/',    UserRegisterAPIView.as_view(),      name='api_register'),
+    path('login/',       UserLoginAPIView.as_view(),         name='api_login'),
     path('device-migration/', CreateDeviceMigrationRequestAPIView.as_view(), name='api_device_migration'),
-    path('password-reset/', PasswordResetAPI.as_view(),            name='api_password_reset'),
-    path('profile/',        ProfileAPIView.as_view(),              name='api_profile'),
-    path('token/',          TokenObtainPairView.as_view(),         name='token_obtain_pair'),
-    path('token/refresh/',  TokenRefreshView.as_view(),            name='token_refresh'),
+    path('password-reset/', PasswordResetAPI.as_view(),      name='api_password_reset'),
+    path('profile/',      ProfileAPIView.as_view(),          name='api_profile'),
+    path('token/',        TokenObtainPairView.as_view(),     name='token_obtain_pair'),
+    path('token/refresh/',TokenRefreshView.as_view(),        name='token_refresh'),
 
-    # Pays & Sous-systèmes (public, no auth)
-    path('pays/',           PaysListAPIView.as_view(),             name='api_pays_list'),
-    path('sous-systeme/',   SousSystemeListAPIView.as_view(),      name='api_soussysteme_list'),
+    # Abonnement
+    path('abonnement/', include(('abonnement.api_urls', 'abonnement_api')), name='abonnement_api'),
 
-    # Abonnement (inclut ses propres endpoints sous /api/abonnement/)
-    path('abonnement/',     include(('abonnement.api_urls', 'abonnement_api'))),
+    # Paiement
+    path('paiement/', include(('paiement.api_urls', 'paiement_api')), name='paiement_api'),
 
-    # Paiement (inclut ses propres endpoints sous /api/paiement/)
-    path('paiement/',       include(('paiement.api_urls', 'paiement_api'))),
+    # Ressources : pays et sous-systèmes
+    path('pays/',         include(('resources.api_urls', 'resources_api')), name='resources_api'),
+    # (resources.api_urls contient les routes 'pays/' et 'sous-systeme/')
 
-    # Soumission d’exercices & statut
-    path('soumission/',                     SoumissionExerciceAPIView.as_view(),      name='api_soumission'),
+    # Soumission d’exercice & statut
+    path('soumission/',                    SoumissionExerciceAPIView.as_view(),      name='api_soumission'),
     path('soumission/<int:soumission_id>/status/', StatutSoumissionAPIView.as_view(), name='api_soumission_status'),
 
-    # Listes protégées par JWT
-    path('departements/',  DepartementsListAPIView.as_view(),     name='api_departements'),
-    path('classes/',       ClassesListAPIView.as_view(),          name='api_classes'),
-    path('matieres/',      MatieresListAPIView.as_view(),         name='api_matieres'),
-    path('types-exercice/',TypesExerciceListAPIView.as_view(),    name='api_types_exercice'),
-    path('lecons/',        LeconsListAPIView.as_view(),           name='api_lecons'),
+    # Listes protégées
+    path('departements/',  DepartementsListAPIView.as_view(),   name='api_departements'),
+    path('classes/',       ClassesListAPIView.as_view(),       name='api_classes'),
+    path('matieres/',      MatieresListAPIView.as_view(),      name='api_matieres'),
+    path('types-exercice/',TypesExerciceListAPIView.as_view(), name='api_types_exercice'),
+    path('lecons/',        LeconsListAPIView.as_view(),        name='api_lecons'),
 
     # Corrigé / historique / feedback / partage / debug
     path('soumission/<int:soumission_id>/download/', DownloadCorrigeAPIView.as_view(), name='api_download_corrige'),
     path('historique/',    HistoriqueCorrectionsAPIView.as_view(), name='api_historique'),
     path('feedback/<int:correction_id>/', FeedbackAPIView.as_view(), name='api_feedback'),
     path('partager/<int:soumission_id>/', PartagerCorrigeAPIView.as_view(), name='api_partager'),
-    path('debug-extraction/', DebugExtractionAPIView.as_view(),   name='api_debug_extraction'),
+    path('debug-extraction/', DebugExtractionAPIView.as_view(), name='api_debug_extraction'),
 ]

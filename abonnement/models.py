@@ -99,7 +99,7 @@ class GlobalSubscriptionConfig(models.Model):
     options_gratuit_promo = models.BooleanField(default=True)     # Affichage de l'option
     options_reduction_promo = models.BooleanField(default=True)
     options_normal = models.BooleanField(default=True)
-    # Option : quota exceptionnel tous utilisateurs (événement, bonus, ...)
+    # Option : quota exceptionnel tous utilisateurs (événement, bonus, ...)
 
     def save(self, *args, **kwargs):
         # Forcer singleton

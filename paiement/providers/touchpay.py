@@ -6,7 +6,9 @@ from utils.payments import get_touchpay_config_for_method
 
 class TouchpayProvider(BasePaymentProvider):
     """
-    Provider pour Touchpay - Version ORIGINALE qui fonctionnait.
+    Provider pour l'agrégateur Touchpay (MTN, Orange, Wave…).
+    Récupère la config sensible via utils.get_touchpay_config_for_method
+    et utilise le champ 'service_code' de PaymentMethod si défini.
     """
 
     def __init__(self, payment_method):
@@ -14,8 +16,19 @@ class TouchpayProvider(BasePaymentProvider):
         self.config = get_touchpay_config_for_method(payment_method)
 
     def initiate_payment(self, amount, phone, abonnement, user, callback_url):
+        """
+        Lance la requête PUT /transaction vers Touchpay.
+        :param amount: montant (int ou Decimal)
+        :param phone: numéro du destinataire
+        :param abonnement: instance SubscriptionType
+        :param user: instance CustomUser
+        :param callback_url: URL de callback complet
+        :return: requests.Response
+        """
+        # 1) Identifiant client unique
         client_id = str(uuid.uuid4()).replace('-', '')[:16]
 
+        # 2) Construction URL
         url = (
             f"https://api.gutouch.net/sec/touchpayapi/"
             f"{self.config['agence']}/transaction"
@@ -23,11 +36,13 @@ class TouchpayProvider(BasePaymentProvider):
             f"&passwordAgent={self.config['password_agent']}"
         )
 
+        # 3) ServiceCode : d’abord depuis le modèle, sinon fallback .env
         service_code = (
             getattr(self.payment_method, 'service_code', None)
             or self.config.get('service_code')
         )
 
+        # 4) Payload JSON
         payload = {
             "idFromClient": client_id,
             "additionnalInfos": {
@@ -43,8 +58,12 @@ class TouchpayProvider(BasePaymentProvider):
         }
 
         headers = {"Content-Type": "application/json"}
-        auth = HTTPDigestAuth(self.config['username'], self.config['password'])
+        auth = HTTPDigestAuth(
+            self.config['username'],
+            self.config['password']
+        )
 
+        # 5) Exécution de la requête
         try:
             response = requests.put(
                 url,
@@ -54,6 +73,7 @@ class TouchpayProvider(BasePaymentProvider):
                 timeout=30
             )
         except Exception as e:
+            # En cas d’erreur réseau / auth
             print("Erreur TouchpayProvider:", e)
             raise
 

@@ -38,9 +38,6 @@ from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 
 
 
-# 1) VUE PAYS
-
-
 class UserRegisterAPIView(APIView):
     # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
 
@@ -402,6 +399,7 @@ class FeedbackAPIView(APIView):
             feedback.save()
 
         return Response({"success": True, "message": "Feedback enregistré"})
+
 
 
 class PartagerCorrigeAPIView(APIView):
