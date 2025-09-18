@@ -45,7 +45,7 @@ class TouchpayProvider(BasePaymentProvider):
         # 4) Payload JSON
         payload = {
             "idFromClient": client_id,
-            "additionnalInfos": {
+            "additionalInfos": {
                 "recipientEmail": user.gmail or "",
                 "recipientFirstName": user.first_name or "",
                 "recipientLastName": user.last_name or "",
