@@ -1,6 +1,6 @@
 _PROVIDERS = {
     'TOUCHPAY': 'paiement.providers.touchpay.TouchpayProvider',
-    # plus tard : 'CAMPAY': 'paiement.providers.campay.CampayProvider', ...
+     'CAMPAY': 'paiement.providers.campay.CampayProvider', 
 }
 
 def get_provider_for_method(payment_method):
