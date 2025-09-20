@@ -17,9 +17,6 @@ from jwt import InvalidTokenError
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django.utils import timezone
-from django.core.mail import send_mail
-
-
 # facultatif : pour envoyer un mail à chaque réussite
 from django.core.mail import send_mail
 
@@ -63,17 +60,18 @@ def start_payment(request):
 
 
 
+
+
 @csrf_exempt
 def payment_callback(request):
     """
-    Callback de Touchpay (POST JSON) et de Campay (GET ou POST JSON).
-    Étapes :
-      1) On récupère data en GET ou en POST JSON
-      2) Si Campay, on valide la signature JWT avec WEBHOOK_SECRET
-      3) On extrait transaction_id (reference/idFromClient) et le statut
-      4) Mise à jour du PaymentTransaction en base
-      5) Si SUCCESSFUL, création idempotente d’un UserAbonnement
-      6) On renvoie toujours du JSON
+    Callback unifié pour Touchpay (POST JSON) et Campay (GET/POST JSON).
+    1) Récupère data
+    2) Vérifie la signature JWT de Campay si présente
+    3) Extrait la transaction et le statut
+    4) Met à jour la transaction
+    5) Crée un abonnement si paiement validé (idempotent)
+    6) Retourne un JSON minimal
     """
     # 1) Récupération des données
     if request.method == 'GET':
@@ -82,40 +80,31 @@ def payment_callback(request):
         try:
             data = json.loads(request.body.decode())
         except Exception:
-            return JsonResponse({'status':'fail','error':'invalid json'}, status=400)
+            return JsonResponse({'status': 'fail', 'error': 'invalid json'}, status=400)
 
-    # 2) Validation de la signature JWT Campay (facultatif)
+    # 2) Validation de la signature JWT (Campay)
     sig = data.get('signature')
     if sig:
         secret = os.getenv('CAMPAY_CMR_WEBHOOK_SECRET')
         if not secret:
-            return JsonResponse({'status':'fail','error':'no webhook secret'}, status=400)
+            return JsonResponse({'status': 'fail', 'error': 'no webhook secret'}, status=400)
         try:
             payload = jwt.decode(sig, secret, algorithms=['HS256'])
-            # On fusionne la payload signée dans data
             data.update(payload)
         except InvalidTokenError:
-            return JsonResponse({'status':'fail','error':'invalid signature'}, status=400)
+            return JsonResponse({'status': 'fail', 'error': 'invalid signature'}, status=400)
 
-    # 3) Extraction de l'ID et du statut
-    tx_id = (
-        data.get('transaction_id')
-        or data.get('idFromClient')
-        or data.get('reference')
-    )
-    stat = (
-        data.get('status')
-        or data.get('transactionStatus')
-        or data.get('state')
-    )
+    # 3) Extraction de l’ID et du statut
+    tx_id = data.get('transaction_id') or data.get('idFromClient') or data.get('reference')
+    stat  = data.get('status') or data.get('transactionStatus') or data.get('state')
     if not tx_id or not stat:
-        return JsonResponse({'status':'fail','error':'missing fields'}, status=400)
+        return JsonResponse({'status': 'fail', 'error': 'missing fields'}, status=400)
 
     # 4) Mise à jour de la transaction
     try:
         tx = PaymentTransaction.objects.get(transaction_id=tx_id)
     except PaymentTransaction.DoesNotExist:
-        return JsonResponse({'status':'fail','error':'tx not found'}, status=404)
+        return JsonResponse({'status': 'fail', 'error': 'tx not found'}, status=404)
 
     tx.status = stat.upper()
     tx.raw_response = data
@@ -138,7 +127,7 @@ def payment_callback(request):
                 date_fin=timezone.now() + timezone.timedelta(days=tx.abonnement.duree_jours),
                 statut='actif'
             )
-            # Envoi mail à l’admin si souhaité
+            # Envoi d'un mail d'alerte si nécessaire
             try:
                 subject = f"Paiement validé – {tx.user}"
                 message = (
@@ -151,5 +140,5 @@ def payment_callback(request):
             except Exception:
                 pass
 
-    # 6) Réponse JSON
-    return JsonResponse({'status':'ok','app_status': tx.status})
+    # 6) Réponse JSON minimale
+    return JsonResponse({'status': 'ok', 'app_status': tx.status})

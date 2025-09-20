@@ -87,9 +87,10 @@ class StartPaymentAPI(APIView):
 
             # Renvoyer l'erreur en JSON pour debug
             return Response(
-                {"error": str(e), "trace": tb},
+                {"detail": "Erreur interne du serveur. Veuillez réessayer plus tard."},
                 status=500
             )
+
 class PaymentStatusAPI(generics.RetrieveAPIView):
     queryset = PaymentTransaction.objects.all()
     serializer_class = PaymentTransactionSerializer
