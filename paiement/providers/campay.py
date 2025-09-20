@@ -22,7 +22,7 @@ class CampayProvider(BasePaymentProvider):
         url = f"{self.config['base_url']}/api/collect/"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Token {self.config['token']}"
+            "Authorization": f"Token {self.config['perm_token']}"
         }
 
         # 3) Préparer le payload
