@@ -24,7 +24,7 @@ class TouchpayProvider(BasePaymentProvider):
 
         # 2) Construction de l'URL (hard-codée pour l'hôte, dynamic pour l'agence & agents)
         url = (
-            "https://api.gutouch.net/sec/touchpayapi/"
+            "https://apidist.gutouch.net/apidist/sec/touchpayapi/"
             f"{self.config['agence']}/transaction"
             f"?loginAgent={self.config['login_agent']}"
             f"&passwordAgent={self.config['password_agent']}"
