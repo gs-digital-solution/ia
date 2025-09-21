@@ -234,7 +234,7 @@ class SoumissionExerciceAPIView(APIView):
             generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
 
             # Débiter le crédit (commenté temporairement)
-            # debiter_credit_abonnement(request.user)
+            debiter_credit_abonnement(request.user)
 
             return Response({
                 "success": True,
