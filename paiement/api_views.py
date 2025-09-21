@@ -63,7 +63,7 @@ class StartPaymentAPI(APIView):
             )
 
         callback_url = request.build_absolute_uri('/api/paiement/callback/')
-
+        print(">>> Touchpay callback_url:", callback_url)
         try:
             tx = process_payment(
                 user=request.user,
