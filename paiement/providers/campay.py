@@ -3,11 +3,9 @@ import requests
 from .base import BasePaymentProvider
 from utils.payments import get_provider_config_for_method
 
-
 class CampayProvider(BasePaymentProvider):
     """
     Provider pour CamPay (Collect/Withdraw).
-    Méthode d’initiation : POST /api/collect/
     """
 
     def __init__(self, payment_method):
@@ -15,36 +13,38 @@ class CampayProvider(BasePaymentProvider):
         self.config = get_provider_config_for_method(payment_method)
 
     def initiate_payment(self, amount, phone, abonnement, user, callback_url):
-        # 1) Générer une référence unique pour l’idempotence
-        ext_ref = str(uuid.uuid4())
+        # 0) Normalisation spécifique Campay (forçage de '237')
+        num = ''.join(c for c in phone if c.isdigit())
+        if num.startswith('0'):
+            num = '237' + num[1:]
+        elif not num.startswith('237'):
+            num = '237' + num
+        phone = num
+        print(">>> CampayProvider phone used:", phone)
 
-        # 2) Construire l’URL & en-têtes
-        url = f"{self.config['base_url']}/api/collect/"
+        ext_ref = str(uuid.uuid4())
+        base    = self.config['base_url'].rstrip('/')
+        url     = f"{base}/api/collect/"
         headers = {
-            "Content-Type": "application/json",
+            "Content-Type":  "application/json",
             "Authorization": f"Token {self.config['perm_token']}"
         }
-
-        # 3) Préparer le payload
         payload = {
-            "amount": str(int(amount)),  # entier ou chaîne
-            "currency": "XAF",
-            "from": phone,  # ex: 2376xxxxxxxx
-            "description": "Abonnement CIS",
+            "amount":             str(int(amount)),
+            "currency":           "XAF",
+            "from":               phone,
+            "description":        "Abonnement CIS",
             "external_reference": ext_ref,
-            "external_user": str(user.id)
+            "external_user":      str(user.id),
+            "callback":           callback_url,
         }
+        print(">>> CampayProvider collect URL   :", url)
+        print(">>> CampayProvider collect PAYLOD:", payload)
 
-        # 4) Appel HTTP
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
-        return resp
+        return requests.post(url, json=payload, headers=headers, timeout=30)
 
     def parse_callback(self, data):
-        """
-        Si vous gérez un callback POST de Campay, vous pouvez extraire ici :
-        statut, reference, amount…
-        """
         return {
             "transaction_id": data.get("reference"),
-            "status": data.get("status").upper()
+            "status":         data.get("status").upper()
         }

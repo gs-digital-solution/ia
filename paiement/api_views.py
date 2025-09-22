@@ -1,11 +1,11 @@
-import json, os
+import json
 import traceback
+import logging
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from tqdm.contrib import logging
 
 from .serializers import (
     PaymentMethodSerializer,
@@ -15,24 +15,6 @@ from .serializers import (
 from .models import PaymentMethod, PaymentTransaction
 from .services import process_payment
 from abonnement.models import SubscriptionType
-
-
-def normalize_phone(phone: str) -> str:
-    """
-    Nettoie et formate le numéro en MSISDN commençant par 237.
-    Exemples :
-      "691234567"    → "237691234567"
-      "0691234567"   → "237691234567"
-      "+237691234567"→ "237691234567"
-      "1234567"      → "2371234567"
-    """
-    # Garde que les chiffres
-    num = ''.join(c for c in phone if c.isdigit())
-    if num.startswith('0'):
-        num = '237' + num[1:]
-    elif not num.startswith('237'):
-        num = '237' + num
-    return num
 
 
 class PaymentMethodListAPI(generics.ListAPIView):
@@ -59,7 +41,6 @@ class StartPaymentAPI(APIView):
         if not ser.is_valid():
             return Response(ser.errors, status=400)
 
-        # Vérifier l'offre et la méthode
         try:
             abo = SubscriptionType.objects.get(
                 pk=ser.validated_data['abonnement_id'], actif=True
@@ -73,21 +54,18 @@ class StartPaymentAPI(APIView):
                 status=400
             )
 
-        # Construire l'URL de callback (publique)
         callback_url = request.build_absolute_uri('/api/paiement/callback/')
         print(">>> StartPaymentAPI callback_url:", callback_url)
 
-        # 1) Normaliser le numéro avant l'appel provider
-        phone_raw   = ser.validated_data['phone']
-        phone_clean = normalize_phone(phone_raw)
-        print(">>> StartPaymentAPI phone_raw:", phone_raw, "→ phone_clean:", phone_clean)
+        # On passe le numéro tel quel ; chaque provider le normalisera à sa façon
+        phone_input = ser.validated_data['phone']
+        print(">>> StartPaymentAPI raw phone:", phone_input)
 
-        # 2) Lancer le paiement
         try:
             tx = process_payment(
                 user=request.user,
                 abonnement=abo,
-                phone=phone_clean,
+                phone=phone_input,
                 payment_method=pm,
                 callback_url=callback_url
             )
