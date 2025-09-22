@@ -15,6 +15,11 @@ urlpatterns = [
 
     # Routes des ressources (pays, sous-systèmes)
     path('api/', include('resources.api_urls')),
+
+# Routes pour afficher le corrige web et envoyer le PDF de ce corrigé coté flutter
+    path(
+        'correction/',
+        include(('correction.urls', 'correction'), namespace='correction')),
 ]
 
 if settings.DEBUG:
