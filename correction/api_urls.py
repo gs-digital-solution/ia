@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-
+from .api_views import AppConfigAPIView
 from .api_views import (
     UserRegisterAPIView,
     UserLoginAPIView,
@@ -59,4 +59,7 @@ urlpatterns = [
     path('feedback/<int:correction_id>/', FeedbackAPIView.as_view(), name='api_feedback'),
     path('partager/<int:soumission_id>/', PartagerCorrigeAPIView.as_view(), name='api_partager'),
     path('debug-extraction/', DebugExtractionAPIView.as_view(), name='api_debug_extraction'),
+
+    # route de BLOCAGE PDF ou SOUMISSION coté backend
+    path('app-config/', AppConfigAPIView.as_view(), name='api_app_config'),
 ]

@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .serializers import UserRegisterSerializer
-from .models import CustomUser, DeviceConnectionHistory
+from .models import CustomUser, DeviceConnectionHistory, FeedbackCorrection
 from .models import DeviceMigrationRequest
 from rest_framework.permissions import IsAuthenticated
 
@@ -34,6 +34,8 @@ from .pdf_utils import generer_pdf_corrige
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from rest_framework.permissions import AllowAny
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
+from correction.models import AppConfig
+from rest_framework.response import Response
 
 
 
@@ -473,3 +475,19 @@ class CorrigePDFView(APIView):
 
         # Renvoie l'URL du PDF (texte brut)
         return HttpResponse(pdf_url, content_type="text/plain")
+
+
+ # vue de BLOCAGE PDF ou SOUMISSION coté backend
+
+class AppConfigAPIView(APIView):
+    permission_classes = [AllowAny]
+    def get(self, request):
+        # Un seul objet AppConfig, donc pk=1
+        app_config = AppConfig.objects.first()
+        if not app_config:
+            return Response({"pdf_enabled": True, "correction_enabled": True, "message_bloquant": ""})
+        return Response({
+            "pdf_enabled": app_config.pdf_enabled,
+            "correction_enabled": app_config.correction_enabled,
+            "message_bloquant": app_config.message_bloquant,
+        })
