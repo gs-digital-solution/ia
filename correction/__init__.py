@@ -1,1 +1,1 @@
-default_auto_field = 'correction.apps.Correction'
+default_app_config = 'correction.apps.CorrectionConfig'

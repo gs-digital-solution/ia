@@ -1,8 +1,8 @@
 from django.apps import AppConfig
 
-
 class CorrectionConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'correction'
-def ready(self):
- import correction.signals
+
+    def ready(self):
+        import correction.signals
