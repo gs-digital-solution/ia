@@ -48,7 +48,10 @@ def activer_abonnement_via_promo(user, code_promo_saisi):
 
     # 5. (option) Incrémente le nombre d'utilisations sur le PromoCode
     promo.partage_count += 1
-    promo.save()
+
+    if promo.partage_count >= 1:  # <--- usage unique pour tous
+        promo.actif = False
+        promo.save()
 
     return abo, "Abonnement gratuit activé avec succès !"
 
