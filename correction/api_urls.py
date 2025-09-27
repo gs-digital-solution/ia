@@ -53,7 +53,7 @@ urlpatterns = [
     path('types-exercice/',TypesExerciceListAPIView.as_view(), name='api_types_exercice'),
     path('lecons/',        LeconsListAPIView.as_view(),        name='api_lecons'),
 
-    # Corrigé / historique / feedback / partage / debug
+    # Corrigé / historique / feedback / partage PDF / debug
     path('soumission/<int:soumission_id>/download/', DownloadCorrigeAPIView.as_view(), name='api_download_corrige'),
     path('historique/',    HistoriqueCorrectionsAPIView.as_view(), name='api_historique'),
     path('feedback/<int:correction_id>/', FeedbackAPIView.as_view(), name='api_feedback'),
@@ -62,4 +62,5 @@ urlpatterns = [
 
     # route de BLOCAGE PDF ou SOUMISSION coté backend
     path('app-config/', AppConfigAPIView.as_view(), name='api_app_config'),
+
 ]

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.generics import ListAPIView
 
 from .serializers import (
     PaymentMethodSerializer,
@@ -87,3 +88,14 @@ class PaymentStatusAPI(generics.RetrieveAPIView):
     serializer_class = PaymentTransactionSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'transaction_id'
+
+
+
+
+class PaymentTransactionListAPI(ListAPIView):
+    """Liste des paiements de l’utilisateur connecté"""
+    serializer_class = PaymentTransactionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PaymentTransaction.objects.filter(user=self.request.user).order_by('-created')
