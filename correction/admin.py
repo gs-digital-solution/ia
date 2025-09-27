@@ -60,6 +60,7 @@ class CustomUserAdmin(UserAdmin):
         'whatsapp_number',
         'gmail',
         'code_promo',
+        'pays',
         'role',
         'is_staff',
         'is_superuser',

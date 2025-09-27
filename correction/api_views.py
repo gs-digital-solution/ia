@@ -143,6 +143,7 @@ class ProfileAPIView(APIView):
             "sous_systeme": user.sous_systeme.id if user.sous_systeme else None,
             "gmail": user.gmail,
             "whatsapp_number": user.whatsapp_number,
+            "code_promo": user.code_promo or ""
         }
         return Response(data)
 
