@@ -10,7 +10,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         model = CustomUser
         fields = [
             'first_name',         # Prénom
-            'gmail',              # Email utilisateur
+            #'gmail',               Email utilisateur
             'whatsapp_number',    # Numéro WhatsApp
             'pays',               # FK objet (id)
             'sous_systeme',       # FK objet (id)
