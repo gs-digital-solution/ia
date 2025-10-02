@@ -71,9 +71,6 @@ class ExerciceCorrigeAdmin(admin.ModelAdmin):
     readonly_fields = ('date_creation',)
     filter_horizontal = ("lecons_associees",)
 
-
-
-
 @admin.register(PromptIA)
 class PromptIAAdmin(admin.ModelAdmin):
     list_display = (
