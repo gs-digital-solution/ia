@@ -76,6 +76,12 @@ class ExerciceCorrigeAdmin(admin.ModelAdmin):
 
 @admin.register(PromptIA)
 class PromptIAAdmin(admin.ModelAdmin):
-    list_display = ("matiere", "classe", "sous_systeme", "pays", "updated_at")
-    search_fields = ("matiere__nom", "classe__nom", "sous_systeme__nom", "pays__nom")
-    list_filter = ("pays", "sous_systeme", "classe")
+    list_display = (
+        "matiere", "classe", "sous_systeme", "departement", "type_exercice", "pays", "updated_at"
+    )
+    search_fields = (
+        "matiere__nom", "classe__nom", "sous_systeme__nom", "departement__nom", "type_exercice__nom", "pays__nom"
+    )
+    list_filter = (
+        "pays", "departement", "type_exercice", "sous_systeme", "classe"
+    )

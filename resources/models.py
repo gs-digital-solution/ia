@@ -281,6 +281,29 @@ class PromptIA(models.Model):
         sort=True,
         null=True, blank=True, on_delete=models.CASCADE
     )
+
+    departement = ChainedForeignKey(
+        'Departement',
+        chained_field="pays",                  # la FK Département référence bien Pays
+        chained_model_field="pays",
+        show_all=False,
+        auto_choose=True,
+        sort=True,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        verbose_name="Département"
+    )
+    type_exercice = ChainedForeignKey(
+        'TypeExercice',
+        chained_field="departement",
+        chained_model_field="departement",
+        show_all=False,
+        auto_choose=True,
+        sort=True,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        verbose_name="Type d'exercice"
+    )
     system_prompt = models.TextField("Consignes système IA", blank=True, default="")
     exemple_prompt = models.TextField("Exemples de corrigés", blank=True, default="")
     consignes_finales = models.TextField("Consignes finales", blank=True, default="")
