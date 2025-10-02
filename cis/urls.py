@@ -20,6 +20,8 @@ urlpatterns = [
     path(
         'correction/',
         include(('correction.urls', 'correction'), namespace='correction')),
+
+    path('chaining/', include('smart_selects.urls')),
 ]
 
 if settings.DEBUG:
