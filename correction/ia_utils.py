@@ -319,6 +319,14 @@ Règles incontournables :
 - Pour les équations block : TOUJOURS une seule ligne \[ ... \]
 - Ne produis jamais de formule math, ni d'expression dans une simple parenthèse ou crochets. Toute équation doit être sous les balises latex décrites ci-dessus, sur une ligne stricte.
 - Utiliser un langage clair et pédagogique
+
+IMPORTANT : 
+- A chaque fois qu'un exercice demande de TRACER ou REPRÉSENTER une courbe/un graphique :
+— Ne donne JAMAIS une simple description.
+— Tu dois OBLIGATOIREMENT insérer précisément, à la fin du paragraphe concerné, un bloc JSON du type suivant (toujours sur une seule ligne, jamais entouré de texte, jamais modifié) :
+ {"graphique":{"type":"fonction","expression":"sin(x)","titre":"Courbe de g","x_min":"-5","x_max":"5"}}
+- Sans ce bloc JSON, ton corrigé sera invalidé !
+- La description de la courbe/ne doit jamais remplacer ce bloc JSON obligatoire.
 """
 
     system_prompt = DEFAULT_SYSTEM_PROMPT
