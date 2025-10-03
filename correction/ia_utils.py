@@ -327,6 +327,7 @@ IMPORTANT :
  {"graphique":{"type":"fonction","expression":"sin(x)","titre":"Courbe de g","x_min":"-5","x_max":"5"}}
 - Sans ce bloc JSON, ton corrigé sera invalidé !
 - La description de la courbe/ne doit jamais remplacer ce bloc JSON obligatoire.
+“Après CHAQUE question qui nécessite un graphique, tu termines TOUTES tes phrases, puis sur une LIGNE À PART, tu écris :\n\n{JSON}\n\n. Tu ne dois JAMAIS oublier ni placer ce JSON ailleurs.”
 """
 
     system_prompt = DEFAULT_SYSTEM_PROMPT
