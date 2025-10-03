@@ -387,9 +387,20 @@ Règles incontournables :
             corrige_txt = output
             for idx, found_json in enumerate(regex_all_json, 1):
                 try:
+                    # Décodage JSON
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
                     graph_dict = json.loads(sjson)
-                    corrige_txt = corrige_txt.replace(found_json, f"\n[[GRAPHIC_{idx}]]\n", 1)
+                    # Génère le graphique ici !
+                    output_name = f"graphique_{idx}_{int(1000 * np.random.rand())}.png"
+                    img_path = tracer_graphique(graph_dict, output_name)
+                    # Compose le tag d’image HTML ou markdown
+                    if img_path:
+                        img_tag = f'<img src="/media/{img_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
+                        # REMPLACE le tag dans le texte
+                        corrige_txt = corrige_txt.replace(found_json, img_tag, 1)
+                    else:
+                        # Si génération échoue, laisse le tag ou mets un message d'erreur
+                        corrige_txt = corrige_txt.replace(found_json, f"[Erreur génération graphique]", 1)
                     graph_list.append(graph_dict)
                 except Exception as e:
                     print("Erreur parsing JSON graphique:", e)
