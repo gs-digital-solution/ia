@@ -500,6 +500,9 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
             return error_msg, None
 
         output = response_data['choices'][0]['message']['content']
+        print("\n=========== DEBUT OUTPUT HTML ===========\n")
+        print(output)
+        print("\n=========== FIN OUTPUT HTML =============\n")
 
         # Analyse et génération graphique dans le corrigé
         # Nouvelle regex robuste : capture le JSON qui suit ---corrigé--- (prend en compte espaces/retours à la ligne)
