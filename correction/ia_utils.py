@@ -2,71 +2,84 @@ import requests
 import os
 import tempfile
 import json
-from pdfminer.high_level import extract_text
-from PIL import Image, ImageEnhance, ImageFilter
-import pytesseract
+import re
 import numpy as np
 import matplotlib
-from celery import shared_task
-from django.conf import settings
-import re
-from django.utils.safestring import mark_safe
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from .pdf_generator import pdf_generator
+from pdfminer.high_level import extract_text
+from PIL import Image, ImageEnhance, ImageFilter
+import pytesseract
+from django.conf import settings
+from django.utils.safestring import mark_safe
+from celery import shared_task
 
-# --- Conversion et sanitation latex/markdown vers HTML+LaTeX ---
+
+# ==============
+# UTILITAIRES TEXTE / LATEX / TABLEAU (inchangés)
 def flatten_multiline_latex_blocks(text):
-    """
-    Remplace tout bloc latex (\[...\] ou \(...\)) multi-ligne par la même balise sur UNE SEULE ligne.
-    """
-    if not text: return ""
+    if not text:
+        return ""
+
     def block_replacer(match):
         contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
         contents = re.sub(r' {2,}', ' ', contents)
         return r'\[' + contents.strip() + r'\]'
+
     def inline_replacer(match):
         contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
         contents = re.sub(r' {2,}', ' ', contents)
         return r'\(' + contents.strip() + r'\)'
-    # Flatten les display latex
-    text = re.sub(r'\\\[\s*([\s\S]*?)\s*\\\]', block_replacer, text)
-    # Inline aussi
-    text = re.sub(r'\\\(\s*([\s\S]*?)\s*\\\)', inline_replacer, text)
+
+    text = re.sub(r'\\\[\s*([\s\S]?)\s\\\]', block_replacer, text)
+    text = re.sub(r'\\\(\s*([\s\S]?)\s\\\)', inline_replacer, text)
+
     return text
+
 
 def detect_and_format_math_expressions(text):
-    """
-    Sanitize latex : met tous les blocs latex (display / inline) sur une seule ligne
-    Évite de masquer/protéger plus que nécessaire — traite tout ce qui traîne.
-    """
-    if not text: return ""
+    if not text:
+        return ""
 
-    # Correction de balises erronées issues de l'IA ou Markdown :
-    text = re.sub(r'\$\$\s*([\s\S]+?)\s*\$\$', lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]', text, flags=re.DOTALL)
-    text = re.sub(r'\$\s*([^$]+?)\s*\$', lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)', text)
-    text = re.sub(r'(?<!\\)\[\s*([\s\S]+?)\s*\]', lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]', text)
+    text = re.sub(
+        r'\$\$\s*([\s\S]+?)\s*\$\$',
+        lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]',
+        text,
+        flags=re.DOTALL
+    )
 
-    # Mets tous les blocs latex (display/inline) sur UNE SEULE ligne
+    text = re.sub(
+        r'\$\s*([^$]+?)\s*\$',
+        lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
+        text
+    )
+
+    text = re.sub(
+        r'(?<!\\)\[\s*([\s\S]+?)\s*\]',
+        lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]',
+        text
+    )
+
     text = flatten_multiline_latex_blocks(text)
-    # Clean backslash parasite, caractères invisibles
     text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
+
     return text
 
+
 def format_table_markdown(table_text):
-    """
-    Transforme un tableau markdown (type |...|...|) en vrai tableau HTML
-    """
     lines = table_text.strip().split('\n')
     html_table = ['<div class="table-container"><table>']
+
     for i, line in enumerate(lines):
         line = line.strip()
         if not line or not line.startswith('|'):
             continue
+
         line = re.sub(r'^\|\s*', '', line)
         line = re.sub(r'\s*\|$', '', line)
         cells = [cell.strip() for cell in line.split('|')]
+
         if i == 0:
             html_table.append('<thead><tr>')
             for cell in cells:
@@ -79,25 +92,26 @@ def format_table_markdown(table_text):
             for cell in cells:
                 html_table.append(f'<td>{cell}</td>')
             html_table.append('</tr>')
+
     html_table.append('</tbody></table></div>')
     return ''.join(html_table)
 
+
 def generate_corrige_html(corrige_text):
-    """
-    Transforme latex + texte en HTML+latex prêt pour flutter_tex.
-    Gère tableaux, titres, blocs latex display sur une ligne, etc.
-    """
     if not corrige_text:
         return ""
-    formatted_text = detect_and_format_math_expressions(corrige_text)
-    lines = formatted_text.strip().split('\n')
+
+    formatted = detect_and_format_math_expressions(corrige_text)
+    lines = formatted.strip().split('\n')
     html_output = []
     i = 0
+
     while i < len(lines):
         line = lines[i].strip()
         if not line:
             i += 1
             continue
+
         if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
             table_lines = []
             j = i
@@ -108,24 +122,34 @@ def generate_corrige_html(corrige_text):
             html_output.append(html_table)
             i = j
             continue
-        if re.search(r'\\\[.*?\\\]', line):
-            line = re.sub(r'\\\[(\s*)(.*?)(\s*)\\\]', r'\[\2\]', line)
-            html_output.append(f'<p>{line}</p>'); i += 1
-        elif re.match(r'^\d+\.', line):
-            html_output.append(f'<h2>{line}</h2>'); i += 1
-        elif re.match(r'^[a-z]\)', line):
-            html_output.append(f'<p><strong>{line}</strong></p>'); i += 1
-        elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
-            html_output.append(f'<p>{line}</p>'); i += 1
-        elif '\\(' in line or '\\[' in line:
-            line = re.sub(r'\\\(\s*([^)]*?)\s*\\\)', r'\\(\1\\)', line)
-            line = re.sub(r'\\\[\s*([^]]*?)\s*\\\]', r'\[\1\]', line)
-            html_output.append(f'<p>{line}</p>'); i += 1
-        else:
-            html_output.append(f'<p>{line}</p>'); i += 1
-    return mark_safe("".join(html_output))
-# --- Fin sanitation/converter ---
 
+        if re.search(r'\\\[.?\\\]', line):
+            line = re.sub(r'\\\[(\s)(.?)(\s)\\\]', r'\[\2\]', line)
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        elif re.match(r'^\d+\.', line):
+            html_output.append(f'<h2>{line}</h2>')
+            i += 1
+        elif re.match(r'^[a-z]\)', line):
+            html_output.append(f'<p><strong>{line}</strong></p>')
+            i += 1
+        elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        elif '\\(' in line or '\\[' in line:
+            line = re.sub(r'\\\(\s*([^)]?)\s\\\)', r'\\(\1\\)', line)
+            line = re.sub(r'\\\[\s*([^]]?)\s\\\]', r'\[\1\]', line)
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        else:
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+
+    return mark_safe("".join(html_output))
+
+
+# ==============
+# EXTRACTION TEXTE/FICHIER
 def extraire_texte_pdf(fichier_path):
     try:
         texte = extract_text(fichier_path)
@@ -138,39 +162,15 @@ def extraire_texte_pdf(fichier_path):
 def extraire_texte_image(fichier_path):
     try:
         image = Image.open(fichier_path)
-
-        # Prétraitement amélioré de l'image
-        # Conversion en niveaux de gris
-        image = image.convert("L")
-
-        # Amélioration du contraste
+        image = image.convert("L").filter(ImageFilter.MedianFilter())
         enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.0)
-
-        # Réduction du bruit
-        image = image.filter(ImageFilter.MedianFilter(size=3))
-
-        # Seuillage adaptatif
-        image = image.point(lambda x: 0 if x < 180 else 255, '1')
-
-        # Configuration Tesseract améliorée
-        custom_config = r'--oem 3 --psm 6 -l fra+eng'
-
-        texte = pytesseract.image_to_string(image, config=custom_config)
-
-        if not texte.strip():
-            # Essayer avec différents modes PSM
-            for psm_mode in [6, 7, 8, 11]:
-                custom_config = f'--oem 3 --psm {psm_mode} -l fra+eng'
-                texte = pytesseract.image_to_string(image, config=custom_config)
-                if texte.strip():
-                    break
-
-        return texte.strip() if texte else "(Texte non extrait de l'image)"
-
+        image = enhancer.enhance(2.2)
+        image = image.point(lambda x: 0 if x < 150 else 255, '1')
+        texte = pytesseract.image_to_string(image, lang="fra+eng")
+        return texte.strip()
     except Exception as e:
         print("Erreur extraction image:", e)
-        return f"(Erreur lors de l'extraction: {str(e)})"
+        return ""
 
 
 def extraire_texte_fichier(fichier_field):
@@ -180,38 +180,28 @@ def extraire_texte_fichier(fichier_field):
     temp_dir = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
 
+    with open(temp_path, "wb") as f:
+        for chunk in fichier_field.chunks():
+            f.write(chunk)
+
+    ext = os.path.splitext(fichier_field.name)[1].lower()
+    texte = ""
+
+    if ext == ".pdf":
+        texte = extraire_texte_pdf(temp_path)
+    elif ext in [".jpg", ".jpeg", ".png"]:
+        texte = extraire_texte_image(temp_path)
+
     try:
-        with open(temp_path, "wb") as f:
-            for chunk in fichier_field.chunks():
-                f.write(chunk)
+        os.remove(temp_path)
+    except Exception:
+        pass
 
-        ext = os.path.splitext(fichier_field.name)[1].lower()
-        texte = ""
-
-        print(f"Extraction fichier: {fichier_field.name}, type: {ext}")
-
-        if ext == ".pdf":
-            texte = extraire_texte_pdf(temp_path)
-            print(f"PDF extrait: {len(texte)} caractères")
-        elif ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
-            texte = extraire_texte_image(temp_path)
-            print(f"Image extraite: {len(texte)} caractères")
-        else:
-            texte = f"Format non supporté: {ext}"
-
-        return texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
-
-    except Exception as e:
-        print(f"Erreur extraction fichier {fichier_field.name}: {e}")
-        return f"(Erreur lors de l'extraction: {str(e)})"
-    finally:
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
+    return texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
 
 
-
+# ==============
+# DESSIN DE GRAPHIQUES
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
         graphique_dict = graphique_dict['graphique']
@@ -221,8 +211,8 @@ def tracer_graphique(graphique_dict, output_name):
 
     def safe_float(expr):
         try:
-            return float(eval(str(expr), {"__builtins__": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
-        except Exception:
+            return float(eval(str(expr), {"_builtins": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
+        except Exception as e:
             try:
                 return float(expr)
             except Exception:
@@ -234,25 +224,24 @@ def tracer_graphique(graphique_dict, output_name):
         chemin_png = os.path.join(dossier, output_name)
 
         if "fonction" in gtype:
-            x_min_val = safe_float(graphique_dict.get("x_min", -2)) or -2
-            x_max_val = safe_float(graphique_dict.get("x_max", 4)) or 4
+            x_min = safe_float(graphique_dict.get("x_min", -2))
+            x_max = safe_float(graphique_dict.get("x_max", 4))
             expression = graphique_dict.get("expression", "x")
+            x = np.linspace(x_min, x_max, 400)
+            expr_patch = expression.replace('^', '*')
 
-            x = np.linspace(x_min_val, x_max_val, 400)
-            expression_patch = expression.replace('^', '**')
+            for func in ["sin", "cos", "tan", "exp", "log", "log10", "arcsin", "arccos", "arctan", "sinh", "cosh",
+                         "tanh", "sqrt", "abs"]:
+                expr_patch = re.sub(r'(?<![\w.])' + func + r'\s\(', f'np.{func}(', expr_patch)
 
-            funcs = ["sin", "cos", "tan", "exp", "log", "log10", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
-                     "sqrt", "abs"]
-            for fct in funcs:
-                expression_patch = re.sub(r'(?<![\w.])' + fct + r'\s*\(', f'np.{fct}(', expression_patch)
-            expression_patch = expression_patch.replace('ln(', 'np.log(')
+            expr_patch = expr_patch.replace('ln(', 'np.log(')
 
             try:
-                y = eval(expression_patch, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi, "sqrt": np.sqrt})
-                if np.isscalar(y) or (isinstance(y, np.ndarray) and y.shape == ()):
+                y = eval(expr_patch, {'x': x, 'np': np, 'builtins': None, "pi": np.pi})
+                if np.isscalar(y):
                     y = np.full_like(x, y)
             except Exception as e:
-                print(f"Erreur tracé expression: {e}")
+                print(f"Erreur tracé fonction : {e}")
                 return None
 
             plt.figure(figsize=(6, 4))
@@ -261,75 +250,199 @@ def tracer_graphique(graphique_dict, output_name):
             plt.xlabel("x")
             plt.ylabel("y")
             plt.grid(True)
-            plt.tight_layout()
 
         elif "histogramme" in gtype:
             intervalles = graphique_dict.get("intervalles") or graphique_dict.get("classes") or []
-            effectifs = graphique_dict.get("effectifs", [])
+            eff = graphique_dict.get("effectifs", [])
+            labels = [str(ival) for ival in intervalles]
+            x_pos = np.arange(len(labels))
+            eff = [float(e) for e in eff]
 
-            try:
-                labels = [str(ival) for ival in intervalles]
-                x_pos = np.arange(len(labels))
-                effectifs = [float(e) for e in effectifs]
+            plt.figure(figsize=(7, 4.5))
+            plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.9)
+            plt.xticks(x_pos, labels, rotation=35)
+            plt.title(titre)
+            plt.xlabel(graphique_dict.get("xlabel", "Classes / Intervalles"))
+            plt.ylabel(graphique_dict.get("ylabel", "Effectif"))
+            plt.grid(axis='y')
 
-                plt.figure(figsize=(7, 4.5))
-                plt.bar(x_pos, effectifs, color="#208060", edgecolor='black', width=0.9)
-                plt.xticks(x_pos, labels, rotation=35)
-                plt.title(titre)
-                plt.xlabel(graphique_dict.get("xlabel", "Classes / Intervalles"))
-                plt.ylabel(graphique_dict.get("ylabel", "Effectif"))
-                plt.grid(axis='y')
-                plt.tight_layout()
-            except Exception as e:
-                print("Erreur histogramme:", e)
-                return None
+        elif "diagramme à bandes" in gtype or "diagramme en bâtons" in gtype or "bâtons" in gtype or "batons" in gtype:
+            cat = graphique_dict.get("categories", [])
+            eff = graphique_dict.get("effectifs", [])
+            x_pos = np.arange(len(cat))
 
-        # [Autres types de graphiques conservés...]
-        # ... (le reste de votre code pour les autres types de graphiques)
+            plt.figure(figsize=(7, 4.5))
+            plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.7)
+            plt.xticks(x_pos, cat, rotation=15)
+            plt.title(titre)
+            plt.xlabel("Catégories")
+            plt.ylabel("Effectif")
 
+        elif "nuage de points" in gtype or "scatter" in gtype:
+            x_points = graphique_dict.get("x", [])
+            y_points = graphique_dict.get("y", [])
+
+            plt.figure(figsize=(6, 4))
+            plt.scatter(x_points, y_points, color="#006080")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.grid(True)
+
+        elif "effectifs cumulés" in gtype or "courbe des effectifs cumulés" in gtype:
+            x_points = graphique_dict.get("x", [])
+            y_points = graphique_dict.get("y", [])
+
+            plt.figure(figsize=(6, 4))
+            plt.plot(x_points, y_points, marker="o", color="#b65d2f")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("Effectifs cumulés")
+            plt.grid(True)
+
+        elif "diagramme circulaire" in gtype or "camembert" in gtype or "pie" in gtype:
+            cat = graphique_dict.get("categories", [])
+            eff = graphique_dict.get("effectifs", [])
+
+            plt.figure(figsize=(5.3, 5.3))
+            plt.pie(
+                eff,
+                labels=cat,
+                autopct='%1.1f%%',
+                colors=plt.cm.Paired.colors,
+                startangle=90,
+                wedgeprops={"edgecolor": "k"}
+            )
+            plt.title(titre)
+
+        elif "polygone" in gtype or "polygon" in gtype:
+            points = graphique_dict.get("points")
+            points_x = graphique_dict.get("points_x")
+            points_y = graphique_dict.get("points_y")
+            absc = graphique_dict.get("abscisses")
+            ords = graphique_dict.get("ordonnees")
+
+            if points:
+                x = [float(p[0]) for p in points]
+                y = [float(p[1]) for p in points]
+            elif points_x and points_y:
+                x = [float(xx) for xx in points_x]
+                y = [float(yy) for yy in points_y]
+            elif absc and ords:
+                x = [float(xx) for xx in absc]
+                y = [float(yy) for yy in ords]
+            else:
+                print("Erreur polygone : aucun point")
+                x = []
+                y = []
+
+            plt.figure(figsize=(7, 4.5))
+            plt.plot(x, y, marker="o", color="#003355")
+            plt.title(graphique_dict.get("titre", "Polygone"))
+            plt.xlabel(graphique_dict.get("x_label", "Abscisse"))
+            plt.ylabel(graphique_dict.get("y_label", "Ordonnée"))
+            plt.grid(True)
+
+        elif "cercle trigo" in gtype:
+            angles = graphique_dict.get("angles", [])
+            labels = graphique_dict.get("labels", [])
+
+            plt.figure(figsize=(5, 5))
+            circle = plt.Circle((0, 0), 1, fill=False, edgecolor='black', linestyle='--')
+            ax = plt.gca()
+            ax.add_artist(circle)
+
+            for i, angle_txt in enumerate(angles):
+                try:
+                    a = float(eval(angle_txt, {"pi": np.pi}))
+                except Exception:
+                    a = 0
+                x, y = np.cos(a), np.sin(a)
+                ax.plot([0, x], [0, y], color='#992020')
+                label = labels[i] if i < len(labels) else f"S{i + 1}"
+                ax.text(1.1 * x, 1.1 * y, label, fontsize=12)
+
+            ax.set_xlim(-1.5, 1.5)
+            ax.set_ylim(-1.5, 1.5)
+            plt.axis('off')
+            plt.title(titre)
+
+        else:
+            print("Type graphique non supporté :", gtype)
+            return None
+
+        plt.tight_layout()
         plt.savefig(chemin_png)
         plt.close()
-        return f"graphes/{output_name}"
+        return "graphes/" + output_name
 
-    except Exception as e:
-        print(f"Erreur génération graphique: {e}")
+    except Exception as ee:
+        print(f"Erreur générale sauvegarde PNG {chemin_png if 'chemin_png' in locals() else output_name} :", ee)
         return None
 
 
-def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None, demande=None):
+# ===========================
+# PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
+DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
+
+Règles :
+- Dès qu'un exercice demande un graphique, tu termines la réponse concernée par la balise ---corrigé--- sur une ligne, puis sur la ligne suivante, le JSON du graphique : {"graphique": {...}}
+
+Types supportés : "fonction", "histogramme", "diagramme à bandes", "nuage de points", "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo".
+
+EXEMPLES :
+
+--- EX 1 : Fonction ---
+Corrigé détaillé...
+---corrigé---
+{"graphique": {"type": "fonction", "expression": "x*2 - 2*x + 1", "x_min": -1, "x_max": 3, "titre": "Courbe parabole"}}
+
+--- EX 2 : Cercle trigo ---
+...
+---corrigé---
+{"graphique": {"type":"cercle trigo", "angles":["-pi/4","pi/4"], "labels":["S1","S2"], "titre":"Solutions trigonométriques"}}
+
+--- EX 3 : Histogramme ---
+...
+---corrigé---
+{"graphique": {"type": "histogramme", "intervalles": ["0-5","5-10","10-15"], "effectifs":[3,5,7], "titre":"Histogramme des effectifs"}}
+
+--- EX 4 : Diagramme à bandes ---
+---corrigé---
+{"graphique": {"type":"diagramme à bandes","categories":["A","B","C"],"effectifs":[10,7,12],"titre":"Comparaison"}}
+
+--- EX 5 : Nuage de points ---
+---corrigé---
+{"graphique": {"type":"nuage de points","x":[1,2,3,4],"y":[2,5,7,3],"titre":"Nuage"}}
+
+--- EX 6 : Effectifs cumulés ---
+---corrigé---
+{"graphique": {"type":"effectifs cumulés","x":[5,10,15,20],"y":[3,9,16,20],"titre":"Effectifs cumulés"}}
+
+--- EX 7 : Diagramme circulaire ---
+---corrigé---
+{"graphique":{"type":"camembert","categories":["L1","L2","L3"],"effectifs":[4,6,5],"titre":"Répartition"}}
+
+--- EX 8 : Polygone ---
+---corrigé---
+{"graphique": {"type": "polygone", "points": [[0,0],[5,3],[10,9]], "titre": "Polygone des ECC", "x_label": "Borne", "y_label": "ECC"}}
+
+Rappels :
+- Si plusieurs graphiques, recommence cette structure à chaque question concernée.
+- Pas de texte entre ---corrigé--- et le JSON.
+- Le JSON est obligatoire dès qu'un tracé est demandé.
+"""
+
+
+# ===========================
+def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
+                                    demande=None):
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
         exemples_corriges = []
 
-    # PROMPT IA personnalisable par matière
-    DEFAULT_SYSTEM_PROMPT =r"""
-Tu es un professeur expert chargé de corriger des exercices de façon structurée, claire et rigoureuse.
-Règles incontournables :
-- Structure chaque corrigé sans sauter d'étapes
-- Toutes les formules mathématiques doivent être en LaTeX avec \( \) pour inline et \[ \] pour display,
-- voici un exemple d'équation attendue:  \[\lim_{x \to \pm \infty} f(x) = \lim_{x \to \pm \infty} \frac{x}{x} = 1\]
-- voici un autre exemple: \( f(x) = 0 \Rightarrow x = 1 \) 
-- NE PAS répéter l'énoncé des questions avant chaque réponse
-- répondre clairement à la question sans préciser la méthode
--évite de mettre entre crochets quoique ce soit, seuls le latex aura les balises décrites ci-dessus
-- Pour les équations, utiliser \(\implies\) ou \(\iff\) à chaque étape
-- Les tableaux en Markdown avec alignement correct
-- Toutes les formules doivent être en LaTeX avec \( ... \) (inline) et \[ ... \] (display), SANS aucuns retours à la ligne dans ou autour des balises.
-- Pour les équations block : TOUJOURS une seule ligne \[ ... \]
-- Ne produis jamais de formule math, ni d'expression dans une simple parenthèse ou crochets. Toute équation doit être sous les balises latex décrites ci-dessus, sur une ligne stricte.
-- Utiliser un langage clair et pédagogique
-
-IMPORTANT : 
-- A chaque fois qu'un exercice demande de TRACER ou REPRÉSENTER une courbe/un graphique :
-— Ne donne JAMAIS une simple description.
-— Tu dois OBLIGATOIREMENT insérer précisément, à la fin du paragraphe concerné, un bloc JSON du type suivant (toujours sur une seule ligne, jamais entouré de texte, jamais modifié) :
- {"graphique":{"type":"fonction","expression":"sin(x)","titre":"Courbe de g","x_min":"-5","x_max":"5"}}
-- Sans ce bloc JSON, ton corrigé sera invalidé !
-- La description de la courbe/ne doit jamais remplacer ce bloc JSON obligatoire.
-“Après CHAQUE question qui nécessite un graphique, tu termines TOUTES tes phrases, puis sur une LIGNE À PART, tu écris :\n\n{JSON}\n\n. Tu ne dois JAMAIS oublier ni placer ce JSON ailleurs.”
-"""
-
+    # Prompt spécifique, ou général par défaut
     system_prompt = DEFAULT_SYSTEM_PROMPT
     exemple_prompt = ""
     consignes_finales = "Format de réponse strict : LaTeX pour les maths, Markdown pour les tableaux"
@@ -388,32 +501,30 @@ IMPORTANT :
 
         output = response_data['choices'][0]['message']['content']
 
-        # Traitement des graphiques
-        regex_all_json = re.findall(r'(\{\s*"graphique"\s*:\s*\{[\s\S]+?\}\s*\})', output)
+        # Analyse et génération graphique dans le corrigé
+        regex_all_json = re.findall(r'(\{\s"graphique"\s*:\s*\{[\s\S]+?\}\s*\})', output)
         graph_list = []
 
         if regex_all_json:
             corrige_txt = output
             for idx, found_json in enumerate(regex_all_json, 1):
                 try:
-                    # Décodage JSON
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
                     graph_dict = json.loads(sjson)
-                    # Génère le graphique ici !
-                    output_name = f"graphique_{idx}_{int(1000 * np.random.rand())}.png"
+                    output_name = f"graphique{idx}_{int(1000 * np.random.rand())}.png"
                     img_path = tracer_graphique(graph_dict, output_name)
-                    # Compose le tag d’image HTML ou markdown
+
                     if img_path:
                         img_tag = f'<img src="/media/{img_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
-                        # REMPLACE le tag dans le texte
                         corrige_txt = corrige_txt.replace(found_json, img_tag, 1)
                     else:
-                        # Si génération échoue, laisse le tag ou mets un message d'erreur
-                        corrige_txt = corrige_txt.replace(found_json, f"[Erreur génération graphique]", 1)
+                        corrige_txt = corrige_txt.replace(found_json, "[Erreur génération graphique]", 1)
+
                     graph_list.append(graph_dict)
                 except Exception as e:
                     print("Erreur parsing JSON graphique:", e)
                     continue
+
             return corrige_txt.strip(), graph_list
 
         return output.strip(), None
@@ -421,72 +532,58 @@ IMPORTANT :
     except Exception as e:
         return f"Erreur API: {str(e)}", None
 
-from celery import shared_task
-# … tes imports existants …
 
+# ===========================
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
-    print(f"DEBUG ▶️ Tâche IA démarrée pour demande_id={demande_id}, matiere_id={matiere_id}")
     from correction.models import DemandeCorrection, SoumissionIA
-    from resources.models   import Matiere
+    from resources.models import Matiere
 
     try:
-        # Récupération des objets
         demande = DemandeCorrection.objects.get(id=demande_id)
         soumission = SoumissionIA.objects.get(demande=demande)
-        print("DEBUG    → DemandeCorrection et SoumissionIA récupérés")
 
-        # Étape 1 : extraction
         soumission.statut = 'extraction'
         soumission.progression = 20
         soumission.save()
-        print("DEBUG    • Statut « extraction » (20%)")
 
-        # Extraction du texte
         texte_enonce = ""
         if demande.fichier:
             texte_enonce = extraire_texte_fichier(demande.fichier)
         if not texte_enonce and hasattr(demande, 'enonce_texte'):
             texte_enonce = demande.enonce_texte or ""
-        print(f"DEBUG    • Texte énoncé extrait ({len(texte_enonce)} caractères)")
 
-        # Étape 2 : analyse IA
         soumission.statut = 'analyse_ia'
         soumission.progression = 40
         soumission.save()
-        print("DEBUG    • Statut « analyse_ia » (40%)")
 
-        # Contexte IA
         matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
         contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
 
-        # Étape 3 : génération graphiques
         soumission.statut = 'generation_graphiques'
         soumission.progression = 60
         soumission.save()
-        print("DEBUG    • Statut « generation_graphiques » (60%)")
 
-        # Appel de l’IA
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-            texte_enonce, contexte, matiere=matiere
+            texte_enonce,
+            contexte,
+            matiere=matiere
         )
-        print("DEBUG    • IA renvoyé texte et éventuels graphiques")
 
-        # Étape 4 : formatage PDF
         soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
-        print("DEBUG    • Statut « formatage_pdf » (80%)")
 
-        # Génération du PDF
         from .pdf_utils import generer_pdf_corrige
         pdf_path = generer_pdf_corrige(
-            {"titre_corrige": contexte, "corrige_html": corrige_txt, "soumission_id": demande_id},
+            {
+                "titre_corrige": contexte,
+                "corrige_html": corrige_txt,
+                "soumission_id": demande_id
+            },
             demande_id
         )
-        print(f"DEBUG    • PDF généré à l’emplacement : {pdf_path}")
 
-        # Étape finale : terminé
         soumission.statut = 'termine'
         soumission.progression = 100
         soumission.resultat_json = {
@@ -495,9 +592,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             'graphiques': graph_list or []
         }
         soumission.save()
-        print("DEBUG ✔️ Tâche IA terminée (100%)")
 
-        # On met à jour la demande
         demande.corrigé = corrige_txt
         demande.save()
 
@@ -505,7 +600,6 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 
     except Exception as e:
         print("DEBUG ❌ Erreur dans la tâche IA :", e)
-        # En cas d’erreur on met à jour le statut
         try:
             soumission.statut = 'erreur'
             soumission.save()
