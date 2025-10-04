@@ -497,6 +497,36 @@ Corrigé détaillé...
 ---corrigé---
 {"graphique": {"type": "polygone", "points": [[0,0],[5,3],[10,9]], "titre": "Polygone des ECC", "x_label": "Borne", "y_label": "ECC"}}
 
+d'autre exemples:
+Exemple 1 : Fonction, Asymptotes, Réciproque
+
+Soit ( f(x) = (x+1)/(x-2) ).
+Représente dans le même repère :
+
+La courbe de f
+Ses asymptotes
+Sa fonction réciproque f⁻¹(x)
+
+Corrigé attendu : (détail…)
+---corrigé---
+
+{"graphique": { "type": "multi", "curves": [ {"type": "fonction", "expression": "(x+1)/(x-2)", "x_min": -5, "x_max": 7, "label": "f(x)"}, {"type": "asymptote", "sens": "verticale", "x": 2, "label": "x=2"}, {"type": "asymptote", "sens": "horizontale", "y": 1, "label": "y=1"}, {"type": "fonction", "expression": "(x-2)/(x+1)", "x_min": -5, "x_max": 7, "style":"--", "label": "f⁻¹(x)"} ], "titre": "Courbe f, asymptotes, réciproque" }}
+
+Exemple 2 : ECC, ECD (statistique)
+
+Les effectifs cumulés croissants (ECC) et décroissants (ECD) d’une série donnée sont donnés par… Trace dans le même repère les diagrammes ECC (points et segments) et ECD (segments pointillés).
+
+---corrigé---
+
+{"graphique": { "type": "multi", "curves": [ {"type": "ecc", "points_x": [0,5,10,15], "points_y": [3,8,17,20], "label": "ECC"}, {"type": "ecd", "points_x": [0,5,10,15], "points_y": [20,17,12,3], "label": "ECD", "style":"--"} ], "titre": "Diagrammes ECC et ECD sur la même figure" }}
+Exemple 3 : Polygones plusieurs séries
+
+On considère deux séries statistiques…
+
+---corrigé---
+
+{"graphique": { "type": "multi", "curves": [ {"type":"polygone","points":[[0,1],[5,3],[10,4],[15,8]],"label":"Série A"}, {"type":"polygone","points":[[0,2],[5,4],[10,5],[15,11]],"label":"Série B", "style": "--"} ], "titre": "Polygone séries A et B" }}
+
 Rappels :
 - Si plusieurs graphiques, recommence cette structure à chaque question concernée.
 - Pas de texte entre ---corrigé--- et le JSON.
