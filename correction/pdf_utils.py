@@ -46,6 +46,12 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     # 2) Prérendu MathJax
     html_prerender = prerender_mathjax(html)
 
+    # DEBUG : Sauvegarde du HTML intermédiaire dans un fichier temporaire à examiner
+    debug_html_path = f"/tmp/dernier_corrige_{soumission_id}.html"
+    with open(debug_html_path, "w", encoding="utf-8") as f:
+        f.write(html_prerender)
+    print(f"DEBUG : HTML intermédiaire sauvegardé à {debug_html_path}")
+
     # 3) Conversion en PDF
     options = {
         "enable-local-file-access": None,
@@ -58,6 +64,7 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         "margin-left": "1mm",
         "margin-right": "1mm",
     }
+
     pdf_bytes = pdfkit.from_string(html_prerender, False, options=options)
 
     # 4) Sauvegarde et URL
