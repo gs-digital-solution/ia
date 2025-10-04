@@ -431,6 +431,8 @@ Rappels :
 - Si plusieurs graphiques, recommence cette structure à chaque question concernée.
 - Pas de texte entre ---corrigé--- et le JSON.
 - Le JSON est obligatoire dès qu'un tracé est demandé.
+
+"Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python. Pour les listes/types, toujours notation JSON [ ... ] et jamais { ... } sauf pour des objets. N’insère JAMAIS de virgule en trop."
 """
 
 
@@ -517,12 +519,21 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
                 try:
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
                     # Nettoyage du JSON généré par l'IA (supprime virgules parasites, espaces, caractères spéciaux)
-                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
                     sjson = re.sub(r'},\s*$', '}', sjson)
                     sjson = re.sub(r',\s*}', '}', sjson)
                     sjson = re.sub(r',\s*\]', ']', sjson)
-                    # Debug : affiche avant le parsing JSON
-                    print('DEBUG : sjson utilisé pour loads:', sjson)
+
+                    # PATCH : Ajoute les accolades/crochets fermants manquants à la fin si besoin
+                    nb_open = sjson.count("{")
+                    nb_close = sjson.count("}")
+                    if nb_close < nb_open:
+                        sjson = sjson + "}" * (nb_open - nb_close)
+                    nb_open = sjson.count("[")
+                    nb_close = sjson.count("]")
+                    if nb_close < nb_open:
+                        sjson = sjson + "]" * (nb_open - nb_close)
+                    # Debug : affiche après patch, avant le parsing JSON
+                    print('DEBUG PATCHED sjson:', sjson)
                     graph_dict = json.loads(sjson)
                     output_name = f"graphique{idx}_{int(1000 * np.random.rand())}.png"
                     img_path = tracer_graphique(graph_dict, output_name)
