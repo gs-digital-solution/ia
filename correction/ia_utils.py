@@ -516,6 +516,13 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
             for idx, found_json in enumerate(regex_all_json, 1):
                 try:
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
+                    # Nettoyage du JSON généré par l'IA (supprime virgules parasites, espaces, caractères spéciaux)
+                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
+                    sjson = re.sub(r'},\s*$', '}', sjson)
+                    sjson = re.sub(r',\s*}', '}', sjson)
+                    sjson = re.sub(r',\s*\]', ']', sjson)
+                    # Debug : affiche avant le parsing JSON
+                    print('DEBUG : sjson utilisé pour loads:', sjson)
                     graph_dict = json.loads(sjson)
                     output_name = f"graphique{idx}_{int(1000 * np.random.rand())}.png"
                     img_path = tracer_graphique(graph_dict, output_name)
