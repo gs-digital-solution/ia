@@ -515,7 +515,8 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
                     img_path = tracer_graphique(graph_dict, output_name)
 
                     if img_path:
-                        img_tag = f'<img src="/media/{img_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
+                        abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                        img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
                         corrige_txt = corrige_txt.replace(found_json, img_tag, 1)
                     else:
                         corrige_txt = corrige_txt.replace(found_json, "[Erreur génération graphique]", 1)
