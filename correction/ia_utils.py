@@ -502,11 +502,14 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         output = response_data['choices'][0]['message']['content']
 
         # Analyse et génération graphique dans le corrigé
-        regex_all_json = re.findall(r'(\{\s"graphique"\s*:\s*\{[\s\S]+?\}\s*\})', output)
+        # Nouvelle regex robuste : capture le JSON qui suit ---corrigé--- (prend en compte espaces/retours à la ligne)
+        regex_all_json = re.findall(r'---corrigé---\s*\n*({[\s\S]+?})', output)
         graph_list = []
+        print("DEBUG JSONs détectés:", regex_all_json)  # Optionnel pour debug
 
         if regex_all_json:
             corrige_txt = output
+
             for idx, found_json in enumerate(regex_all_json, 1):
                 try:
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
@@ -517,11 +520,28 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
                     if img_path:
                         abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
                         img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
-                        corrige_txt = corrige_txt.replace(found_json, img_tag, 1)
+
+                        # Remplace aussi le tag ---corrigé--- juste avant ce JSON (tous formats possibles)
+                        for tag in [
+                            f"---corrigé---\n{found_json}",
+                            f"---corrigé---\r\n{found_json}",
+                            f"---corrigé--- {found_json}",
+                            f"---corrigé---{found_json}",
+                            found_json
+                        ]:
+                            corrige_txt = corrige_txt.replace(tag, img_tag, 1)
                     else:
-                        corrige_txt = corrige_txt.replace(found_json, "[Erreur génération graphique]", 1)
+                        for tag in [
+                            f"---corrigé---\n{found_json}",
+                            f"---corrigé---\r\n{found_json}",
+                            f"---corrigé--- {found_json}",
+                            f"---corrigé---{found_json}",
+                            found_json
+                        ]:
+                            corrige_txt = corrige_txt.replace(tag, "[Erreur génération graphique]", 1)
 
                     graph_list.append(graph_dict)
+
                 except Exception as e:
                     print("Erreur parsing JSON graphique:", e)
                     continue
