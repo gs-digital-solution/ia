@@ -133,7 +133,7 @@ def generate_corrige_html(corrige_text):
         elif re.match(r'^[a-z]\)', line):
             html_output.append(f'<p><strong>{line}</strong></p>')
             i += 1
-        elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
+        elif line.startswith('•') or line.startswith('-') or line.startswith('•'):
             html_output.append(f'<p>{line}</p>')
             i += 1
         elif '\\(' in line or '\\[' in line:
@@ -211,7 +211,7 @@ def tracer_graphique(graphique_dict, output_name):
 
     def safe_float(expr):
         try:
-            return float(eval(str(expr), {"__builtins__": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
+            return float(eval(str(expr), {"_builtins": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
         except Exception as e:
             try:
                 return float(expr)
@@ -223,165 +223,89 @@ def tracer_graphique(graphique_dict, output_name):
         os.makedirs(dossier, exist_ok=True)
         chemin_png = os.path.join(dossier, output_name)
 
-        # === MULTI-CURVE SUPPORT ===
-        if "multi" in gtype or "curves" in graphique_dict:
-            curves = graphique_dict.get("curves", [])
-            plt.figure(figsize=(6, 4))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
-            color_cycle = iter(['#008060', '#b65d2f', '#2080C0', '#DB1919', '#003355', '#C08800', '#591e63'])
-            for courbe in curves:
-                ctype = courbe.get("type", "")
-                label = courbe.get("label", None)
-                plot_color = courbe.get("color", next(color_cycle))
-                style = courbe.get("style", "-")
-                # Tracé de fonction
-                if ctype == "fonction":
-                    x_min = float(courbe.get("x_min", -2))
-                    x_max = float(courbe.get("x_max", 4))
-                    expression = courbe.get("expression", "x")
-                    x = np.linspace(x_min, x_max, 400)
-                    expr_patch = expression.replace('^', '**')
-                    for func in [
-                        "sin", "cos", "tan", "exp", "log", "log10", "arcsin",
-                        "arccos", "arctan", "sinh", "cosh", "tanh", "sqrt", "abs"]:
-                        expr_patch = re.sub(r'(?<![\w.])'+func+r'\s*\(', f'np.{func}(', expr_patch)
-                    expr_patch = expr_patch.replace('ln(', 'np.log(')
-                    try:
-                        y = eval(expr_patch, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
-                        if np.isscalar(y): y = np.full_like(x, y)
-                    except Exception as e:
-                        continue
-                    plt.plot(x, y, style, label=label, color=plot_color)
-                # Asymptotes
-                elif ctype == "asymptote":
-                    if courbe.get("sens") == "verticale" and "x" in courbe:
-                        plt.axvline(x=float(courbe["x"]), color=plot_color, linestyle='--', linewidth=1.5, label=label)
-                    if courbe.get("sens") == "horizontale" and "y" in courbe:
-                        plt.axhline(y=float(courbe["y"]), color=plot_color, linestyle='--', linewidth=1.5, label=label)
-                # Nuage de points
-                elif ctype in ("nuage de points", "points"):
-                    x = courbe.get("x", [])
-                    y = courbe.get("y", [])
-                    plt.scatter(x, y, label=label, color=plot_color)
-                # Polygone, ECC/ECD, etc.
-                elif ctype in ("polygone", "ecd", "ecc"):
-                    points = courbe.get("points")
-                    points_x = courbe.get("points_x")
-                    points_y = courbe.get("points_y")
-                    absc = courbe.get("abscisses")
-                    ords = courbe.get("ordonnees")
-                    if points:
-                        x = [float(p[0]) for p in points]
-                        y = [float(p[1]) for p in points]
-                    elif points_x and points_y:
-                        x = [float(xx) for xx in points_x]
-                        y = [float(yy) for yy in points_y]
-                    elif absc and ords:
-                        x = [float(xx) for xx in absc]
-                        y = [float(yy) for yy in ords]
-                    else:
-                        continue
-                    plt.plot(x, y, marker="o", linestyle=style, color=plot_color, label=label)
-            plt.title(titre)
-            plt.xlabel("x")
-            plt.ylabel("y")
-            plt.grid(True)
-            plt.legend()
-        # === Cas standard : une seule courbe/fonction ===
-        elif "fonction" in gtype:
-            x_min = safe_float(graphique_dict.get("x_min", -2)) or -2
-            x_max = safe_float(graphique_dict.get("x_max", 4)) or 4
+        if "fonction" in gtype:
+            x_min = safe_float(graphique_dict.get("x_min", -2))
+            x_max = safe_float(graphique_dict.get("x_max", 4))
             expression = graphique_dict.get("expression", "x")
             x = np.linspace(x_min, x_max, 400)
-            expr_patch = expression.replace('^', '**')
-            for func in [
-                "sin", "cos", "tan", "exp", "log", "log10", "arcsin",
-                "arccos", "arctan", "sinh", "cosh", "tanh", "sqrt", "abs"]:
-                expr_patch = re.sub(r'(?<![\w.])'+func+r'\s*\(', f'np.{func}(', expr_patch)
+            expr_patch = expression.replace('^', '*')
+
+            for func in ["sin", "cos", "tan", "exp", "log", "log10", "arcsin", "arccos", "arctan", "sinh", "cosh",
+                         "tanh", "sqrt", "abs"]:
+                expr_patch = re.sub(r'(?<![\w.])' + func + r'\s\(', f'np.{func}(', expr_patch)
+
             expr_patch = expr_patch.replace('ln(', 'np.log(')
+
             try:
-                y = eval(expr_patch, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
-                if np.isscalar(y): y = np.full_like(x, y)
+                y = eval(expr_patch, {'x': x, 'np': np, 'builtins': None, "pi": np.pi})
+                if np.isscalar(y):
+                    y = np.full_like(x, y)
             except Exception as e:
-                print(f"Erreur tracé expression: {e}")
+                print(f"Erreur tracé fonction : {e}")
                 return None
+
             plt.figure(figsize=(6, 4))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
             plt.plot(x, y, color="#008060")
             plt.title(titre)
             plt.xlabel("x")
             plt.ylabel("y")
             plt.grid(True)
-            # Tracé éventuel asymptotes (standard ou en liste)
-            asymptotes = graphique_dict.get("asymptotes")
-            if asymptotes:
-                if isinstance(asymptotes, dict):
-                    for xval in asymptotes.get("verticales", []):
-                        plt.axvline(x=float(xval), linestyle="--", color="#DB1919")
-                    for yval in asymptotes.get("horizontales", []):
-                        plt.axhline(y=float(yval), linestyle="--", color="#0070e0")
-                elif isinstance(asymptotes, list):
-                    for item in asymptotes:
-                        if "x=" in item:
-                            xval = float(item.split('=')[1])
-                            plt.axvline(x=xval, linestyle="--", color="#DB1919")
-                        if "y=" in item:
-                            yval = float(item.split('=')[1])
-                            plt.axhline(y=yval, linestyle="--", color="#0070e0")
+
         elif "histogramme" in gtype:
             intervalles = graphique_dict.get("intervalles") or graphique_dict.get("classes") or []
             eff = graphique_dict.get("effectifs", [])
             labels = [str(ival) for ival in intervalles]
             x_pos = np.arange(len(labels))
             eff = [float(e) for e in eff]
+
             plt.figure(figsize=(7, 4.5))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
+            plt.axhline(y=0, color='#000000', linewidth=1.8)  # Axe des abscisses
+            plt.axvline(x=0, color='#000000', linewidth=1.8)  # Axe des ordonnées
             plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.9)
             plt.xticks(x_pos, labels, rotation=35)
             plt.title(titre)
             plt.xlabel(graphique_dict.get("xlabel", "Classes / Intervalles"))
             plt.ylabel(graphique_dict.get("ylabel", "Effectif"))
             plt.grid(axis='y')
+
         elif "diagramme à bandes" in gtype or "diagramme en bâtons" in gtype or "bâtons" in gtype or "batons" in gtype:
             cat = graphique_dict.get("categories", [])
             eff = graphique_dict.get("effectifs", [])
             x_pos = np.arange(len(cat))
+
             plt.figure(figsize=(7, 4.5))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
             plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.7)
             plt.xticks(x_pos, cat, rotation=15)
             plt.title(titre)
             plt.xlabel("Catégories")
             plt.ylabel("Effectif")
+
         elif "nuage de points" in gtype or "scatter" in gtype:
             x_points = graphique_dict.get("x", [])
             y_points = graphique_dict.get("y", [])
+
             plt.figure(figsize=(6, 4))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
             plt.scatter(x_points, y_points, color="#006080")
             plt.title(titre)
             plt.xlabel("x")
             plt.ylabel("y")
             plt.grid(True)
+
         elif "effectifs cumulés" in gtype or "courbe des effectifs cumulés" in gtype:
             x_points = graphique_dict.get("x", [])
             y_points = graphique_dict.get("y", [])
+
             plt.figure(figsize=(6, 4))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
             plt.plot(x_points, y_points, marker="o", color="#b65d2f")
             plt.title(titre)
             plt.xlabel("x")
             plt.ylabel("Effectifs cumulés")
             plt.grid(True)
+
         elif "diagramme circulaire" in gtype or "camembert" in gtype or "pie" in gtype:
             cat = graphique_dict.get("categories", [])
             eff = graphique_dict.get("effectifs", [])
+
             plt.figure(figsize=(5.3, 5.3))
             plt.pie(
                 eff,
@@ -392,12 +316,14 @@ def tracer_graphique(graphique_dict, output_name):
                 wedgeprops={"edgecolor": "k"}
             )
             plt.title(titre)
+
         elif "polygone" in gtype or "polygon" in gtype:
             points = graphique_dict.get("points")
             points_x = graphique_dict.get("points_x")
             points_y = graphique_dict.get("points_y")
             absc = graphique_dict.get("abscisses")
             ords = graphique_dict.get("ordonnees")
+
             if points:
                 x = [float(p[0]) for p in points]
                 y = [float(p[1]) for p in points]
@@ -411,21 +337,23 @@ def tracer_graphique(graphique_dict, output_name):
                 print("Erreur polygone : aucun point")
                 x = []
                 y = []
+
             plt.figure(figsize=(7, 4.5))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)
-            plt.axvline(x=0, color='#000000', linewidth=1.8)
             plt.plot(x, y, marker="o", color="#003355")
             plt.title(graphique_dict.get("titre", "Polygone"))
             plt.xlabel(graphique_dict.get("x_label", "Abscisse"))
             plt.ylabel(graphique_dict.get("y_label", "Ordonnée"))
             plt.grid(True)
+
         elif "cercle trigo" in gtype:
             angles = graphique_dict.get("angles", [])
             labels = graphique_dict.get("labels", [])
+
             plt.figure(figsize=(5, 5))
             circle = plt.Circle((0, 0), 1, fill=False, edgecolor='black', linestyle='--')
             ax = plt.gca()
             ax.add_artist(circle)
+
             for i, angle_txt in enumerate(angles):
                 try:
                     a = float(eval(angle_txt, {"pi": np.pi}))
@@ -435,17 +363,21 @@ def tracer_graphique(graphique_dict, output_name):
                 ax.plot([0, x], [0, y], color='#992020')
                 label = labels[i] if i < len(labels) else f"S{i + 1}"
                 ax.text(1.1 * x, 1.1 * y, label, fontsize=12)
+
             ax.set_xlim(-1.5, 1.5)
             ax.set_ylim(-1.5, 1.5)
             plt.axis('off')
             plt.title(titre)
+
         else:
             print("Type graphique non supporté :", gtype)
             return None
+
         plt.tight_layout()
         plt.savefig(chemin_png)
         plt.close()
         return "graphes/" + output_name
+
     except Exception as ee:
         print(f"Erreur générale sauvegarde PNG {chemin_png if 'chemin_png' in locals() else output_name} :", ee)
         return None
@@ -496,36 +428,6 @@ Corrigé détaillé...
 --- EX 8 : Polygone ---
 ---corrigé---
 {"graphique": {"type": "polygone", "points": [[0,0],[5,3],[10,9]], "titre": "Polygone des ECC", "x_label": "Borne", "y_label": "ECC"}}
-
-d'autre exemples:
-Exemple 1 : Fonction, Asymptotes, Réciproque
-
-Soit ( f(x) = (x+1)/(x-2) ).
-Représente dans le même repère :
-
-La courbe de f
-Ses asymptotes
-Sa fonction réciproque f⁻¹(x)
-
-Corrigé attendu : (détail…)
----corrigé---
-
-{"graphique": { "type": "multi", "curves": [ {"type": "fonction", "expression": "(x+1)/(x-2)", "x_min": -5, "x_max": 7, "label": "f(x)"}, {"type": "asymptote", "sens": "verticale", "x": 2, "label": "x=2"}, {"type": "asymptote", "sens": "horizontale", "y": 1, "label": "y=1"}, {"type": "fonction", "expression": "(x-2)/(x+1)", "x_min": -5, "x_max": 7, "style":"--", "label": "f⁻¹(x)"} ], "titre": "Courbe f, asymptotes, réciproque" }}
-
-Exemple 2 : ECC, ECD (statistique)
-
-Les effectifs cumulés croissants (ECC) et décroissants (ECD) d’une série donnée sont donnés par… Trace dans le même repère les diagrammes ECC (points et segments) et ECD (segments pointillés).
-
----corrigé---
-
-{"graphique": { "type": "multi", "curves": [ {"type": "ecc", "points_x": [0,5,10,15], "points_y": [3,8,17,20], "label": "ECC"}, {"type": "ecd", "points_x": [0,5,10,15], "points_y": [20,17,12,3], "label": "ECD", "style":"--"} ], "titre": "Diagrammes ECC et ECD sur la même figure" }}
-Exemple 3 : Polygones plusieurs séries
-
-On considère deux séries statistiques…
-
----corrigé---
-
-{"graphique": { "type": "multi", "curves": [ {"type":"polygone","points":[[0,1],[5,3],[10,4],[15,8]],"label":"Série A"}, {"type":"polygone","points":[[0,2],[5,4],[10,5],[15,11]],"label":"Série B", "style": "--"} ], "titre": "Polygone séries A et B" }}
 
 Rappels :
 - Si plusieurs graphiques, recommence cette structure à chaque question concernée.
@@ -587,10 +489,10 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt_ia}
         ],
-        "temperature": 0.1,
+        "temperature": 0.12,
         "max_tokens": 4000,
-        "top_p": 0.9,
-        "frequency_penalty": 0.1
+        "top_p": 0.3,
+        "frequency_penalty": 0.2
     }
 
     try:
@@ -748,3 +650,4 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         except:
             pass
         return False
+
