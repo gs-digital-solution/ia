@@ -16,8 +16,7 @@ from django.utils.safestring import mark_safe
 from celery import shared_task
 
 
-# ==============
-# UTILITAIRES TEXTE / LATEX / TABLEAU (inchangés)
+# --- Sanitation Latex/Table/Markdown utils ---
 def flatten_multiline_latex_blocks(text):
     if not text:
         return ""
@@ -133,7 +132,7 @@ def generate_corrige_html(corrige_text):
         elif re.match(r'^[a-z]\)', line):
             html_output.append(f'<p><strong>{line}</strong></p>')
             i += 1
-        elif line.startswith('•') or line.startswith('-') or line.startswith('•'):
+        elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
             html_output.append(f'<p>{line}</p>')
             i += 1
         elif '\\(' in line or '\\[' in line:
@@ -148,8 +147,7 @@ def generate_corrige_html(corrige_text):
     return mark_safe("".join(html_output))
 
 
-# ==============
-# EXTRACTION TEXTE/FICHIER
+# --- Extraction fichiers ---
 def extraire_texte_pdf(fichier_path):
     try:
         texte = extract_text(fichier_path)
@@ -200,8 +198,7 @@ def extraire_texte_fichier(fichier_field):
     return texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
 
 
-# ==============
-# DESSIN DE GRAPHIQUES
+# --- Tracé des graphiques simples (avant multi-courbes) ---
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
         graphique_dict = graphique_dict['graphique']
@@ -212,7 +209,7 @@ def tracer_graphique(graphique_dict, output_name):
     def safe_float(expr):
         try:
             return float(eval(str(expr), {"_builtins": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
-        except Exception as e:
+        except Exception:
             try:
                 return float(expr)
             except Exception:
@@ -224,8 +221,8 @@ def tracer_graphique(graphique_dict, output_name):
         chemin_png = os.path.join(dossier, output_name)
 
         if "fonction" in gtype:
-            x_min = safe_float(graphique_dict.get("x_min", -2))
-            x_max = safe_float(graphique_dict.get("x_max", 4))
+            x_min = safe_float(graphique_dict.get("x_min", -2)) or -2
+            x_max = safe_float(graphique_dict.get("x_max", 4)) or 4
             expression = graphique_dict.get("expression", "x")
             x = np.linspace(x_min, x_max, 400)
             expr_patch = expression.replace('^', '*')
@@ -241,7 +238,7 @@ def tracer_graphique(graphique_dict, output_name):
                 if np.isscalar(y):
                     y = np.full_like(x, y)
             except Exception as e:
-                print(f"Erreur tracé fonction : {e}")
+                print(f"Erreur tracé expression: {e}")
                 return None
 
             plt.figure(figsize=(6, 4))
@@ -259,8 +256,6 @@ def tracer_graphique(graphique_dict, output_name):
             eff = [float(e) for e in eff]
 
             plt.figure(figsize=(7, 4.5))
-            plt.axhline(y=0, color='#000000', linewidth=1.8)  # Axe des abscisses
-            plt.axvline(x=0, color='#000000', linewidth=1.8)  # Axe des ordonnées
             plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.9)
             plt.xticks(x_pos, labels, rotation=35)
             plt.title(titre)
@@ -383,8 +378,7 @@ def tracer_graphique(graphique_dict, output_name):
         return None
 
 
-# ===========================
-# PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
+# --- PROMPT PAR DEFAUT avec EXEMPLES JSON ---
 DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
 
 Règles :
@@ -400,12 +394,10 @@ Corrigé détaillé...
 {"graphique": {"type": "fonction", "expression": "x*2 - 2*x + 1", "x_min": -1, "x_max": 3, "titre": "Courbe parabole"}}
 
 --- EX 2 : Cercle trigo ---
-...
 ---corrigé---
 {"graphique": {"type":"cercle trigo", "angles":["-pi/4","pi/4"], "labels":["S1","S2"], "titre":"Solutions trigonométriques"}}
 
 --- EX 3 : Histogramme ---
-...
 ---corrigé---
 {"graphique": {"type": "histogramme", "intervalles": ["0-5","5-10","10-15"], "effectifs":[3,5,7], "titre":"Histogramme des effectifs"}}
 
@@ -417,28 +409,10 @@ Corrigé détaillé...
 ---corrigé---
 {"graphique": {"type":"nuage de points","x":[1,2,3,4],"y":[2,5,7,3],"titre":"Nuage"}}
 
---- EX 6 : Effectifs cumulés ---
----corrigé---
-{"graphique": {"type":"effectifs cumulés","x":[5,10,15,20],"y":[3,9,16,20],"titre":"Effectifs cumulés"}}
-
---- EX 7 : Diagramme circulaire ---
----corrigé---
-{"graphique":{"type":"camembert","categories":["L1","L2","L3"],"effectifs":[4,6,5],"titre":"Répartition"}}
-
---- EX 8 : Polygone ---
----corrigé---
-{"graphique": {"type": "polygone", "points": [[0,0],[5,3],[10,9]], "titre": "Polygone des ECC", "x_label": "Borne", "y_label": "ECC"}}
-
-Rappels :
-- Si plusieurs graphiques, recommence cette structure à chaque question concernée.
-- Pas de texte entre ---corrigé--- et le JSON.
-- Le JSON est obligatoire dès qu'un tracé est demandé.
-
-"Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python. Pour les listes/types, toujours notation JSON [ ... ] et jamais { ... } sauf pour des objets. N’insère JAMAIS de virgule en trop."
+...etc.
 """
 
 
-# ===========================
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
                                     demande=None):
     if lecons_contenus is None:
@@ -446,7 +420,6 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     if exemples_corriges is None:
         exemples_corriges = []
 
-    # Prompt spécifique, ou général par défaut
     system_prompt = DEFAULT_SYSTEM_PROMPT
     exemple_prompt = ""
     consignes_finales = "Format de réponse strict : LaTeX pour les maths, Markdown pour les tableaux"
@@ -504,15 +477,15 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
             return error_msg, None
 
         output = response_data['choices'][0]['message']['content']
+
+        # Robuste pour JSON juste après ---corrigé---
+        regex_all_json = re.findall(r'---corrigé---\s\n*({[\s\S]+?})', output)
+        graph_list = []
+
         print("\n=========== DEBUT OUTPUT HTML ===========\n")
         print(output)
         print("\n=========== FIN OUTPUT HTML =============\n")
-
-        # Analyse et génération graphique dans le corrigé
-        # Nouvelle regex robuste : capture le JSON qui suit ---corrigé--- (prend en compte espaces/retours à la ligne)
-        regex_all_json = re.findall(r'---corrigé---\s*\n*({[\s\S]+?})', output)
-        graph_list = []
-        print("DEBUG JSONs détectés:", regex_all_json)  # Optionnel pour debug
+        print("DEBUG JSONs détectés:", regex_all_json)
 
         if regex_all_json:
             corrige_txt = output
@@ -520,31 +493,30 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
             for idx, found_json in enumerate(regex_all_json, 1):
                 try:
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
-                    # Nettoyage du JSON généré par l'IA (supprime virgules parasites, espaces, caractères spéciaux)
                     sjson = re.sub(r'},\s*$', '}', sjson)
                     sjson = re.sub(r',\s*}', '}', sjson)
                     sjson = re.sub(r',\s*\]', ']', sjson)
 
-                    # PATCH : Ajoute les accolades/crochets fermants manquants à la fin si besoin
+                    # Patch : Ajoute accolades/crochets fermants si manquants
                     nb_open = sjson.count("{")
                     nb_close = sjson.count("}")
                     if nb_close < nb_open:
                         sjson = sjson + "}" * (nb_open - nb_close)
+
                     nb_open = sjson.count("[")
                     nb_close = sjson.count("]")
                     if nb_close < nb_open:
                         sjson = sjson + "]" * (nb_open - nb_close)
-                    # Debug : affiche après patch, avant le parsing JSON
+
                     print('DEBUG PATCHED sjson:', sjson)
                     graph_dict = json.loads(sjson)
-                    output_name = f"graphique{idx}_{int(1000 * np.random.rand())}.png"
+                    output_name = f"graphique{idx}{int(1000 * np.random.rand())}.png"
                     img_path = tracer_graphique(graph_dict, output_name)
 
                     if img_path:
                         abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
                         img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
 
-                        # Remplace aussi le tag ---corrigé--- juste avant ce JSON (tous formats possibles)
                         for tag in [
                             f"---corrigé---\n{found_json}",
                             f"---corrigé---\r\n{found_json}",
