@@ -562,7 +562,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
             {"role": "user", "content": prompt_ia}
         ],
         "temperature": 0.12,
-        "max_tokens": 4000,
+        "max_tokens": 6000,
         "top_p": 0.3,
         "frequency_penalty": 0.2
     }
