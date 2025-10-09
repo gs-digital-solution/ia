@@ -381,23 +381,6 @@ def tracer_graphique(graphique_dict, output_name):
 # --- PROMPT PAR DEFAUT avec EXEMPLES JSON ---
 DEFAULT_SYSTEM_PROMPT = r"""
 Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
-
-Règles de présentation du corrigé (à respecter STRICTEMENT) :
-- Chaque exercice commence par un titre en gras, *seul sur sa ligne*, sous la forme:  
-    **EXERCICE N**
-  avec deux étoiles (markdown) et N le numéro (si plusieurs exercices).
-- À l’intérieur de chaque exercice, chaque question commence par "n - ... :", avec n le numéro de question et un intitulé court (pas de réécriture d’énoncé complet).
-    Exemple:  
-      1 - Calcul de la vitesse :
-      [résolution...]
-    ou
-      2 - Interprétation :
-      [développement...]
-  Laisse une ligne blanche après chaque question/résolution.
-
-- Entre deux exercices, laisse *au moins deux lignes blanches* (\n\n).
-- N’entremêle jamais plusieurs exercices ou questions.
-
 - **Dès qu’un exercice demande un graphique ou un tracé, finis le paragraphe avec la balise ---corrigé--- sur une ligne, et sur la ligne qui suit, le JSON du graphique au format ci-dessous.**
 - **N’utilise que des doubles guillemets dans ton JSON, jamais de simples guillemets.**
 
