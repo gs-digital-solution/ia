@@ -37,7 +37,13 @@ from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from correction.models import AppConfig
 from rest_framework.response import Response
 
-
+def postprocess_correction_structure(txt):
+    corriged = re.sub(r'\*\*EXERCICE\s*(\d+)\*\*', r'<h2 style="font-weight: bold; margin-top: 35px;">EXERCICE \1</h2>', txt)
+    corriged = re.sub(r'(</h2>)', r'\1<br>', corriged)
+    corriged = re.sub(r'^(\d+) ?- ?', r'<b>\1 -</b> ', corriged, flags=re.MULTILINE)
+    corriged = re.sub(r'(<b>\d+ -</b> .*?)(?=\n\d+ -|$)', r'\1<br>', corriged, flags=re.DOTALL)
+    corriged = re.sub(r'(</h2>)(.*?)<h2', r'\1<br><br><h2', corriged, flags=re.DOTALL)
+    return corriged
 
 
 class UserRegisterAPIView(APIView):
@@ -445,6 +451,7 @@ class CorrigeHTMLView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
+        raw = postprocess_correction_structure(raw)
         latex = detect_and_format_math_expressions(raw)
         html_body = generate_corrige_html(latex)
 
@@ -463,6 +470,7 @@ class CorrigePDFView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
+        raw = postprocess_correction_structure(raw)
         latex = detect_and_format_math_expressions(raw)
         html_body = generate_corrige_html(latex)
 
