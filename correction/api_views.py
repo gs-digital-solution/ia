@@ -1,4 +1,3 @@
-
 # 1) VUE PAYS et SOUS SYSTEME DEPUIS RESOURCES/VIEWQ.PY
 #from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 #LA SUITE DES IMPORTS
@@ -37,13 +36,7 @@ from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from correction.models import AppConfig
 from rest_framework.response import Response
 
-def postprocess_correction_structure(txt):
-    corriged = re.sub(r'\*\*EXERCICE\s*(\d+)\*\*', r'<h2 style="font-weight: bold; margin-top: 35px;">EXERCICE \1</h2>', txt)
-    corriged = re.sub(r'(</h2>)', r'\1<br>', corriged)
-    corriged = re.sub(r'^(\d+) ?- ?', r'<b>\1 -</b> ', corriged, flags=re.MULTILINE)
-    corriged = re.sub(r'(<b>\d+ -</b> .*?)(?=\n\d+ -|$)', r'\1<br>', corriged, flags=re.DOTALL)
-    corriged = re.sub(r'(</h2>)(.*?)<h2', r'\1<br><br><h2', corriged, flags=re.DOTALL)
-    return corriged
+
 
 
 class UserRegisterAPIView(APIView):
@@ -71,14 +64,14 @@ class UserLoginAPIView(APIView):
         user = CustomUser.objects.filter(whatsapp_number=whatsapp_number).first()
         if not user or not user.check_password(password):
             return Response({"success": False, "error": "Identifiants invalides."}, status=401)
-        # Blocage device multi-login :
+        # Blocage device multi-login :
         if user.device_id and user.device_id != device_id:
             DeviceConnectionHistory.objects.create(user=user, device_id=device_id, successful=False)
             return Response({
                 "success": False,
                 "error": "Ce compte est déjà utilisé sur un autre appareil. Demandez une migration auprès du support via l’interface d’assistance."
             }, status=403)
-        # Première connexion ou device ok :
+        # Première connexion ou device ok :
         if not user.device_id:
             user.device_id = device_id
             user.save()
@@ -451,7 +444,6 @@ class CorrigeHTMLView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
-        raw = postprocess_correction_structure(raw)
         latex = detect_and_format_math_expressions(raw)
         html_body = generate_corrige_html(latex)
 
@@ -470,7 +462,6 @@ class CorrigePDFView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
-        raw = postprocess_correction_structure(raw)
         latex = detect_and_format_math_expressions(raw)
         html_body = generate_corrige_html(latex)
 
@@ -500,3 +491,4 @@ class AppConfigAPIView(APIView):
             "correction_enabled": app_config.correction_enabled,
             "message_bloquant": app_config.message_bloquant,
         })
+
