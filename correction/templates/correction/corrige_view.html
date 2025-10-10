@@ -2,104 +2,259 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ titre_corrige }}</title>
 
-  <script id="MathJax-script" defer
-    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
-  </script>
+  <!-- MathJax Configuration CORRECTE -->
   <script>
-    window.addEventListener('load', () => {
-      if (window.MathJax) MathJax.typesetPromise();
-    });
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']],
+        processEscapes: true,
+        tags: 'ams'
+      },
+      svg: {
+        fontCache: 'global'
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        renderActions: {
+          addMenu: [0, '', '']
+        }
+      }
+    };
   </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
 
   <style>
-    /* Reset */
-    * { box-sizing:border-box; margin:0; padding:0; }
+    /* RESET ET BASE */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
-    /* Corps 100% largeur et police très grande */
     html, body {
-      width:100%; height:100%;
-      font-family:'Segoe UI',sans-serif;
-      font-size:36px;            /* taille globale augmentée */
-      line-height:1.4;
-      background:#f0f4f5;
-      padding-bottom:100px;      /* place pour footer */
+      width: 100%;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 14px; /* TAILLE NORMALE */
+      line-height: 1.6;
+      background: #f8f9fa;
+      color: #333;
+      padding-bottom: 60px;
     }
 
-    /* Header */
+    /* HEADER PROFESSIONNEL */
     .header {
-      position:sticky; top:0;
-      background:#208060; color:#fff;
-      padding:20px; text-align:center;
-      font-size:40px;
-      z-index:10;
+      background: linear(135deg, #208060, #2b8074);
+      color: white;
+      padding: 20px 30px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: 600;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
 
-    /* Conteneur full-width */
+    /* CONTENEUR PRINCIPAL */
     .container {
-      width:100% !important;
-      max-width:none !important;
-      padding:0 12px;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
     }
 
-    /* Card full-width */
+    /* CARTE DE CONTENU */
     .card {
-      background:#fff; border-radius:8px;
-      padding:32px; margin:20px 0;
-      box-shadow:0 2px 8px rgba(0,0,0,0.05);
-      width:100%;
+      background: white;
+      border-radius: 12px;
+      padding: 40px;
+      margin: 20px 0;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      border: 1px solid #e9ecef;
     }
 
-    /* Titres */
-    .card h2, .card h3 {
-      font-size:38px; color:#2b8074; margin-top:24px;
-      word-wrap: break-word;
+    /* TYPOGRAPHIE HIÉRARCHISÉE */
+    .card h1 {
+      font-size: 24px;
+      color: #208060;
+      margin: 30px 0 20px 0;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e9ecef;
+      font-weight: 700;
     }
 
-    /* Paragraphes */
+    .card h2 {
+      font-size: 20px;
+      color: #2b8074;
+      margin: 25px 0 15px 0;
+      font-weight: 600;
+    }
+
+    .card h3 {
+      font-size: 17px;
+      color: #355e7d;
+      margin: 20px 0 12px 0;
+      font-weight: 600;
+    }
+
     .card p {
-      font-size:36px; margin:24px 0;
-      word-wrap: break-word; overflow-wrap: break-word;
+      font-size: 15px;
+      margin: 15px 0;
+      line-height: 1.7;
+      text-align: justify;
     }
 
-    /* MathJax blocks */
-    .MathJax_Display, .MathJax {
-      white-space: normal !important;
-      overflow-wrap: break-word;
+    /* MATHJAX OPTIMISÉ */
+    .math-display {
+      text-align: center;
+      margin: 25px 0;
+      padding: 15px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border-left: 4px solid #208060;
     }
 
-    /* Tables */
+    .math-inline {
+      display: inline;
+      color: #d63384;
+    }
+
+    mjx-container[jax="SVG"] {
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    /* TABLEAUX AMÉLIORÉS */
+    .table-container {
+      margin: 25px 0;
+      overflow-x: auto;
+    }
+
     table {
-      width:100%; margin:24px 0;
-      border-collapse:collapse; font-size:32px;
-      word-wrap: break-word;
-    }
-    th, td { padding:12px; border:1px solid #ddd; }
-
-    /* Images */
-    img {
-      max-width:100%; height:auto;
-      display:block; margin:24px auto;
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
 
-    /* Footer fixe */
+    th {
+      background: #208060;
+      color: white;
+      padding: 12px 15px;
+      text-align: left;
+      font-weight: 600;
+    }
+
+    td {
+      padding: 10px 15px;
+      border-bottom: 1px solid #e9ecef;
+    }
+
+    tr:nth-child(even) {
+      background: #f8f9fa;
+    }
+
+    /* GRAPHIQUES */
+    .graphique-container {
+      text-align: center;
+      margin: 30px 0;
+      padding: 20px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e9ecef;
+    }
+
+    .graphique-container img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    /* LISTES */
+    ul, ol {
+      margin: 15px 0 15px 30px;
+    }
+
+    li {
+      margin: 8px 0;
+      line-height: 1.6;
+    }
+
+    /* BLOCS DE CODE */
+    .code-block {
+      background: #2d3748;
+      color: #e2e8f0;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+      overflow-x: auto;
+    }
+
+    /* FOOTER */
     .pdf-footer {
-      position:fixed; bottom:0; left:0; right:0;
-      background:#208060; padding:16px; text-align:center;
-      z-index:10;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #208060;
+      padding: 15px;
+      text-align: center;
+      z-index: 100;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
     }
+
     .pdf-footer a {
-      color:#fff; background:#ffa500;
-      padding:12px 24px; border-radius:6px;
-      text-decoration:none; font-size:32px;
+      background: #ffa500;
+      color: white;
+      padding: 12px 30px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.3s ease;
+      display: inline-block;
+    }
+
+    .pdf-footer a:hover {
+      background: #ff8c00;
+      transform: translateY(-2px);
+    }
+
+    /* RESPONSIVE */
+    @media (max-width: 768px) {
+      .container {
+        padding: 15px;
+      }
+
+      .card {
+        padding: 25px;
+        margin: 15px 0;
+      }
+
+      .header {
+        font-size: 16px;
+        padding: 15px 20px;
+      }
+
+      .card h1 { font-size: 20px; }
+      .card h2 { font-size: 18px; }
+      .card h3 { font-size: 16px; }
+      .card p { font-size: 14px; }
     }
   </style>
 </head>
 <body>
 
-  <div class="header">{{ titre_corrige }}</div>
+  <div class="header">
+    {{ titre_corrige }}
+  </div>
 
   <div class="container">
     <div class="card">
@@ -108,10 +263,40 @@
   </div>
 
   <div class="pdf-footer">
-    <a href="{% url 'correction:corrige_pdf_view' soumission_id %}">
-      Télécharger le PDF
+    <a href="{% url 'correction:corrige_pdf_view' soumission_id %}" target="_blank">
+      📄 Télécharger le PDF Final
     </a>
   </div>
+
+  <!-- Script de re-rendu MathJax -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Réinitialise MathJax après chargement du contenu dynamique
+      if (window.MathJax) {
+        MathJax.typesetPromise().catch(function(err) {
+          console.log('MathJax error:', err);
+          // Fallback: retry after a delay
+          setTimeout(() => {
+            if (window.MathJax) MathJax.typesetPromise();
+          }, 1000);
+        });
+      }
+    });
+
+    // Réessaie le rendu quand le contenu est mis à jour
+    const observer = new MutationObserver(function(mutations) {
+      mutations.forEach(function(mutation) {
+        if (mutation.type === 'childList' && window.MathJax) {
+          MathJax.typesetPromise();
+        }
+      });
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  </script>
 
 </body>
 </html>
