@@ -35,6 +35,7 @@ from rest_framework.permissions import AllowAny
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from correction.models import AppConfig
 from rest_framework.response import Response
+import time
 
 
 
@@ -181,6 +182,7 @@ class SoumissionExerciceAPIView(APIView):
                     {"error": "Impossible de débiter un crédit. Réessayez plus tard."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
+
             # Récupérer les données
             pays_id = request.data.get('pays')
             sous_systeme_id = request.data.get('sous_systeme')
@@ -200,9 +202,16 @@ class SoumissionExerciceAPIView(APIView):
                     lecons_ids = []
 
             # Validation des données requises
-            if not matiere_id or not fichier:
+            if not matiere_id:
                 return Response(
-                    {"error": "Matière et fichier sont obligatoires"},
+                    {"error": "Matière obligatoire"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Vérifier qu'on a au moins un énoncé ou un fichier
+            if not fichier and not enonce_texte.strip():
+                return Response(
+                    {"error": "Fichier ou énoncé texte requis"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -231,17 +240,15 @@ class SoumissionExerciceAPIView(APIView):
                 statut='en_attente'
             )
 
-            # Lancer le traitement async
+            # Lancer le traitement async AVEC DÉCOUPAGE
             from .ia_utils import generer_corrige_ia_et_graphique_async
             generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
-
-            # Débiter le crédit (commenté temporairement)
-            debiter_credit_abonnement(request.user)
 
             return Response({
                 "success": True,
                 "soumission_id": soumission.id,
-                "message": "Exercice soumis avec succès. Traitement en cours..."
+                "message": "Exercice soumis avec succès. Traitement en cours...",
+                "info": "Le système détectera automatiquement si un découpage est nécessaire"
             })
 
         except Exception as e:
