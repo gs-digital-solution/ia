@@ -15,6 +15,7 @@ from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
 import base64
+import time
 
 # ============== CONFIGURATION DES APIS ==============
 
@@ -316,12 +317,133 @@ def preparer_contexte_correction(contexte, matiere, type_exercice, lecons_conten
     return contexte_final
 
 
-# ============== FONCTION PRINCIPALE HYBRIDE ==============
+# ============== FONCTIONS POUR LA DÉCOUPE DES SUJETS LONGS ==============
+
+def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, type_exercice=None):
+    """
+    Génère le corrigé pour un seul exercice (pour la découpe)
+    """
+    print("🎯 Génération corrigé pour exercice individuel...")
+
+    system_prompt = DEFAULT_SYSTEM_PROMPT
+    consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
+
+    if matiere and hasattr(matiere, 'prompt_ia'):
+        promptia = matiere.prompt_ia
+        system_prompt = promptia.system_prompt or system_prompt
+        consignes_finales = promptia.consignes_finales or consignes_finales
+
+    prompt_ia = f"""
+{system_prompt}
+
+### CONTEXTE
+{contexte}
+
+### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
+{texte_exercice.strip()}
+
+### CONSIGNES
+{consignes_finales}
+
+**Important : Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
+"""
+
+    if not DEEPSEEK_API_KEY:
+        print("❌ Erreur: Clé DeepSeek non configurée")
+        return "Erreur: Clé API non configurée", None
+
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt_ia}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 4000,  # Suffisant pour un exercice individuel
+        "top_p": 0.9,
+        "frequency_penalty": 0.1
+    }
+
+    try:
+        print("📡 Appel DeepSeek pour exercice...")
+        response = requests.post(api_url, headers=headers, json=data, timeout=90)
+        response_data = response.json()
+
+        if response.status_code != 200:
+            error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
+            print(f"❌ {error_msg}")
+            return error_msg, None
+
+        output = response_data['choices'][0]['message']['content']
+        print(f"✅ Réponse API reçue: {len(output)} caractères")
+
+        # Traitement des graphiques pour cet exercice
+        corrige_final, graphiques = extract_and_process_graphs(output)
+
+        print(f"📊 Exercice traité: {len(graphiques)} graphique(s) généré(s)")
+        return corrige_final, graphiques
+
+    except Exception as e:
+        error_msg = f"Erreur: {str(e)}"
+        print(f"❌ {error_msg}")
+        return error_msg, None
+
+
+def generer_corrige_decoupe(texte_epreuve, contexte, matiere, type_exercice=None):
+    """
+    Traitement par découpage pour les épreuves longues
+    """
+    print("🎯 Traitement AVEC DÉCOUPAGE (épreuve longue)")
+
+    # 1. SÉPARER LES EXERCICES
+    exercices = separer_exercices(texte_epreuve)
+
+    # 2. TRAITER CHAQUE EXERCICE
+    tous_corriges = []
+    tous_graphiques = []
+
+    for i, exercice in enumerate(exercices, 1):
+        print(f"📝 Traitement exercice {i}/{len(exercices)}...")
+
+        # Générer le corrigé pour cet exercice
+        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere, type_exercice)
+
+        if corrige and "Erreur" not in corrige:
+            # Ajouter un titre pour cet exercice
+            titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
+            tous_corriges.append(titre_exercice + corrige)
+
+            if graphiques:
+                tous_graphiques.extend(graphiques)
+            print(f"✅ Exercice {i} traité avec succès")
+        else:
+            print(f"❌ Exercice {i} en erreur: {corrige}")
+
+        # Petite pause pour éviter la surcharge API
+        time.sleep(1)
+
+    # 3. COMBINER TOUS LES CORRIGÉS
+    if tous_corriges:
+        corrige_final = "".join(tous_corriges)
+        print(f"🎉 Découpage terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
+        return corrige_final, tous_graphiques
+    else:
+        print("❌ Aucun corrigé généré")
+        return "Erreur: Aucun corrigé n'a pu être généré", []
+
+
+# ============== FONCTION PRINCIPALE HYBRIDE AVEC DÉCOUPAGE ==============
 
 def generer_corrige_hybride(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None,
                             matiere=None, type_exercice=None, demande=None):
     """
-    NOUVELLE FONCTION PRINCIPALE : GPT-3.5 (extraction) + DeepSeek (correction)
+    NOUVELLE FONCTION PRINCIPALE : GPT-3.5 (extraction) + DeepSeek (correction) AVEC DÉCOUPAGE
     """
     if lecons_contenus is None:
         lecons_contenus = []
@@ -344,11 +466,18 @@ def generer_corrige_hybride(texte_enonce, contexte, lecons_contenus=None, exempl
         except:
             pass
 
-    # Utiliser DeepSeek pour la correction
-    print("🎓 Correction avec DeepSeek...")
-    corrige_txt, graph_list = generer_corrige_avec_deepseek(
-        texte_enonce, contexte, matiere, type_exercice, lecons_contenus
-    )
+    # ✅ DÉCISION INTELLIGENTE : TRAITEMENT DIRECT OU AVEC DÉCOUPAGE
+    print("🔍 Analyse de la longueur du sujet...")
+    tokens_estimes = estimer_tokens(texte_enonce)
+
+    if tokens_estimes < 3000:  # Épreuve courte
+        print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
+        corrige_txt, graph_list = generer_corrige_avec_deepseek(
+            texte_enonce, contexte, matiere, type_exercice, lecons_contenus
+        )
+    else:  # Épreuve longue → DÉCOUPAGE
+        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
+        corrige_txt, graph_list = generer_corrige_decoupe(texte_enonce, contexte, matiere, type_exercice)
 
     print(f"✅ Traitement hybride terminé: {len(corrige_txt)} caractères, {len(graph_list or [])} graphiques")
     return corrige_txt, graph_list
@@ -975,6 +1104,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         type_exercice=None,  # Non disponible dans l'ancienne signature
         demande=demande
     )
+
 
 # ============== TÂCHE ASYNCHRONE MISE À JOUR ==============
 
