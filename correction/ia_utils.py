@@ -14,27 +14,361 @@ import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
+import base64
+
+# ============== CONFIGURATION DES APIS ==============
+
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 
-# ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
+# ============== EXTRACTION AVEC GPT-3.5 TURBO VISION ==============
+
+def extraire_avec_gpt35_vision(image_path, contexte, type_exercice=None):
+    """
+    Utiliser GPT-3.5 Turbo Vision pour l'extraction intelligente
+    """
+    if not OPENAI_API_KEY:
+        print("❌ Clé OpenAI non configurée - Fallback sur OCR standard")
+        return extraire_texte_image_optimise(image_path)
+
+    try:
+        # Encoder l'image en base64
+        with open(image_path, "rb") as image_file:
+            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+
+        # Adapter le prompt selon le type d'exercice
+        prompt_type = ""
+        if type_exercice:
+            prompt_type = f"\nTYPE D'EXERCICE : {type_exercice.nom} - Adaptez l'extraction en conséquence."
+
+        prompt_extraction = f"""
+        CONTEXTE : {contexte}
+        {prompt_type}
+
+        🎯 VOTRE MISSION : Extraire et décrire complètement cet exercice/scanne.
+
+        ### 1. 📝 EXTRACTION TEXTUELLE COMPLÈTE :
+        - Copiez TOUT le texte visible, mot pour mot
+        - Conservez la structure originale (titres, questions, numérotation)
+        - Gardez les formules mathématiques et notations scientifiques
+        - Ne modifiez pas l'ordre ou la hiérarchie
+
+        ### 2. 🖼️ DESCRIPTION DES ÉLÉMENTS VISUELS :
+        - Schémas, diagrammes, graphiques
+        - Formes géométriques et leurs dimensions
+        - Courbes, axes, points remarquables
+        - Légendes, annotations, flèches
+        - Tableaux et leurs structures
+
+        ### 3. 🎓 CONTEXTE PÉDAGOGIQUE :
+        - Difficulté perçue de l'exercice
+        - Thèmes ou concepts abordés
+        - Type de raisonnement requis
+
+        ### 📋 FORMAT DE RÉPONSE STRICTE :
+
+        [TEXTE COMPLET]
+        [Le texte intégral de l'exercice ici...]
+
+        [ÉLÉMENTS VISUELS]
+        [Description détaillée des éléments graphiques...]
+
+        [CONTEXTE PÉDAGOGIQUE]
+        [Analyse du type d'exercice et difficulté...]
+        """
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt_extraction},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 3000,
+                "temperature": 0.1
+            },
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            resultat = response.json()['choices'][0]['message']['content']
+            print(f"✅ GPT-3.5 Vision: Extraction réussie ({len(resultat)} caractères)")
+            return resultat
+        else:
+            print(f"❌ Erreur GPT-3.5: {response.status_code}")
+            return extraire_texte_image_optimise(image_path)
+
+    except Exception as e:
+        print(f"❌ Erreur GPT-3.5 Vision: {e}")
+        return extraire_texte_image_optimise(image_path)
+
+
+# ============== FALLBACK OCR (SI GPT ÉCHoue) ==============
+
+def extraire_avec_ocrspace(image_path):
+    """
+    OCR.space API - 25 000 requêtes/mois gratuites
+    """
+    try:
+        import requests
+        import base64
+
+        with open(image_path, "rb") as image_file:
+            img_base64 = base64.b64encode(image_file.read()).decode()
+
+        payload = {
+            'base64Image': f'data:image/jpeg;base64,{img_base64}',
+            'language': 'fre',
+            'isOverlayRequired': False,
+            'OCREngine': 2
+        }
+
+        response = requests.post(
+            'https://api.ocr.space/parse/image',
+            data=payload,
+            headers={'apikey': 'helloworld'}  # Clé gratuite
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if not result['IsErroredOnProcessing']:
+                texte = result['ParsedResults'][0]['ParsedText']
+                print(f"✅ OCR.space: {len(texte)} caractères")
+                return texte
+        return ""
+    except Exception as e:
+        print(f"❌ OCR.space error: {e}")
+        return ""
+
+
+def extraire_texte_tesseract_ameliore(image_path):
+    """
+    Tesseract amélioré avec pré-traitement
+    """
+    try:
+        image = Image.open(image_path)
+        image = image.convert('L')
+        image = image.filter(ImageFilter.MedianFilter())
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2.0)
+
+        texte = pytesseract.image_to_string(image, lang='fra+eng')
+        print(f"✅ Tesseract amélioré: {len(texte)} caractères")
+        return texte.strip()
+    except Exception as e:
+        print(f"❌ Tesseract error: {e}")
+        return ""
+
+
+def extraire_texte_image_optimise(image_path):
+    """
+    Pipeline de fallback gratuit
+    """
+    strategies = [
+        ("ocrspace", extraire_avec_ocrspace),
+        ("tesseract_ameliore", extraire_texte_tesseract_ameliore),
+    ]
+
+    for nom_strategie, fonction_ocr in strategies:
+        try:
+            texte = fonction_ocr(image_path)
+            if texte and len(texte.strip()) > 20:
+                print(f"✅ Fallback {nom_strategie} réussi")
+                return texte
+        except Exception as e:
+            print(f"❌ {nom_strategie} a échoué: {e}")
+            continue
+
+    return "(Extraction texte limitée - éléments visuels non décrits)"
+
+
+# ============== CORRECTION AVEC DEEPSEEK ==============
+
+def generer_corrige_avec_deepseek(texte_exercice, contexte, matiere=None, type_exercice=None, lecons_contenus=None):
+    """
+    Nouvelle fonction utilisant DeepSeek pour la correction uniquement
+    """
+    if not DEEPSEEK_API_KEY:
+        return "Erreur: Clé DeepSeek non configurée", None
+
+    # Préparer le contexte enrichi
+    contexte_enrichi = preparer_contexte_correction(contexte, matiere, type_exercice, lecons_contenus)
+
+    # CORRECTION : Formule LaTeX corrigée (échappement des backslashes)
+    prompt_correction = f"""
+    {contexte_enrichi}
+
+    ### 📝 EXERCICE À CORRIGER (extrait par vision IA) :
+    {texte_exercice}
+
+    ### 🎯 CONSIGNES DE CORRECTION :
+    1. **Corrigez complètement** l'exercice en expliquant chaque étape
+    2. **Adaptez votre approche** au type d'exercice et niveau
+    3. **Utilisez LaTeX** pour toutes les formules mathématiques : \\(...\\) pour inline et \\[...\\] pour display
+    4. **Incluez des graphiques** si nécessaire avec le format JSON standard
+    5. **Structurez clairement** avec titres et sous-titres
+    6. **Soyez pédagogique** mais concis
+
+    ### 📋 FORMAT DE RÉPONSE :
+    # Correction de l'exercice
+
+    ## 1. [Première question/partie]
+    [Correction détaillée...]
+    [Formules: \\(x = \\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}}\\)]
+
+    ## 2. [Deuxième question/partie]
+    [Correction détaillée...]
+
+    [Graphiques si nécessaire...]
+    """
+
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": contexte_enrichi},
+            {"role": "user", "content": prompt_correction}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 4000,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1
+    }
+
+    try:
+        print("📡 Appel DeepSeek pour correction...")
+        response = requests.post(api_url, headers=headers, json=data, timeout=90)
+        response_data = response.json()
+
+        if response.status_code != 200:
+            error_msg = f"Erreur DeepSeek: {response_data.get('message', 'Pas de détail')}"
+            print(f"❌ {error_msg}")
+            return error_msg, None
+
+        output = response_data['choices'][0]['message']['content']
+        print(f"✅ DeepSeek: Correction générée ({len(output)} caractères)")
+
+        # Traitement des graphiques
+        corrige_final, graphiques = extract_and_process_graphs(output)
+        return corrige_final, graphiques
+
+    except Exception as e:
+        error_msg = f"Erreur API DeepSeek: {str(e)}"
+        print(f"❌ {error_msg}")
+        return error_msg, None
+
+
+def preparer_contexte_correction(contexte, matiere, type_exercice, lecons_contenus):
+    """
+    Préparer le contexte enrichi pour DeepSeek avec tous les paramètres
+    """
+    contexte_base = contexte
+
+    # Ajouter le type d'exercice
+    if type_exercice:
+        contexte_base += f"\nType d'exercice: {type_exercice.nom}"
+
+    # Ajouter les prompts spécifiques de la matière
+    if matiere and hasattr(matiere, 'prompt_ia'):
+        promptia = matiere.prompt_ia
+        system_prompt = promptia.system_prompt or DEFAULT_SYSTEM_PROMPT
+        consignes_finales = promptia.consignes_finales or "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
+    else:
+        system_prompt = DEFAULT_SYSTEM_PROMPT
+        consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
+
+    # Ajouter les leçons si disponibles
+    lecons_text = ""
+    if lecons_contenus:
+        lecons_text = "\n### LEÇONS CONNEXES :\n"
+        for titre, contenu in lecons_contenus[:2]:  # Limiter à 2 leçons max
+            lecons_text += f"**{titre}** : {contenu[:200]}...\n"
+
+    contexte_final = f"""
+    {system_prompt}
+
+    ### CONTEXTE :
+    {contexte_base}
+    {lecons_text}
+
+    ### CONSIGNES FINALES :
+    {consignes_finales}
+    """
+
+    return contexte_final
+
+
+# ============== FONCTION PRINCIPALE HYBRIDE ==============
+
+def generer_corrige_hybride(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None,
+                            matiere=None, type_exercice=None, demande=None):
+    """
+    NOUVELLE FONCTION PRINCIPALE : GPT-3.5 (extraction) + DeepSeek (correction)
+    """
+    if lecons_contenus is None:
+        lecons_contenus = []
+    if exemples_corriges is None:
+        exemples_corriges = []
+
+    print("\n" + "=" * 60)
+    print("🚀 DÉBUT TRAITEMENT HYBRIDE GPT-3.5 + DEEPSEEK")
+    print("=" * 60)
+
+    # Si c'est un fichier image, utiliser GPT-3.5 Vision pour l'extraction
+    if demande and demande.fichier and demande.fichier.name.lower().endswith(('.jpg', '.jpeg', '.png')):
+        print("🖼️ Fichier image détecté - Extraction avec GPT-3.5 Vision")
+        temp_path = sauvegarder_fichier_temporaire(demande.fichier)
+        texte_enonce = extraire_avec_gpt35_vision(temp_path, contexte, type_exercice)
+
+        # Nettoyer le fichier temporaire
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+
+    # Utiliser DeepSeek pour la correction
+    print("🎓 Correction avec DeepSeek...")
+    corrige_txt, graph_list = generer_corrige_avec_deepseek(
+        texte_enonce, contexte, matiere, type_exercice, lecons_contenus
+    )
+
+    print(f"✅ Traitement hybride terminé: {len(corrige_txt)} caractères, {len(graph_list or [])} graphiques")
+    return corrige_txt, graph_list
+
+
+# ============== FONCTIONS EXISTANTES (MAINTENUES) ==============
 
 def separer_exercices(texte_epreuve):
-    """
-    Détecte et sépare automatiquement les exercices d'une épreuve
-    """
+    """Détecte et sépare automatiquement les exercices"""
     if not texte_epreuve:
         return []
 
     print("🔍 Détection des exercices...")
-
-    # Patterns pour détecter le début des exercices
     patterns_separation = [
-        r'Exercice\s+\d+[:.]',  # "Exercice 1:" "Exercice 2."
-        r'EXERCICE\s+\d+[:.]',  # "EXERCICE 1:"
-        r'Partie\s+[IVXLCDM]+[:.]',  # "Partie I:" "Partie II."
-        r'\n\d+[-.)]\s',  # "1. " "2) " "3- "
-        r'\n[a-z]\)\s',  # "a) " "b) "
-        r'Question\s+\d+',  # "Question 1"
+        r'Exercice\s+\d+[:.]',
+        r'EXERCICE\s+\d+[:.]',
+        r'Partie\s+[IVXLCDM]+[:.]',
+        r'\n\d+[-.)]\s',
+        r'\n[a-z]\)\s',
+        r'Question\s+\d+',
     ]
 
     exercices = []
@@ -47,7 +381,6 @@ def separer_exercices(texte_epreuve):
         if not ligne:
             continue
 
-        # Vérifier si cette ligne commence un nouvel exercice
         nouvel_exercice = False
         for pattern in patterns_separation:
             if re.search(pattern, ligne, re.IGNORECASE):
@@ -55,130 +388,37 @@ def separer_exercices(texte_epreuve):
                 break
 
         if nouvel_exercice and exercice_courant:
-            # Sauvegarder l'exercice précédent
             exercices.append('\n'.join(exercice_courant))
             exercice_courant = []
             dans_exercice = True
 
         exercice_courant.append(ligne)
 
-    # Ajouter le dernier exercice
     if exercice_courant:
         exercices.append('\n'.join(exercice_courant))
 
-    # Si aucun exercice détecté, traiter tout comme un seul exercice
     if not exercices:
         exercices = [texte_epreuve]
 
     print(f"✅ {len(exercices)} exercice(s) détecté(s)")
-    for i, ex in enumerate(exercices):
-        print(f"   Exercice {i + 1}: {len(ex)} caractères")
-
     return exercices
 
 
 def estimer_tokens(texte):
-    """
-    Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
-    """
+    """Estimation simple du nombre de tokens"""
     mots = len(texte.split())
     tokens = int(mots / 0.75)
     print(f"📊 Estimation tokens: {mots} mots → {tokens} tokens")
     return tokens
 
 
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
-    """
-    Génère le corrigé pour un seul exercice
-    """
-    print("🎯 Génération corrigé pour exercice individuel...")
-
-    system_prompt = DEFAULT_SYSTEM_PROMPT
-    consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
-
-    if matiere and hasattr(matiere, 'prompt_ia'):
-        promptia = matiere.prompt_ia
-        system_prompt = promptia.system_prompt or system_prompt
-        consignes_finales = promptia.consignes_finales or consignes_finales
-
-    prompt_ia = f"""
-{system_prompt}
-
-### CONTEXTE
-{contexte}
-
-### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
-{texte_exercice.strip()}
-
-### CONSIGNES
-{consignes_finales}
-
-**Important : Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
-"""
-
-    api_key = os.getenv('DEEPSEEK_API_KEY')
-    if not api_key:
-        print("❌ Erreur: Clé API non configurée")
-        return "Erreur: Clé API non configurée", None
-
-    api_url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt_ia}
-        ],
-        "temperature": 0.1,
-        "max_tokens": 4000,  # Suffisant pour un exercice individuel
-        "top_p": 0.9,
-        "frequency_penalty": 0.1
-    }
-
-    try:
-        print("📡 Appel API DeepSeek pour exercice...")
-        response = requests.post(api_url, headers=headers, json=data, timeout=90)
-        response_data = response.json()
-
-        if response.status_code != 200:
-            error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
-            print(f"❌ {error_msg}")
-            return error_msg, None
-
-        output = response_data['choices'][0]['message']['content']
-        print(f"✅ Réponse API reçue: {len(output)} caractères")
-
-        # Traitement des graphiques pour cet exercice
-        corrige_final, graphiques = extract_and_process_graphs(output)
-
-        print(f"📊 Exercice traité: {len(graphiques)} graphique(s) généré(s)")
-        return corrige_final, graphiques
-
-    except Exception as e:
-        error_msg = f"Erreur: {str(e)}"
-        print(f"❌ {error_msg}")
-        return error_msg, None
-
-
 def extract_and_process_graphs(output):
-    """
-    Extrait et traite les graphiques d'un corrigé
-    """
+    """Extrait et traite les graphiques d'un corrigé"""
     print("🖼️ Extraction des graphiques...")
-
     graphs_data = []
     final_text = output
 
     pattern = r'---corrigé---\s*\n*\s*(\{[\s\S]*?\})(?=\s*$|\s*---|\s*\n\s*\w)'
-    matches = re.finditer(pattern, output)
-
-    print(f"🔍 Recherche de JSON graphique: {len(list(matches))} correspondance(s) trouvée(s)")
-
-    # Réinitialiser l'itérateur
     matches = re.finditer(pattern, output)
 
     for match_idx, match in enumerate(matches):
@@ -186,13 +426,10 @@ def extract_and_process_graphs(output):
         print(f"📦 JSON brut {match_idx + 1}: {json_str[:100]}...")
 
         try:
-            # Nettoyage du JSON
             json_str = re.sub(r"'", '"', json_str)
             json_str = re.sub(r'(\w+):', r'"\1":', json_str)
             json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
             json_str = re.sub(r'\s+', ' ', json_str)
-
-            print(f"🧹 JSON nettoyé {match_idx + 1}: {json_str[:100]}...")
 
             graph_data = json.loads(json_str)
             graphs_data.append(graph_data)
@@ -208,7 +445,6 @@ def extract_and_process_graphs(output):
             else:
                 final_text = final_text.replace(match.group(0),
                                                 '<div class="graphique-error">Erreur génération graphique</div>')
-                print(f"❌ Erreur génération graphique {match_idx + 1}")
 
         except Exception as e:
             print(f"❌ Erreur parsing JSON graphique {match_idx + 1}: {e}")
@@ -217,8 +453,6 @@ def extract_and_process_graphs(output):
     print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s) traité(s)")
     return final_text, graphs_data
 
-
-# ============== UTILITAIRES TEXTE / LATEX / TABLEAU ==============
 
 def flatten_multiline_latex_blocks(text):
     if not text:
@@ -350,8 +584,6 @@ def generate_corrige_html(corrige_text):
     return mark_safe("".join(html_output))
 
 
-# ============== EXTRACTION TEXTE/FICHIER ==============
-
 def extraire_texte_pdf(fichier_path):
     try:
         texte = extract_text(fichier_path)
@@ -394,7 +626,8 @@ def extraire_texte_fichier(fichier_field):
     if ext == ".pdf":
         texte = extraire_texte_pdf(temp_path)
     elif ext in [".jpg", ".jpeg", ".png"]:
-        texte = extraire_texte_image(temp_path)
+        # MAINTENANT UTILISE GPT-3.5 VISION EN PREMIER
+        texte = extraire_avec_gpt35_vision(temp_path, "Extraction d'exercice")
 
     try:
         os.remove(temp_path)
@@ -405,8 +638,6 @@ def extraire_texte_fichier(fichier_field):
     print(f"📁 Extraction fichier terminée: {len(resultat)} caractères")
     return resultat
 
-
-# ============== DESSIN DE GRAPHIQUES ==============
 
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
@@ -590,6 +821,18 @@ def tracer_graphique(graphique_dict, output_name):
         return None
 
 
+def sauvegarder_fichier_temporaire(fichier_field):
+    """Sauvegarde un fichier dans un emplacement temporaire"""
+    temp_dir = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+
+    with open(temp_path, "wb") as f:
+        for chunk in fichier_field.chunks():
+            f.write(chunk)
+
+    return temp_path
+
+
 # ============== PROMPT PAR DEFAUT ==============
 
 DEFAULT_SYSTEM_PROMPT = r"""
@@ -708,228 +951,37 @@ Rappels :
 """
 
 
-# ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
+# ============== ALIAS POUR COMPATIBILITÉ ==============
 
-def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere):
+def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None,
+                                    matiere=None, demande=None):
     """
-    Traitement direct pour les épreuves courtes (ANCIENNE MÉTHODE)
-    """
-    print("🎯 Traitement DIRECT (épreuve courte)")
-
-    system_prompt = DEFAULT_SYSTEM_PROMPT
-    exemple_prompt = ""
-    consignes_finales = "Format de réponse strict : LaTeX pour les maths, Markdown pour les tableaux"
-
-    if matiere and hasattr(matiere, 'prompt_ia'):
-        promptia = matiere.prompt_ia
-        system_prompt = promptia.system_prompt or system_prompt
-        exemple_prompt = promptia.exemple_prompt or exemple_prompt
-        consignes_finales = promptia.consignes_finales or consignes_finales
-
-    lecons = [f"### {t}\n{c}" for t, c in lecons_contenus[:3]]
-    exemples = exemples_corriges[:2]
-
-    prompt_ia = f"""### CONTEXTE DU COURS
-{contexte}
-
-### LEÇONS UTILES
-{"".join(lecons) if lecons else 'Aucune leçon supplémentaire'}
-
-### EXEMPLES DE CORRIGÉS
-{exemple_prompt if exemple_prompt else ("".join(exemples) if exemples else 'Aucun exemple fourni')}
-
-### EXERCICE À CORRIGER
-{texte_enonce.strip()}
-
-### CONSIGNES FINALES
-{consignes_finales}
-"""
-
-    api_key = os.getenv('DEEPSEEK_API_KEY')
-    api_url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt_ia}
-        ],
-        "temperature": 0.12,
-        "max_tokens": 6000,
-        "top_p": 0.3,
-        "frequency_penalty": 0.2
-    }
-
-    try:
-        print("📡 Appel API DeepSeek (traitement direct)...")
-        response = requests.post(api_url, headers=headers, json=data, timeout=120)
-        response_data = response.json()
-
-        if response.status_code != 200:
-            error_msg = f"Erreur API DeepSeek: {response_data.get('message', 'Pas de détail')}"
-            print(f"❌ {error_msg}")
-            return error_msg, None
-
-        output = response_data['choices'][0]['message']['content']
-        print(f"✅ Réponse API reçue: {len(output)} caractères")
-
-        print("\n" + "=" * 50)
-        print("DEBUG: OUTPUT BRUT DE L'IA")
-        print("=" * 50)
-        print(output)
-        print("=" * 50)
-
-        # Traitement des graphiques
-        regex_all_json = re.findall(r'---corrigé---\s\n*({[\s\S]+?})', output)
-        graph_list = []
-
-        print(f"🔍 JSONs détectés: {len(regex_all_json)}")
-
-        if regex_all_json:
-            corrige_txt = output
-            for idx, found_json in enumerate(regex_all_json, 1):
-                try:
-                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
-                    sjson = re.sub(r'},\s*$', '}', sjson)
-                    sjson = re.sub(r',\s*}', '}', sjson)
-                    sjson = re.sub(r',\s*\]', ']', sjson)
-
-                    nb_open = sjson.count("{")
-                    nb_close = sjson.count("}")
-                    if nb_close < nb_open:
-                        sjson = sjson + "}" * (nb_open - nb_close)
-
-                    nb_open = sjson.count("[")
-                    nb_close = sjson.count("]")
-                    if nb_close < nb_open:
-                        sjson = sjson + "]" * (nb_open - nb_close)
-
-                    print(f'DEBUG PATCHED sjson {idx}: {sjson[:200]}...')
-                    graph_dict = json.loads(sjson)
-                    output_name = f"graphique{idx}{int(1000 * np.random.rand())}.png"
-                    img_path = tracer_graphique(graph_dict, output_name)
-
-                    if img_path:
-                        abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                        img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
-
-                        for tag in [
-                            f"---corrigé---\n{found_json}",
-                            f"---corrigé---\r\n{found_json}",
-                            f"---corrigé--- {found_json}",
-                            f"---corrigé---{found_json}",
-                            found_json
-                        ]:
-                            corrige_txt = corrige_txt.replace(tag, img_tag, 1)
-                    else:
-                        for tag in [
-                            f"---corrigé---\n{found_json}",
-                            f"---corrigé---\r\n{found_json}",
-                            f"---corrigé--- {found_json}",
-                            f"---corrigé---{found_json}",
-                            found_json
-                        ]:
-                            corrige_txt = corrige_txt.replace(tag, "[Erreur génération graphique]", 1)
-
-                    graph_list.append(graph_dict)
-
-                except Exception as e:
-                    print(f"❌ Erreur parsing JSON graphique {idx}: {e}")
-                    continue
-
-            print(f"✅ Traitement direct terminé: {len(graph_list)} graphique(s)")
-            return corrige_txt.strip(), graph_list
-
-        print("✅ Traitement direct terminé (sans graphiques)")
-        return output.strip(), None
-
-    except Exception as e:
-        error_msg = f"Erreur API: {str(e)}"
-        print(f"❌ {error_msg}")
-        return error_msg, None
-
-
-def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
-    """
-    Traitement par découpage pour les épreuves longues
-    """
-    print("🎯 Traitement AVEC DÉCOUPAGE (épreuve longue)")
-
-    # 1. SÉPARER LES EXERCICES
-    exercices = separer_exercices(texte_epreuve)
-
-    # 2. TRAITER CHAQUE EXERCICE
-    tous_corriges = []
-    tous_graphiques = []
-
-    for i, exercice in enumerate(exercices, 1):
-        print(f"📝 Traitement exercice {i}/{len(exercices)}...")
-
-        # Générer le corrigé pour cet exercice
-        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere)
-
-        if corrige and "Erreur" not in corrige:
-            # Ajouter un titre pour cet exercice
-            titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
-            tous_corriges.append(titre_exercice + corrige)
-
-            if graphiques:
-                tous_graphiques.extend(graphiques)
-            print(f"✅ Exercice {i} traité avec succès")
-        else:
-            print(f"❌ Exercice {i} en erreur: {corrige}")
-
-        # Petite pause pour éviter la surcharge API
-        import time
-        time.sleep(1)
-
-    # 3. COMBINER TOUS LES CORRIGÉS
-    if tous_corriges:
-        corrige_final = "".join(tous_corriges)
-        print(f"🎉 Découpage terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
-        return corrige_final, tous_graphiques
-    else:
-        print("❌ Aucun corrigé généré")
-        return "Erreur: Aucun corrigé n'a pu être généré", []
-
-
-def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
-                                    demande=None):
-    """
-    Nouvelle version avec découpage intelligent des épreuves longues
+    Alias pour compatibilité avec l'ancien code - utilisé par views.py
     """
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
         exemples_corriges = []
 
-    print("\n" + "=" * 60)
-    print("🚀 DÉBUT TRAITEMENT INTELLIGENT")
-    print("=" * 60)
-    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+    print("🔁 Utilisation de l'alias de compatibilité")
 
-    # 1. ESTIMER LA COMPLEXITÉ
-    tokens_estimes = estimer_tokens(texte_enonce)
+    # Appeler la nouvelle fonction hybride
+    return generer_corrige_hybride(
+        texte_enonce=texte_enonce,
+        contexte=contexte,
+        lecons_contenus=lecons_contenus,
+        exemples_corriges=exemples_corriges,
+        matiere=matiere,
+        type_exercice=None,  # Non disponible dans l'ancienne signature
+        demande=demande
+    )
 
-    # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
-    if tokens_estimes < 3000:  # Épreuve courte
-        print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
-        return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere)
-    else:  # Épreuve longue
-        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        return generer_corrige_decoupe(texte_enonce, contexte, matiere)
-
-
-# ============== TÂCHE ASYNCHRONE ==============
+# ============== TÂCHE ASYNCHRONE MISE À JOUR ==============
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
-    from resources.models import Matiere
+    from resources.models import Matiere, TypeExercice
 
     try:
         demande = DemandeCorrection.objects.get(id=demande_id)
@@ -939,6 +991,9 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 20
         soumission.save()
 
+        # Récupérer le type d'exercice (NOUVEAU)
+        type_exercice = demande.type_exercice
+
         texte_enonce = ""
         if demande.fichier:
             texte_enonce = extraire_texte_fichier(demande.fichier)
@@ -946,6 +1001,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             texte_enonce = demande.enonce_texte or ""
 
         print(f"📥 Texte à traiter: {len(texte_enonce)} caractères")
+        print(f"🎯 Type d'exercice: {type_exercice.nom if type_exercice else 'Non spécifié'}")
 
         soumission.statut = 'analyse_ia'
         soumission.progression = 40
@@ -954,14 +1010,24 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
         contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
 
+        # Préparer les leçons
+        lecons_contenus = []
+        if demande.lecons.exists():
+            for lecon in demande.lecons.all()[:3]:  # Limiter à 3 leçons
+                lecons_contenus.append((lecon.titre, lecon.contenu or ""))
+
         soumission.statut = 'generation_graphiques'
         soumission.progression = 60
         soumission.save()
 
-        corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-            texte_enonce,
-            contexte,
-            matiere=matiere
+        # UTILISER LA NOUVELLE FONCTION HYBRIDE
+        corrige_txt, graph_list = generer_corrige_hybride(
+            texte_enonce=texte_enonce,
+            contexte=contexte,
+            lecons_contenus=lecons_contenus,
+            matiere=matiere,
+            type_exercice=type_exercice,
+            demande=demande
         )
 
         soumission.statut = 'formatage_pdf'
@@ -983,14 +1049,15 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.resultat_json = {
             'corrige_text': corrige_txt,
             'pdf_url': pdf_path,
-            'graphiques': graph_list or []
+            'graphiques': graph_list or [],
+            'type_exercice': type_exercice.nom if type_exercice else None
         }
         soumission.save()
 
         demande.corrigé = corrige_txt
         demande.save()
 
-        print("🎉 TRAITEMENT TERMINÉ AVEC SUCCÈS!")
+        print("🎉 TRAITEMENT HYBRIDE TERMINÉ AVEC SUCCÈS!")
         return True
 
     except Exception as e:
