@@ -28,7 +28,7 @@
   <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
 
   <style>
-    /* RESET ET BASE */
+    /* RESET ET BASE - POLICE AUGMENTÉE */
     * {
       box-sizing: border-box;
       margin: 0;
@@ -38,22 +38,22 @@
     html, body {
       width: 100%;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      font-size: 14px; /* TAILLE NORMALE */
-      line-height: 1.6;
+      font-size: 18px; /* ✅ POLICE AUGMENTÉE (avant: 14px) */
+      line-height: 1.7;
       background: #f8f9fa;
       color: #333;
-      padding-bottom: 60px;
+      padding-bottom: 70px;
     }
 
-    /* HEADER PROFESSIONNEL */
+    /* HEADER PROFESSIONNEL - TEXTE AUGMENTÉ */
     .header {
       background: linear(135deg, #208060, #2b8074);
       color: white;
-      padding: 20px 30px;
+      padding: 25px 30px; /* ✅ PADDING AUGMENTÉ */
       text-align: center;
-      font-size: 18px;
-      font-weight: 600;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      font-size: 22px; /* ✅ TAILLE AUGMENTÉE (avant: 18px) */
+      font-weight: 700; /* ✅ GRAS RENFORCÉ */
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
       position: sticky;
       top: 0;
       z-index: 100;
@@ -63,63 +63,138 @@
     .container {
       max-width: 1200px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 25px; /* ✅ PADDING AUGMENTÉ */
     }
 
-    /* CARTE DE CONTENU */
+    /* CARTE DE CONTENU - ESPACEMENT AUGMENTÉ */
     .card {
       background: white;
       border-radius: 12px;
-      padding: 40px;
-      margin: 20px 0;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      padding: 45px; /* ✅ PADDING AUGMENTÉ (avant: 40px) */
+      margin: 25px 0; /* ✅ MARGIN AUGMENTÉE */
+      box-shadow: 0 6px 25px rgba(0,0,0,0.1);
       border: 1px solid #e9ecef;
     }
 
-    /* TYPOGRAPHIE HIÉRARCHISÉE */
-    .card h1 {
-      font-size: 24px;
+    /* ========== STRUCTURE AMÉLIORÉE ========== */
+    .exercice-separator {
+      margin: 50px 0 25px 0; /* ✅ ESPACEMENT AUGMENTÉ */
+      padding: 20px 0; /* ✅ PADDING AUGMENTÉ */
+      border-top: 4px solid #208060; /* ✅ BORDURE ÉPAISSIE */
+      border-bottom: 2px solid #e0e0e0;
+    }
+
+    .exercice-title {
       color: #208060;
-      margin: 30px 0 20px 0;
-      padding-bottom: 10px;
-      border-bottom: 2px solid #e9ecef;
-      font-weight: 700;
+      font-size: 26px; /* ✅ TAILLE AUGMENTÉE (avant: 24px) */
+      font-weight: 800; /* ✅ GRAS RENFORCÉ */
+      margin: 30px 0 20px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 18px 25px; /* ✅ PADDING AUGMENTÉ */
+      background: linear-gradient(135deg, #f8fff8, #e8f5e8);
+      border-left: 6px solid #208060; /* ✅ BORDURE ÉPAISSIE */
+      border-radius: 10px;
+      text-align: center;
+    }
+
+    .question-block {
+      margin: 35px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 0;
+      background: white;
+      border: 1px solid #f0f0f0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .question-title {
+      color: #2b8074;
+      font-size: 22px; /* ✅ TAILLE AUGMENTÉE (avant: 20px) */
+      font-weight: 700; /* ✅ GRAS RENFORCÉ */
+      margin: 0;
+      padding: 18px 20px; /* ✅ PADDING AUGMENTÉ */
+      background: linear-gradient(135deg, #f0f8f0, #e0f0e0);
+      border-left: 5px solid #2b8074;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .question-content {
+      padding: 25px; /* ✅ PADDING AUGMENTÉ */
+    }
+
+    .subquestion {
+      margin: 25px 0 15px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 15px 18px; /* ✅ PADDING AUGMENTÉ */
+      background: #f0f8ff;
+      border-left: 4px solid #4169e1; /* ✅ BORDURE ÉPAISSIE */
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE */
+    }
+
+    .subquestion-item {
+      margin: 20px 0 12px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 12px 15px; /* ✅ PADDING AUGMENTÉ */
+      background: #fff8f0;
+      border-left: 4px solid #ffa500;
+      border-radius: 6px;
+      font-size: 17px; /* ✅ TAILLE AUGMENTÉE */
+    }
+
+    /* ========== TYPOGRAPHIE AMÉLIORÉE ========== */
+    .math-display {
+      text-align: center;
+      margin: 25px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 20px; /* ✅ PADDING AUGMENTÉ */
+      background: #f8f9fa;
+      border-radius: 10px;
+      border: 2px solid #e9ecef; /* ✅ BORDURE ÉPAISSIE */
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE */
+    }
+
+    .math-paragraph {
+      margin: 20px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 18px; /* ✅ PADDING AUGMENTÉ */
+      background: #f8f9fa;
+      border-radius: 8px;
+      line-height: 1.8;
+      font-size: 17px; /* ✅ TAILLE AUGMENTÉE */
+    }
+
+    /* TYPOGRAPHIE HIÉRARCHISÉE - TAILLES AUGMENTÉES */
+    .card h1 {
+      font-size: 28px; /* ✅ TAILLE AUGMENTÉE (avant: 24px) */
+      color: #208060;
+      margin: 35px 0 25px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding-bottom: 15px;
+      border-bottom: 3px solid #e9ecef; /* ✅ BORDURE ÉPAISSIE */
+      font-weight: 800; /* ✅ GRAS RENFORCÉ */
     }
 
     .card h2 {
-      font-size: 20px;
+      font-size: 24px; /* ✅ TAILLE AUGMENTÉE (avant: 20px) */
       color: #2b8074;
-      margin: 25px 0 15px 0;
-      font-weight: 600;
+      margin: 30px 0 20px 0; /* ✅ MARGIN AUGMENTÉE */
+      font-weight: 700; /* ✅ GRAS RENFORCÉ */
     }
 
     .card h3 {
-      font-size: 17px;
+      font-size: 21px; /* ✅ TAILLE AUGMENTÉE (avant: 17px) */
       color: #355e7d;
-      margin: 20px 0 12px 0;
+      margin: 25px 0 18px 0; /* ✅ MARGIN AUGMENTÉE */
       font-weight: 600;
     }
 
     .card p {
-      font-size: 15px;
-      margin: 15px 0;
-      line-height: 1.7;
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE (avant: 15px) */
+      margin: 20px 0; /* ✅ MARGIN AUGMENTÉE */
+      line-height: 1.8;
       text-align: justify;
-    }
-
-    /* MATHJAX OPTIMISÉ */
-    .math-display {
-      text-align: center;
-      margin: 25px 0;
-      padding: 15px;
-      background: #f8f9fa;
-      border-radius: 8px;
-      border-left: 4px solid #208060;
+      padding: 0 8px;
     }
 
     .math-inline {
       display: inline;
       color: #d63384;
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE */
     }
 
     mjx-container[jax="SVG"] {
@@ -127,126 +202,149 @@
       vertical-align: middle;
     }
 
-    /* TABLEAUX AMÉLIORÉS */
+    /* TABLEAUX AMÉLIORÉS - TEXTE AUGMENTÉ */
     .table-container {
-      margin: 25px 0;
+      margin: 30px 0; /* ✅ MARGIN AUGMENTÉE */
       overflow-x: auto;
     }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 14px;
+      font-size: 17px; /* ✅ TAILLE AUGMENTÉE (avant: 14px) */
       background: white;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
 
     th {
       background: #208060;
       color: white;
-      padding: 12px 15px;
+      padding: 18px 20px; /* ✅ PADDING AUGMENTÉ */
       text-align: left;
-      font-weight: 600;
+      font-weight: 700; /* ✅ GRAS RENFORCÉ */
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE */
     }
 
     td {
-      padding: 10px 15px;
-      border-bottom: 1px solid #e9ecef;
+      padding: 15px 20px; /* ✅ PADDING AUGMENTÉ */
+      border-bottom: 2px solid #e9ecef; /* ✅ BORDURE ÉPAISSIE */
+      font-size: 17px; /* ✅ TAILLE AUGMENTÉE */
     }
 
     tr:nth-child(even) {
       background: #f8f9fa;
     }
 
-    /* GRAPHIQUES */
+    /* GRAPHIQUES - ESPACEMENT AUGMENTÉ */
     .graphique-container {
       text-align: center;
-      margin: 30px 0;
-      padding: 20px;
+      margin: 35px 0; /* ✅ MARGIN AUGMENTÉE */
+      padding: 25px; /* ✅ PADDING AUGMENTÉ */
       background: #f8f9fa;
-      border-radius: 8px;
-      border: 1px solid #e9ecef;
+      border-radius: 10px;
+      border: 2px solid #e9ecef; /* ✅ BORDURE ÉPAISSIE */
     }
 
     .graphique-container img {
       max-width: 100%;
       height: auto;
-      border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
     }
 
-    /* LISTES */
+    /* LISTES - TEXTE AUGMENTÉ */
     ul, ol {
-      margin: 15px 0 15px 30px;
+      margin: 20px 0 20px 40px; /* ✅ MARGIN AUGMENTÉE */
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE */
     }
 
     li {
-      margin: 8px 0;
-      line-height: 1.6;
+      margin: 12px 0; /* ✅ MARGIN AUGMENTÉE */
+      line-height: 1.8;
     }
 
-    /* BLOCS DE CODE */
+    /* BLOCS DE CODE - TEXTE AUGMENTÉ */
     .code-block {
       background: #2d3748;
       color: #e2e8f0;
-      padding: 20px;
-      border-radius: 8px;
-      margin: 20px 0;
+      padding: 25px; /* ✅ PADDING AUGMENTÉ */
+      border-radius: 10px;
+      margin: 25px 0; /* ✅ MARGIN AUGMENTÉE */
       font-family: 'Consolas', 'Monaco', monospace;
-      font-size: 13px;
+      font-size: 16px; /* ✅ TAILLE AUGMENTÉE (avant: 13px) */
       overflow-x: auto;
     }
 
-    /* FOOTER */
+    /* FOOTER - TEXTE AUGMENTÉ */
     .pdf-footer {
       position: fixed;
       bottom: 0;
       left: 0;
       right: 0;
       background: #208060;
-      padding: 15px;
+      padding: 20px; /* ✅ PADDING AUGMENTÉ */
       text-align: center;
       z-index: 100;
-      box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+      box-shadow: 0 -3px 15px rgba(0,0,0,0.2);
     }
 
     .pdf-footer a {
       background: #ffa500;
       color: white;
-      padding: 12px 30px;
-      border-radius: 6px;
+      padding: 18px 35px; /* ✅ PADDING AUGMENTÉ */
+      border-radius: 8px;
       text-decoration: none;
-      font-weight: 600;
-      font-size: 14px;
+      font-weight: 700; /* ✅ GRAS RENFORCÉ */
+      font-size: 18px; /* ✅ TAILLE AUGMENTÉE (avant: 14px) */
       transition: all 0.3s ease;
       display: inline-block;
     }
 
     .pdf-footer a:hover {
       background: #ff8c00;
-      transform: translateY(-2px);
+      transform: translateY(-3px);
     }
 
-    /* RESPONSIVE */
+    /* RESPONSIVE - TAILLES AUGMENTÉES */
     @media (max-width: 768px) {
       .container {
-        padding: 15px;
+        padding: 20px; /* ✅ PADDING AUGMENTÉ */
       }
 
       .card {
-        padding: 25px;
-        margin: 15px 0;
+        padding: 30px; /* ✅ PADDING AUGMENTÉ */
+        margin: 20px 0; /* ✅ MARGIN AUGMENTÉE */
       }
 
       .header {
-        font-size: 16px;
-        padding: 15px 20px;
+        font-size: 20px; /* ✅ TAILLE AUGMENTÉE */
+        padding: 20px 25px; /* ✅ PADDING AUGMENTÉ */
       }
 
-      .card h1 { font-size: 20px; }
-      .card h2 { font-size: 18px; }
-      .card h3 { font-size: 16px; }
-      .card p { font-size: 14px; }
+      .card h1 { font-size: 24px; } /* ✅ TAILLE AUGMENTÉE */
+      .card h2 { font-size: 22px; } /* ✅ TAILLE AUGMENTÉE */
+      .card h3 { font-size: 20px; } /* ✅ TAILLE AUGMENTÉE */
+      .card p { font-size: 17px; } /* ✅ TAILLE AUGMENTÉE */
+
+      html, body {
+        font-size: 17px; /* ✅ TAILLE AUGMENTÉE pour mobile */
+      }
+    }
+
+    /* ZOOM AMÉLIORÉ pour mobile */
+    @media (max-width: 480px) {
+      html, body {
+        font-size: 16px; /* ✅ TAILLE OPTIMISÉE pour petits écrans */
+      }
+
+      .card {
+        padding: 20px; /* ✅ PADDING ADAPTÉ */
+        margin: 15px 0; /* ✅ MARGIN ADAPTÉE */
+      }
+
+      .question-content {
+        padding: 15px; /* ✅ PADDING ADAPTÉ */
+      }
     }
   </style>
 </head>

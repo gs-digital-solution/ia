@@ -663,21 +663,74 @@ def format_table_markdown(table_text):
 
 
 def generate_corrige_html(corrige_text):
+    """
+    Version AMÉLIORÉE avec structure claire et numérotation naturelle
+    """
     if not corrige_text:
         return ""
 
+    # Nettoyage initial
     formatted = detect_and_format_math_expressions(corrige_text)
+
+    # Traitement ligne par ligne avec structure améliorée
     lines = formatted.strip().split('\n')
     html_output = []
     i = 0
 
     while i < len(lines):
         line = lines[i].strip()
+
+        # Ignorer les lignes vides (on gère l'espacement nous-mêmes)
         if not line:
             i += 1
             continue
 
-        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
+        # === DÉTECTION DES SÉPARATEURS D'EXERCICES ===
+        if re.match(r'^---', line):
+            html_output.append('<div class="exercice-separator"></div>')
+            i += 1
+
+        # === DÉTECTION DES TITRES D'EXERCICES ===
+        elif re.match(r'^### 🎯 Exercice', line):
+            exercice_title = line.replace('### 🎯 ', '').strip()
+            html_output.append(f'<h1 class="exercice-title">🎯 {exercice_title}</h1>')
+            i += 1
+
+        # === DÉTECTION DES QUESTIONS PRINCIPALES (1) 2) 1. 2. 1- 2-) ===
+        elif re.match(r'^(\d+[\)\.\-])\s', line) or re.match(r'^(\d+\.\d+[\)\.\-])\s', line):
+            # Nouvelle question avec espacement
+            html_output.append('<div class="question-block">')
+            html_output.append(f'<h2 class="question-title">{line}</h2>')
+            html_output.append('<div class="question-content">')
+            i += 1
+
+            # Collecter le contenu de la question jusqu'à la prochaine question ou exercice
+            question_content = []
+            while i < len(lines) and lines[i].strip() and not (
+                    re.match(r'^(\d+[\)\.\-])\s', lines[i].strip()) or
+                    re.match(r'^(\d+\.\d+[\)\.\-])\s', lines[i].strip()) or
+                    re.match(r'^### 🎯 Exercice', lines[i].strip()) or
+                    lines[i].strip().startswith('---')
+            ):
+                if lines[i].strip():
+                    question_content.append(lines[i].strip())
+                i += 1
+
+            # Traiter le contenu de la question
+            if question_content:
+                content_html = process_question_content(question_content)
+                html_output.append(content_html)
+
+            html_output.append('</div>')  # Fermeture question-content
+            html_output.append('</div>')  # Fermeture question-block
+
+        # === SOUS-QUESTIONS (a) b) c) i) ii) etc.) ===
+        elif re.match(r'^[a-z]\)', line) or re.match(r'^[ivx]+\)', line, re.IGNORECASE):
+            html_output.append(f'<div class="subquestion">{line}</div>')
+            i += 1
+
+        # === TABLEAUX ===
+        elif line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
             table_lines = []
             j = i
             while j < len(lines) and lines[j].startswith('|'):
@@ -686,31 +739,137 @@ def generate_corrige_html(corrige_text):
             html_table = format_table_markdown('\n'.join(table_lines))
             html_output.append(html_table)
             i = j
-            continue
 
-        if re.search(r'\\\[.?\\\]', line):
-            line = re.sub(r'\\\[(\s)(.?)(\s)\\\]', r'\[\2\]', line)
-            html_output.append(f'<p>{line}</p>')
+        # === GRAPHIQUES (déjà transformés) ===
+        elif line.startswith('<div class="graphique-container"'):
+            html_output.append(line)
             i += 1
-        elif re.match(r'^\d+\.', line):
-            html_output.append(f'<h2>{line}</h2>')
+
+        # === ÉQUATIONS LaTeX SEULES ===
+        elif re.match(r'^\\[\[\(].*\\[\]\)]$', line.strip()):
+            html_output.append(f'<div class="math-display">{line}</div>')
             i += 1
-        elif re.match(r'^[a-z]\)', line):
-            html_output.append(f'<p><strong>{line}</strong></p>')
-            i += 1
-        elif line.startswith('•') or line.startswith('-') or line.startswith('·'):
-            html_output.append(f'<p>{line}</p>')
-            i += 1
-        elif '\\(' in line or '\\[' in line:
-            line = re.sub(r'\\\(\s*([^)]?)\s\\\)', r'\\(\1\\)', line)
-            line = re.sub(r'\\\[\s*([^]]?)\s\\\]', r'\[\1\]', line)
-            html_output.append(f'<p>{line}</p>')
-            i += 1
+
+        # === PARAGRAPHES NORMaux ===
         else:
-            html_output.append(f'<p>{line}</p>')
-            i += 1
+            # Regrouper les lignes qui forment un paragraphe
+            paragraph_lines = []
+            j = i
+            while j < len(lines) and lines[j].strip() and not (
+                    re.match(r'^###', lines[j].strip()) or
+                    re.match(r'^(\d+[\)\.\-])\s', lines[j].strip()) or
+                    re.match(r'^(\d+\.\d+[\)\.\-])\s', lines[j].strip()) or
+                    re.match(r'^[a-z]\)', lines[j].strip()) or
+                    lines[j].startswith('|') or
+                    lines[j].startswith('<div class="graphique-container"') or
+                    re.match(r'^\\[\[\(].*\\[\]\)]$', lines[j].strip())
+            ):
+                paragraph_lines.append(lines[j].strip())
+                j += 1
+
+            if paragraph_lines:
+                paragraph_text = ' '.join(paragraph_lines)
+                # Vérifier si c'est principalement du LaTeX
+                if re.search(r'\\[\(\[].*\\[\)\]]', paragraph_text) and len(paragraph_text) < 200:
+                    html_output.append(f'<div class="math-paragraph">{paragraph_text}</div>')
+                else:
+                    html_output.append(f'<p>{paragraph_text}</p>')
+
+            i = j
 
     return mark_safe("".join(html_output))
+
+
+def process_question_content(content_lines):
+    """
+    Traite le contenu d'une question (sous-questions, paragraphes, etc.)
+    """
+    html_parts = []
+    i = 0
+
+    while i < len(content_lines):
+        line = content_lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        # Sous-questions (a) b) c) ou i) ii) iii))
+        if re.match(r'^[a-z]\)', line) or re.match(r'^[ivx]+\)', line, re.IGNORECASE):
+            html_parts.append(f'<div class="subquestion-item">{line}</div>')
+            i += 1
+
+            # Collecter le contenu de la sous-question
+            subcontent = []
+            while i < len(content_lines) and content_lines[i].strip() and not (
+                    re.match(r'^[a-z]\)', content_lines[i].strip()) or
+                    re.match(r'^[ivx]+\)', content_lines[i].strip(), re.IGNORECASE)
+            ):
+                subcontent.append(content_lines[i].strip())
+                i += 1
+
+            if subcontent:
+                subcontent_html = process_subquestion_content(subcontent)
+                html_parts.append(f'<div class="subquestion-content">{subcontent_html}</div>')
+
+        # Équations LaTeX seules
+        elif re.match(r'^\\[\[\(].*\\[\]\)]$', line):
+            html_parts.append(f'<div class="math-display">{line}</div>')
+            i += 1
+
+        # Paragraphes normaux
+        else:
+            paragraph_lines = []
+            j = i
+            while j < len(content_lines) and content_lines[j].strip() and not (
+                    re.match(r'^[a-z]\)', content_lines[j].strip()) or
+                    re.match(r'^[ivx]+\)', content_lines[j].strip(), re.IGNORECASE) or
+                    re.match(r'^\\[\[\(].*\\[\]\)]$', content_lines[j].strip())
+            ):
+                paragraph_lines.append(content_lines[j].strip())
+                j += 1
+
+            if paragraph_lines:
+                paragraph_text = ' '.join(paragraph_lines)
+                if re.search(r'\\[\(\[].*\\[\)\]]', paragraph_text) and len(paragraph_text) < 150:
+                    html_parts.append(f'<div class="math-paragraph">{paragraph_text}</div>')
+                else:
+                    html_parts.append(f'<p>{paragraph_text}</p>')
+
+            i = j
+
+    return "".join(html_parts)
+
+
+def process_subquestion_content(content_lines):
+    """
+    Traite le contenu d'une sous-question
+    """
+    html_parts = []
+    current_paragraph = []
+
+    for line in content_lines:
+        # Équations LaTeX seules
+        if re.match(r'^\\[\[\(].*\\[\]\)]$', line):
+            if current_paragraph:
+                html_parts.append(f'<p>{" ".join(current_paragraph)}</p>')
+                current_paragraph = []
+            html_parts.append(f'<div class="math-display">{line}</div>')
+
+        # Nouveau paragraphe
+        elif line and line[0].isupper() and current_paragraph:
+            if current_paragraph:
+                html_parts.append(f'<p>{" ".join(current_paragraph)}</p>')
+            current_paragraph = [line]
+
+        # Suite du paragraphe
+        else:
+            current_paragraph.append(line)
+
+    # Dernier paragraphe
+    if current_paragraph:
+        html_parts.append(f'<p>{" ".join(current_paragraph)}</p>')
+
+    return "".join(html_parts)
 
 
 def extraire_texte_pdf(fichier_path):
@@ -965,16 +1124,82 @@ def sauvegarder_fichier_temporaire(fichier_field):
 # ============== PROMPT PAR DEFAUT ==============
 
 DEFAULT_SYSTEM_PROMPT = r"""
-Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
-- **Dès qu'un exercice demande un graphique ou un tracé, finis le paragraphe avec la balise ---corrigé--- sur une ligne, et sur la ligne qui suit, le JSON du graphique au format ci-dessous.**
-- **N'utilise que des doubles guillemets dans ton JSON, jamais de simples guillemets.**
+Tu es un professeur expert en sciences. Règles de FORMATAGE STRICTES :
+
+**NUMÉROTATION OBLIGATOIRE :**
+- Questions principales : 1) 2) 3) ou 1. 2. 3. ou 1- 2- 3-
+- Sous-questions : a) b) c) ou i) ii) iii) 
+- Questions détaillées : 2.1) 2.2) 2.3) ou 2.1- 2.2- 2.3-
+
+**INTERDIT :** "Question 1", "Question 2", "Exercice 1 Question 1"
+
+**STRUCTURE OBLIGATOIRE :**
+1. Pour CHAQUE question : 
+   [Numéro]) [Réponse détaillée avec espacement]
+
+2. Entre exercices :
+   ---
+   ### 🎯 Exercice Y
+   [Nouvel exercice]
+
+3. Pour les sous-questions :
+   a) [Réponse a]
+
+   b) [Réponse b] 
+
+   (UNE LIGNE VIDE entre chaque)
+
+**GRAPHIQUES :**
+- Dès qu'une question demande un graphique, termine la par :
+---corrigé---
+{"graphique": {...}}
+
+**EXEMPLE PARFAIT :**
+### 🎯 Exercice 1
+1) Calculons l'énergie cinétique :
+
+\[ E_c = \frac{1}{2}mv^2 \]
+
+Avec \( m = 1200 \, \text{kg} \) et \( v = 110 \, \text{m/s} \):
+
+\[ E_c = \frac{1}{2} \times 1200 \times 110^2 = 7\,260\,000 \, \text{J} \]
+
+\boxed{7,26 \, \text{MJ}}
+
+2) 
+a) L'énergie potentielle vaut :
+
+\[ E_p = mgh = 1200 \times 10 \times 200 = 2\,400\,000 \, \text{J} \]
+
+b) L'énergie mécanique totale :
+
+\[ E_m = E_c + E_p = 7\,260\,000 + 2\,400\,000 = 9\,660\,000 \, \text{J} \]
+
+---corrigé---
+{"graphique": {"type": "fonction", "expression": "x**2", "x_min": -2, "x_max": 2, "titre": "Exemple"}}
 
 ---
+### 🎯 Exercice 2
+2.1) Première sous-question...
 
-Types de graphiques supportés :  
-- "fonction", "histogramme", "diagramme à bandes", "nuage de points", "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo".
+2.2) Deuxième sous-question...
 
----
+**IMPORTANT :** Si tu ne respectes pas cette numérotation et structure, le corrigé sera illisible et rejeté.
+Utilise uniquement la numérotation naturelle : 1) 2) a) b) 2.1) 2.2) etc.
+
+**TYPES DE GRAPHIQUES SUPPORTÉS :**
+- "fonction", "histogramme", "diagramme à bandes", "nuage de points"
+- "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo"
+
+**FORMAT JSON GRAPHIQUES :**
+---corrigé---
+{"graphique": {
+   "type": "fonction",
+   "expression": "x**2 - 2*x + 1", 
+   "x_min": -1,
+   "x_max": 3,
+   "titre": "Courbe parabole"
+}}
 
 EXEMPLES OBLIGATOIRES DE JSON :
 
