@@ -15,7 +15,6 @@ from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
 import base64
-import time
 
 # ============== CONFIGURATION DES APIS ==============
 
@@ -317,133 +316,12 @@ def preparer_contexte_correction(contexte, matiere, type_exercice, lecons_conten
     return contexte_final
 
 
-# ============== FONCTIONS POUR LA DÉCOUPE DES SUJETS LONGS ==============
-
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, type_exercice=None):
-    """
-    Génère le corrigé pour un seul exercice (pour la découpe)
-    """
-    print("🎯 Génération corrigé pour exercice individuel...")
-
-    system_prompt = DEFAULT_SYSTEM_PROMPT
-    consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
-
-    if matiere and hasattr(matiere, 'prompt_ia'):
-        promptia = matiere.prompt_ia
-        system_prompt = promptia.system_prompt or system_prompt
-        consignes_finales = promptia.consignes_finales or consignes_finales
-
-    prompt_ia = f"""
-{system_prompt}
-
-### CONTEXTE
-{contexte}
-
-### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
-{texte_exercice.strip()}
-
-### CONSIGNES
-{consignes_finales}
-
-**Important : Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
-"""
-
-    if not DEEPSEEK_API_KEY:
-        print("❌ Erreur: Clé DeepSeek non configurée")
-        return "Erreur: Clé API non configurée", None
-
-    api_url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt_ia}
-        ],
-        "temperature": 0.1,
-        "max_tokens": 4000,  # Suffisant pour un exercice individuel
-        "top_p": 0.9,
-        "frequency_penalty": 0.1
-    }
-
-    try:
-        print("📡 Appel DeepSeek pour exercice...")
-        response = requests.post(api_url, headers=headers, json=data, timeout=90)
-        response_data = response.json()
-
-        if response.status_code != 200:
-            error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
-            print(f"❌ {error_msg}")
-            return error_msg, None
-
-        output = response_data['choices'][0]['message']['content']
-        print(f"✅ Réponse API reçue: {len(output)} caractères")
-
-        # Traitement des graphiques pour cet exercice
-        corrige_final, graphiques = extract_and_process_graphs(output)
-
-        print(f"📊 Exercice traité: {len(graphiques)} graphique(s) généré(s)")
-        return corrige_final, graphiques
-
-    except Exception as e:
-        error_msg = f"Erreur: {str(e)}"
-        print(f"❌ {error_msg}")
-        return error_msg, None
-
-
-def generer_corrige_decoupe(texte_epreuve, contexte, matiere, type_exercice=None):
-    """
-    Traitement par découpage pour les épreuves longues
-    """
-    print("🎯 Traitement AVEC DÉCOUPAGE (épreuve longue)")
-
-    # 1. SÉPARER LES EXERCICES
-    exercices = separer_exercices(texte_epreuve)
-
-    # 2. TRAITER CHAQUE EXERCICE
-    tous_corriges = []
-    tous_graphiques = []
-
-    for i, exercice in enumerate(exercices, 1):
-        print(f"📝 Traitement exercice {i}/{len(exercices)}...")
-
-        # Générer le corrigé pour cet exercice
-        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere, type_exercice)
-
-        if corrige and "Erreur" not in corrige:
-            # Ajouter un titre pour cet exercice
-            titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
-            tous_corriges.append(titre_exercice + corrige)
-
-            if graphiques:
-                tous_graphiques.extend(graphiques)
-            print(f"✅ Exercice {i} traité avec succès")
-        else:
-            print(f"❌ Exercice {i} en erreur: {corrige}")
-
-        # Petite pause pour éviter la surcharge API
-        time.sleep(1)
-
-    # 3. COMBINER TOUS LES CORRIGÉS
-    if tous_corriges:
-        corrige_final = "".join(tous_corriges)
-        print(f"🎉 Découpage terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
-        return corrige_final, tous_graphiques
-    else:
-        print("❌ Aucun corrigé généré")
-        return "Erreur: Aucun corrigé n'a pu être généré", []
-
-
-# ============== FONCTION PRINCIPALE HYBRIDE AVEC DÉCOUPAGE ==============
+# ============== FONCTION PRINCIPALE HYBRIDE ==============
 
 def generer_corrige_hybride(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None,
                             matiere=None, type_exercice=None, demande=None):
     """
-    NOUVELLE FONCTION PRINCIPALE : GPT-3.5 (extraction) + DeepSeek (correction) AVEC DÉCOUPAGE
+    NOUVELLE FONCTION PRINCIPALE : GPT-3.5 (extraction) + DeepSeek (correction)
     """
     if lecons_contenus is None:
         lecons_contenus = []
@@ -466,18 +344,11 @@ def generer_corrige_hybride(texte_enonce, contexte, lecons_contenus=None, exempl
         except:
             pass
 
-    # ✅ DÉCISION INTELLIGENTE : TRAITEMENT DIRECT OU AVEC DÉCOUPAGE
-    print("🔍 Analyse de la longueur du sujet...")
-    tokens_estimes = estimer_tokens(texte_enonce)
-
-    if tokens_estimes < 3000:  # Épreuve courte
-        print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
-        corrige_txt, graph_list = generer_corrige_avec_deepseek(
-            texte_enonce, contexte, matiere, type_exercice, lecons_contenus
-        )
-    else:  # Épreuve longue → DÉCOUPAGE
-        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        corrige_txt, graph_list = generer_corrige_decoupe(texte_enonce, contexte, matiere, type_exercice)
+    # Utiliser DeepSeek pour la correction
+    print("🎓 Correction avec DeepSeek...")
+    corrige_txt, graph_list = generer_corrige_avec_deepseek(
+        texte_enonce, contexte, matiere, type_exercice, lecons_contenus
+    )
 
     print(f"✅ Traitement hybride terminé: {len(corrige_txt)} caractères, {len(graph_list or [])} graphiques")
     return corrige_txt, graph_list
@@ -663,74 +534,21 @@ def format_table_markdown(table_text):
 
 
 def generate_corrige_html(corrige_text):
-    """
-    Version AMÉLIORÉE avec structure claire et numérotation naturelle
-    """
     if not corrige_text:
         return ""
 
-    # Nettoyage initial
     formatted = detect_and_format_math_expressions(corrige_text)
-
-    # Traitement ligne par ligne avec structure améliorée
     lines = formatted.strip().split('\n')
     html_output = []
     i = 0
 
     while i < len(lines):
         line = lines[i].strip()
-
-        # Ignorer les lignes vides (on gère l'espacement nous-mêmes)
         if not line:
             i += 1
             continue
 
-        # === DÉTECTION DES SÉPARATEURS D'EXERCICES ===
-        if re.match(r'^---', line):
-            html_output.append('<div class="exercice-separator"></div>')
-            i += 1
-
-        # === DÉTECTION DES TITRES D'EXERCICES ===
-        elif re.match(r'^### 🎯 Exercice', line):
-            exercice_title = line.replace('### 🎯 ', '').strip()
-            html_output.append(f'<h1 class="exercice-title">🎯 {exercice_title}</h1>')
-            i += 1
-
-        # === DÉTECTION DES QUESTIONS PRINCIPALES (1) 2) 1. 2. 1- 2-) ===
-        elif re.match(r'^(\d+[\)\.\-])\s', line) or re.match(r'^(\d+\.\d+[\)\.\-])\s', line):
-            # Nouvelle question avec espacement
-            html_output.append('<div class="question-block">')
-            html_output.append(f'<h2 class="question-title">{line}</h2>')
-            html_output.append('<div class="question-content">')
-            i += 1
-
-            # Collecter le contenu de la question jusqu'à la prochaine question ou exercice
-            question_content = []
-            while i < len(lines) and lines[i].strip() and not (
-                    re.match(r'^(\d+[\)\.\-])\s', lines[i].strip()) or
-                    re.match(r'^(\d+\.\d+[\)\.\-])\s', lines[i].strip()) or
-                    re.match(r'^### 🎯 Exercice', lines[i].strip()) or
-                    lines[i].strip().startswith('---')
-            ):
-                if lines[i].strip():
-                    question_content.append(lines[i].strip())
-                i += 1
-
-            # Traiter le contenu de la question
-            if question_content:
-                content_html = process_question_content(question_content)
-                html_output.append(content_html)
-
-            html_output.append('</div>')  # Fermeture question-content
-            html_output.append('</div>')  # Fermeture question-block
-
-        # === SOUS-QUESTIONS (a) b) c) i) ii) etc.) ===
-        elif re.match(r'^[a-z]\)', line) or re.match(r'^[ivx]+\)', line, re.IGNORECASE):
-            html_output.append(f'<div class="subquestion">{line}</div>')
-            i += 1
-
-        # === TABLEAUX ===
-        elif line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
+        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
             table_lines = []
             j = i
             while j < len(lines) and lines[j].startswith('|'):
@@ -739,137 +557,31 @@ def generate_corrige_html(corrige_text):
             html_table = format_table_markdown('\n'.join(table_lines))
             html_output.append(html_table)
             i = j
-
-        # === GRAPHIQUES (déjà transformés) ===
-        elif line.startswith('<div class="graphique-container"'):
-            html_output.append(line)
-            i += 1
-
-        # === ÉQUATIONS LaTeX SEULES ===
-        elif re.match(r'^\\[\[\(].*\\[\]\)]$', line.strip()):
-            html_output.append(f'<div class="math-display">{line}</div>')
-            i += 1
-
-        # === PARAGRAPHES NORMaux ===
-        else:
-            # Regrouper les lignes qui forment un paragraphe
-            paragraph_lines = []
-            j = i
-            while j < len(lines) and lines[j].strip() and not (
-                    re.match(r'^###', lines[j].strip()) or
-                    re.match(r'^(\d+[\)\.\-])\s', lines[j].strip()) or
-                    re.match(r'^(\d+\.\d+[\)\.\-])\s', lines[j].strip()) or
-                    re.match(r'^[a-z]\)', lines[j].strip()) or
-                    lines[j].startswith('|') or
-                    lines[j].startswith('<div class="graphique-container"') or
-                    re.match(r'^\\[\[\(].*\\[\]\)]$', lines[j].strip())
-            ):
-                paragraph_lines.append(lines[j].strip())
-                j += 1
-
-            if paragraph_lines:
-                paragraph_text = ' '.join(paragraph_lines)
-                # Vérifier si c'est principalement du LaTeX
-                if re.search(r'\\[\(\[].*\\[\)\]]', paragraph_text) and len(paragraph_text) < 200:
-                    html_output.append(f'<div class="math-paragraph">{paragraph_text}</div>')
-                else:
-                    html_output.append(f'<p>{paragraph_text}</p>')
-
-            i = j
-
-    return mark_safe("".join(html_output))
-
-
-def process_question_content(content_lines):
-    """
-    Traite le contenu d'une question (sous-questions, paragraphes, etc.)
-    """
-    html_parts = []
-    i = 0
-
-    while i < len(content_lines):
-        line = content_lines[i].strip()
-        if not line:
-            i += 1
             continue
 
-        # Sous-questions (a) b) c) ou i) ii) iii))
-        if re.match(r'^[a-z]\)', line) or re.match(r'^[ivx]+\)', line, re.IGNORECASE):
-            html_parts.append(f'<div class="subquestion-item">{line}</div>')
+        if re.search(r'\\\[.?\\\]', line):
+            line = re.sub(r'\\\[(\s)(.?)(\s)\\\]', r'\[\2\]', line)
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        elif re.match(r'^\d+\.', line):
+            html_output.append(f'<h2>{line}</h2>')
+            i += 1
+        elif re.match(r'^[a-z]\)', line):
+            html_output.append(f'<p><strong>{line}</strong></p>')
+            i += 1
+        elif line.startswith('•') or line.startswith('-') or line.startswith('•'):
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        elif '\\(' in line or '\\[' in line:
+            line = re.sub(r'\\\(\s*([^)]?)\s\\\)', r'\\(\1\\)', line)
+            line = re.sub(r'\\\[\s*([^]]?)\s\\\]', r'\[\1\]', line)
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+        else:
+            html_output.append(f'<p>{line}</p>')
             i += 1
 
-            # Collecter le contenu de la sous-question
-            subcontent = []
-            while i < len(content_lines) and content_lines[i].strip() and not (
-                    re.match(r'^[a-z]\)', content_lines[i].strip()) or
-                    re.match(r'^[ivx]+\)', content_lines[i].strip(), re.IGNORECASE)
-            ):
-                subcontent.append(content_lines[i].strip())
-                i += 1
-
-            if subcontent:
-                subcontent_html = process_subquestion_content(subcontent)
-                html_parts.append(f'<div class="subquestion-content">{subcontent_html}</div>')
-
-        # Équations LaTeX seules
-        elif re.match(r'^\\[\[\(].*\\[\]\)]$', line):
-            html_parts.append(f'<div class="math-display">{line}</div>')
-            i += 1
-
-        # Paragraphes normaux
-        else:
-            paragraph_lines = []
-            j = i
-            while j < len(content_lines) and content_lines[j].strip() and not (
-                    re.match(r'^[a-z]\)', content_lines[j].strip()) or
-                    re.match(r'^[ivx]+\)', content_lines[j].strip(), re.IGNORECASE) or
-                    re.match(r'^\\[\[\(].*\\[\]\)]$', content_lines[j].strip())
-            ):
-                paragraph_lines.append(content_lines[j].strip())
-                j += 1
-
-            if paragraph_lines:
-                paragraph_text = ' '.join(paragraph_lines)
-                if re.search(r'\\[\(\[].*\\[\)\]]', paragraph_text) and len(paragraph_text) < 150:
-                    html_parts.append(f'<div class="math-paragraph">{paragraph_text}</div>')
-                else:
-                    html_parts.append(f'<p>{paragraph_text}</p>')
-
-            i = j
-
-    return "".join(html_parts)
-
-
-def process_subquestion_content(content_lines):
-    """
-    Traite le contenu d'une sous-question
-    """
-    html_parts = []
-    current_paragraph = []
-
-    for line in content_lines:
-        # Équations LaTeX seules
-        if re.match(r'^\\[\[\(].*\\[\]\)]$', line):
-            if current_paragraph:
-                html_parts.append(f'<p>{" ".join(current_paragraph)}</p>')
-                current_paragraph = []
-            html_parts.append(f'<div class="math-display">{line}</div>')
-
-        # Nouveau paragraphe
-        elif line and line[0].isupper() and current_paragraph:
-            if current_paragraph:
-                html_parts.append(f'<p>{" ".join(current_paragraph)}</p>')
-            current_paragraph = [line]
-
-        # Suite du paragraphe
-        else:
-            current_paragraph.append(line)
-
-    # Dernier paragraphe
-    if current_paragraph:
-        html_parts.append(f'<p>{" ".join(current_paragraph)}</p>')
-
-    return "".join(html_parts)
+    return mark_safe("".join(html_output))
 
 
 def extraire_texte_pdf(fichier_path):
@@ -1124,82 +836,16 @@ def sauvegarder_fichier_temporaire(fichier_field):
 # ============== PROMPT PAR DEFAUT ==============
 
 DEFAULT_SYSTEM_PROMPT = r"""
-Tu es un professeur expert en sciences. Règles de FORMATAGE STRICTES :
-
-**NUMÉROTATION OBLIGATOIRE :**
-- Questions principales : 1) 2) 3) ou 1. 2. 3. ou 1- 2- 3-
-- Sous-questions : a) b) c) ou i) ii) iii) 
-- Questions détaillées : 2.1) 2.2) 2.3) ou 2.1- 2.2- 2.3-
-
-**INTERDIT :** "Question 1", "Question 2", "Exercice 1 Question 1"
-
-**STRUCTURE OBLIGATOIRE :**
-1. Pour CHAQUE question : 
-   [Numéro]) [Réponse détaillée avec espacement]
-
-2. Entre exercices :
-   ---
-   ### 🎯 Exercice Y
-   [Nouvel exercice]
-
-3. Pour les sous-questions :
-   a) [Réponse a]
-
-   b) [Réponse b] 
-
-   (UNE LIGNE VIDE entre chaque)
-
-**GRAPHIQUES :**
-- Dès qu'une question demande un graphique, termine la par :
----corrigé---
-{"graphique": {...}}
-
-**EXEMPLE PARFAIT :**
-### 🎯 Exercice 1
-1) Calculons l'énergie cinétique :
-
-\[ E_c = \frac{1}{2}mv^2 \]
-
-Avec \( m = 1200 \, \text{kg} \) et \( v = 110 \, \text{m/s} \):
-
-\[ E_c = \frac{1}{2} \times 1200 \times 110^2 = 7\,260\,000 \, \text{J} \]
-
-\boxed{7,26 \, \text{MJ}}
-
-2) 
-a) L'énergie potentielle vaut :
-
-\[ E_p = mgh = 1200 \times 10 \times 200 = 2\,400\,000 \, \text{J} \]
-
-b) L'énergie mécanique totale :
-
-\[ E_m = E_c + E_p = 7\,260\,000 + 2\,400\,000 = 9\,660\,000 \, \text{J} \]
-
----corrigé---
-{"graphique": {"type": "fonction", "expression": "x**2", "x_min": -2, "x_max": 2, "titre": "Exemple"}}
+Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
+- **Dès qu'un exercice demande un graphique ou un tracé, finis le paragraphe avec la balise ---corrigé--- sur une ligne, et sur la ligne qui suit, le JSON du graphique au format ci-dessous.**
+- **N'utilise que des doubles guillemets dans ton JSON, jamais de simples guillemets.**
 
 ---
-### 🎯 Exercice 2
-2.1) Première sous-question...
 
-2.2) Deuxième sous-question...
+Types de graphiques supportés :  
+- "fonction", "histogramme", "diagramme à bandes", "nuage de points", "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo".
 
-**IMPORTANT :** Si tu ne respectes pas cette numérotation et structure, le corrigé sera illisible et rejeté.
-Utilise uniquement la numérotation naturelle : 1) 2) a) b) 2.1) 2.2) etc.
-
-**TYPES DE GRAPHIQUES SUPPORTÉS :**
-- "fonction", "histogramme", "diagramme à bandes", "nuage de points"
-- "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo"
-
-**FORMAT JSON GRAPHIQUES :**
----corrigé---
-{"graphique": {
-   "type": "fonction",
-   "expression": "x**2 - 2*x + 1", 
-   "x_min": -1,
-   "x_max": 3,
-   "titre": "Courbe parabole"
-}}
+---
 
 EXEMPLES OBLIGATOIRES DE JSON :
 
@@ -1330,7 +976,6 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         demande=demande
     )
 
-
 # ============== TÂCHE ASYNCHRONE MISE À JOUR ==============
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
@@ -1423,3 +1068,4 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         except:
             pass
         return False
+
