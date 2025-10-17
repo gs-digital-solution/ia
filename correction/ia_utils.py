@@ -16,7 +16,20 @@ import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
+from PIL import Image
 
+# ============== BLIP IMAGE CAPTIONING ==============
+# On détecte si CUDA est dispo, sinon on reste sur CPU.
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"🖼️ BLIP device utilisé : {device}")
+
+# Charger le processor et le modèle BLIP (tailles modestes pour la rapidité)
+_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+_model     = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")\
+                 .to(device).eval()
+print("🖼️ Modèle BLIP chargé avec succès")
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
 
@@ -380,32 +393,47 @@ def extraire_texte_image(fichier_path):
 
 
 def extraire_texte_fichier(fichier_field):
+    """
+    1) On écrit le fichier en temporaire
+    2) Si PDF    → extraire_texte_pdf
+       Si image  → décrire l'image via BLIP (pas d'OCR)
+    3) Supprime le temporaire et renvoie un texte + légende image
+    """
     if not fichier_field:
         return ""
 
-    temp_dir = tempfile.gettempdir()
+    temp_dir  = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
 
+    # Sauvegarde du fichier
     with open(temp_path, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    ext = os.path.splitext(fichier_field.name)[1].lower()
-    texte = ""
+    ext   = os.path.splitext(fichier_field.name)[1].lower()
+    result = ""
 
     if ext == ".pdf":
+        # extraction textuelle classique
         texte = extraire_texte_pdf(temp_path)
+        result = texte
     elif ext in [".jpg", ".jpeg", ".png"]:
-        texte = extraire_texte_image(temp_path)
+        # Description sémantique avec BLIP
+        result = decrire_image(temp_path)
+    else:
+        # Par défaut, on traite comme image
+        result = decrire_image(temp_path)
 
+    # Nettoyage du temporaire
     try:
         os.remove(temp_path)
-    except Exception:
+    except:
         pass
 
-    resultat = texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
-    print(f"📁 Extraction fichier terminée: {len(resultat)} caractères")
-    return resultat
+    # Log final
+    print(f"📁 DEBUG – Résultat extraire_texte_fichier ({ext}) :")
+    print(result[:500].replace("\n", "\\n"), "...\n")
+    return result
 
 
 # ============== TABLEAUX DE VARIATION (Camelot) ==============
@@ -466,6 +494,23 @@ def decrire_table_variation(table):
         print(f"❌ Erreur decrire_table_variation: {e}")
         return None
 
+def decrire_image(path_image: str) -> str:
+    """
+    Génère une légende / description de l'image via BLIP.
+    """
+    try:
+        print(f"🖼️ DEBUG – Captioning image : {path_image}")
+        img = Image.open(path_image).convert("RGB")
+        inputs = _processor(img, return_tensors="pt").to(device)
+        # Génération en une passe
+        out = _model.generate(**inputs, max_new_tokens=50)
+        caption = _processor.decode(out[0], skip_special_tokens=True)
+        caption = caption.strip()
+        print(f"🖼️ DEBUG – Légende générée : {caption}")
+        return "Description image : " + caption
+    except Exception as e:
+        print(f"❌ Erreur decrire_image pour {path_image} : {e}")
+        return "(Erreur description image)"
 
 # ============== DESSIN DE GRAPHIQUES ==============
 
