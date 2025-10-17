@@ -519,7 +519,7 @@ def nettoyer_pour_deepseek(concat_text: str) -> str:
     avant envoi à DeepSeek (GPT-3.5).
     """
     print("🧹 DEBUG – DÉBUT nettoyage GPT-3.5")
-    openai.api_key = settings.OPENAI_API_KEY
+    openai_api_key = os.getenv("OPENAI_API_KEY")
 
     prompt = (
         "Tu es un assistant chargé de reformuler un énoncé scientifique "
