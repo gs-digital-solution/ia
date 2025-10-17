@@ -392,12 +392,12 @@ def extraire_texte_image(fichier_path):
         return ""
 
 
+# ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
 def extraire_texte_fichier(fichier_field):
     """
-    1) On écrit le fichier en temporaire
-    2) Si PDF    → extraire_texte_pdf
-       Si image  → décrire l'image via BLIP (pas d'OCR)
-    3) Supprime le temporaire et renvoie un texte + légende image
+    - Si PDF    : extraction via pdfminer.
+    - Si image  : OCR (pytesseract) + description (BLIP).
+    - Sinon     : fallback sur OCR + BLIP.
     """
     if not fichier_field:
         return ""
@@ -405,36 +405,58 @@ def extraire_texte_fichier(fichier_field):
     temp_dir  = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
 
-    # Sauvegarde du fichier
+    # 1) Sauvegarde du fichier
     with open(temp_path, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    ext   = os.path.splitext(fichier_field.name)[1].lower()
-    result = ""
+    ext = os.path.splitext(fichier_field.name)[1].lower()
+    resultat = ""
 
     if ext == ".pdf":
-        # extraction textuelle classique
-        texte = extraire_texte_pdf(temp_path)
-        result = texte
-    elif ext in [".jpg", ".jpeg", ".png"]:
-        # Description sémantique avec BLIP
-        result = decrire_image(temp_path)
+        # extraction textuelle
+        texte = extract_text(temp_path)
+        print(f"📄 DEBUG – PDF extrait : {len(texte)} caractères")
+        resultat = texte.strip() if texte else ""
     else:
-        # Par défaut, on traite comme image
-        result = decrire_image(temp_path)
+        # on considère tout le reste comme une image
+        # a) OCR du texte
+        try:
+            ocr = extraire_texte_image(temp_path)
+            print(f"🖨️ DEBUG – OCR image ({ext}) : {len(ocr)} caractères")
+        except Exception as e:
+            print(f"❌ Erreur OCR image : {e}")
+            ocr = ""
 
-    # Nettoyage du temporaire
+        # b) Description visuelle via BLIP
+        try:
+            caption = decrire_image(temp_path)
+            # decrire_image inclut son propre print debug
+        except Exception as e:
+            print(f"❌ Erreur BLIP captioning : {e}")
+            caption = ""
+
+        # c) Assemblage
+        morceaux = []
+        if ocr.strip():
+            morceaux.append("Texte OCR :\n" + ocr.strip())
+        if caption.strip():
+            morceaux.append(caption.strip())
+
+        resultat = "\n\n".join(morceaux)
+
+    # supprime le temporaire
     try:
         os.remove(temp_path)
     except:
         pass
 
-    # Log final
-    print(f"📁 DEBUG – Résultat extraire_texte_fichier ({ext}) :")
-    print(result[:500].replace("\n", "\\n"), "...\n")
-    return result
+    if not resultat.strip():
+        resultat = "(Impossible d'extraire l'énoncé du fichier envoyé.)"
 
+    print(f"📁 DEBUG – Extraction fichier ({ext}) terminée :")
+    print(resultat[:500].replace("\n", "\\n"), "...\n")
+    return resultat
 
 # ============== TABLEAUX DE VARIATION (Camelot) ==============
 
