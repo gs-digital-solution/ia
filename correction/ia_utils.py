@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib
 import openai
 import logging
+import camelot
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pdfminer.high_level import extract_text
@@ -405,6 +406,65 @@ def extraire_texte_fichier(fichier_field):
     resultat = texte if texte.strip() else "(Impossible d'extraire l'énoncé du fichier envoyé.)"
     print(f"📁 Extraction fichier terminée: {len(resultat)} caractères")
     return resultat
+
+
+# ============== TABLEAUX DE VARIATION (Camelot) ==============
+
+def extraire_tables_pdf(path_pdf: str):
+    """
+    Détecte et renvoie la liste des tableaux dans le PDF.
+    """
+    try:
+        tables = camelot.read_pdf(path_pdf, pages='all', flavor='stream')
+        print(f"==== DEBUG Camelot : {len(tables)} table(s) détectée(s) dans {path_pdf} ====")
+        return tables
+    except Exception as e:
+        print(f"❌ Erreur Camelot.read_pdf sur {path_pdf} : {e}")
+        return []
+
+def decrire_table_variation(table):
+    """
+    Si table.df ressemble à un tableau de variation, renvoie
+    une description type « f croissante de a à b; f décroissante… ».
+    """
+    try:
+        df = table.df.replace('', np.nan)\
+                     .dropna(how='all', axis=1)\
+                     .fillna(method='ffill')
+        if df.shape[1] < 2:
+            return None
+
+        data = df.iloc[1:].values.tolist()
+        intervalles = [str(row[0]).strip() for row in data]
+        valeurs = []
+        for row in data:
+            try:
+                valeurs.append(float(str(row[1]).replace(',', '.')))
+            except:
+                valeurs.append(None)
+
+        descs = []
+        for i in range(len(valeurs)-1):
+            v1, v2 = valeurs[i], valeurs[i+1]
+            a, b = intervalles[i], intervalles[i+1]
+            if v1 is None or v2 is None:
+                continue
+            if v2 > v1:
+                descs.append(f"f croissante de {a} à {b}")
+            elif v2 < v1:
+                descs.append(f"f décroissante de {a} à {b}")
+            else:
+                descs.append(f"f constante de {a} à {b}")
+
+        if not descs:
+            return None
+
+        texte = "Tableau de variation détecté : " + "; ".join(descs) + "."
+        return texte
+
+    except Exception as e:
+        print(f"❌ Erreur decrire_table_variation: {e}")
+        return None
 
 
 # ============== DESSIN DE GRAPHIQUES ==============
@@ -940,13 +1000,36 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 20
         soumission.save()
 
-        texte_enonce = ""
+        # 1) Extraction initiale
+        texte_brut = ""
         if demande.fichier:
-            texte_enonce = extraire_texte_fichier(demande.fichier)
-        if not texte_enonce and hasattr(demande, 'enonce_texte'):
-            texte_enonce = demande.enonce_texte or ""
+            texte_brut = extraire_texte_fichier(demande.fichier)
+        else:
+            texte_brut = demande.enonce_texte or ""
 
-        print(f"📥 Texte à traiter: {len(texte_enonce)} caractères")
+        print("📥 DEBUG – TEXTE BRUT (premiers 500 chars) :")
+        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
+
+        # 2) Extraction & description des tableaux
+        descs_tables = []
+        if demande.fichier:
+            path_pdf = demande.fichier.path
+            tables = extraire_tables_pdf(path_pdf)
+            for idx, table in enumerate(tables, start=1):
+                desc = decrire_table_variation(table)
+                if desc:
+                    descs_tables.append(desc)
+                    print(f"📋 DEBUG – Description table {idx} : {desc}")
+
+        print(f"🔍 DEBUG – Total descriptions tables : {len(descs_tables)}")
+
+        # 3) Assemblage du texte final pour l'IA
+        texte_enonce = texte_brut
+        if descs_tables:
+            texte_enonce += "\n\n" + "\n".join(descs_tables)
+
+        print("📥 DEBUG – TEXTE ENRICHI (après tables) :")
+        print(texte_enonce[:500].replace("\n", "\\n"), "...\n")
 
         soumission.statut = 'analyse_ia'
         soumission.progression = 40
