@@ -512,6 +512,39 @@ def decrire_image(path_image: str) -> str:
         print(f"❌ Erreur decrire_image pour {path_image} : {e}")
         return "(Erreur description image)"
 
+# ============== NETTOYAGE / REFORMULATION AVEC GPT-3.5 ==============
+def nettoyer_pour_deepseek(concat_text: str) -> str:
+    """
+    Reformule le texte brut + descriptions pour qu'il soit clair et complet
+    avant envoi à DeepSeek (GPT-3.5).
+    """
+    print("🧹 DEBUG – DÉBUT nettoyage GPT-3.5")
+    openai.api_key = settings.OPENAI_API_KEY
+
+    prompt = (
+        "Tu es un assistant chargé de reformuler un énoncé scientifique "
+        "pour qu'il soit clair et complet pour DeepSeek. Corrige les "
+        "imprécisions et structure en paragraphes.\n\n"
+        f"{concat_text}"
+    )
+
+    try:
+        resp = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=3000
+        )
+        cleaned = resp.choices[0].message.content.strip()
+        print("🧹 DEBUG – Texte nettoyé (début) :")
+        print(cleaned[:500].replace("\n", "\\n"), "...\n")
+        return cleaned
+
+    except Exception as e:
+        print(f"❌ Erreur nettoyage GPT-3.5: {e}")
+        # fallback : on renvoie le texte d’origine
+        return concat_text
+
 # ============== DESSIN DE GRAPHIQUES ==============
 
 def tracer_graphique(graphique_dict, output_name):
@@ -1087,8 +1120,13 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 60
         soumission.save()
 
+        # 3.b) Nettoyage / reformulation avant DeepSeek
+        texte_pret = nettoyer_pour_deepseek(texte_enonce)
+        print("🧹 DEBUG – TEXTE PRÊT pour DeepSeek (premiers 500 chars) :")
+        print(texte_pret[:500].replace("\n", "\\n"), "...\n")
+
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-            texte_enonce,
+            texte_pret,
             contexte,
             matiere=matiere
         )
