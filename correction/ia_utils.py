@@ -378,17 +378,28 @@ def extraire_texte_pdf(fichier_path):
 
 
 def extraire_texte_image(fichier_path):
+    """
+    Amélioration OCR : grossissement, filtre et contraste puis Tesseract.
+    """
     try:
         image = Image.open(fichier_path)
-        image = image.convert("L").filter(ImageFilter.MedianFilter())
+        # niveaux de gris
+        image = image.convert("L")
+        # redimensionnement pour doubler la résolution
+        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
+        # filtre médian pour réduire le bruit
+        image = image.filter(ImageFilter.MedianFilter())
+        # augmenter le contraste
         enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.2)
-        image = image.point(lambda x: 0 if x < 150 else 255, '1')
+        image = enhancer.enhance(2.0)
+        # binarisation manuelle (seuil à ajuster si besoin)
+        image = image.point(lambda x: 0 if x < 140 else 255, '1')
+
         texte = pytesseract.image_to_string(image, lang="fra+eng")
-        print(f"🖼️ Image extraite: {len(texte)} caractères")
+        print(f"🖨️ DEBUG – OCR image améliorée : {len(texte)} caractères")
         return texte.strip()
     except Exception as e:
-        print(f"❌ Erreur extraction image: {e}")
+        print(f"❌ Erreur OCR image (améliorée) : {e}")
         return ""
 
 
@@ -1077,7 +1088,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     tokens_estimes = estimer_tokens(texte_enonce)
 
     # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
-    if tokens_estimes < 3000:  # Épreuve courte
+    if tokens_estimes < 1500:  # Épreuve courte
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere)
     else:  # Épreuve longue
