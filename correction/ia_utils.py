@@ -5,7 +5,8 @@ import json
 import re
 import numpy as np
 import matplotlib
-
+import openai
+import logging
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pdfminer.high_level import extract_text
