@@ -766,7 +766,7 @@ def tracer_graphique(graphique_dict, output_name):
 
 DEFAULT_SYSTEM_PROMPT = r"""
 Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
-- **Dès qu'un exercice demande un graphique ou un tracé, finis le paragraphe avec la balise ---corrigé--- sur une ligne, et sur la ligne qui suit, le JSON du graphique au format ci-dessous.**
+- **Dès qu'une question dans un exercie demande un graphique ou un tracé, finis la question avec la balise ---corrigé--- sur une ligne, et sur la ligne qui suit, le JSON du graphique au format ci-dessous.**
 - **N'utilise que des doubles guillemets dans ton JSON, jamais de simples guillemets.**
 
 ---
@@ -1088,7 +1088,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     tokens_estimes = estimer_tokens(texte_enonce)
 
     # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
-    if tokens_estimes < 1500:  # Épreuve courte
+    if tokens_estimes < 1000:  # Épreuve courte
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere)
     else:  # Épreuve longue
