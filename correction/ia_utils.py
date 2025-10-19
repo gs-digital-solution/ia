@@ -44,12 +44,18 @@ def separer_exercices(texte_epreuve):
 
     # Patterns pour détecter le début des exercices
     patterns_separation = [
-        r'Exercice\s+\d+[:.]',  # "Exercice 1:" "Exercice 2."
-        r'EXERCICE\s+\d+[:.]',  # "EXERCICE 1:"
-        r'Partie\s+[IVXLCDM]+[:.]',  # "Partie I:" "Partie II."
-        r'\n\d+[-.)]\s',  # "1. " "2) " "3- "
-        r'\n[a-z]\)\s',  # "a) " "b) "
-        r'Question\s+\d+',  # "Question 1"
+        r'Exercice\s+\d+[:.]', r'EXERCICE\s+\d+[:.]',
+        r'Partie\s+[IVXLCDM]+[:.]',
+        r'\n\d+[-.)]\s', r'\n[a-z]\)\s',
+        r'Question\s+\d+',
+        # Nouveaux genres d’épreuves (langues, lettres, geo, etc.)
+        r'COMENTARIO DEL TEXTO', r'ESTRUCTURAS DE COMUNICACIÓN',
+        r'PRODUCCIÓN DE TEXTOS', r'RECEPCIÓN DE TEXTOS',
+        r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
+        r'TEIL ?1\s+LESEVERSTEHEN', r'MEDIATION',
+        r'SCHRIFTLICHE PRODUKTION', r'STRUKTUREN UND KOMMUNIKATION',
+        r'SCHRIFTLICHER AUSDRUCK', r'Grammar', r'Vocabulary',
+        r'Comprehension', r'Essay'
     ]
 
     exercices = []
@@ -258,7 +264,11 @@ def flatten_multiline_latex_blocks(text):
 def detect_and_format_math_expressions(text):
     if not text:
         return ""
-
+    # Convertir les dollars en balises LaTeX pour MathJax
+    # inline : $...$ → \(...\)
+    text = re.sub(r'\$(.+?)\$', r'\\(\1\\)', text)
+    # block : $$...$$ → \[...\]
+    text = re.sub(r'\$\$([\s\S]+?)\$\$', r'\\[\1\\]', text)
     text = re.sub(
         r'\$\$\s*([\s\S]+?)\s*\$\$',
         lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]',
@@ -484,48 +494,35 @@ def extraire_tables_pdf(path_pdf: str):
         return []
 
 def decrire_table_variation(table):
-    """
-    Si table.df ressemble à un tableau de variation, renvoie
-    une description type « f croissante de a à b; f décroissante… ».
-    """
-    try:
-        df = table.df.replace('', np.nan)\
-                     .dropna(how='all', axis=1)\
-                     .fillna(method='ffill')
-        if df.shape[1] < 2:
-            return None
+    df = table.df.replace('', np.nan).ffill().dropna(how='all', axis=1)
+    # Identifie les colonnes : x vs f(x) ou dérivée f'
+    cols = [c.lower() for c in df.iloc[0].tolist()]
+    data = df.iloc[1:].reset_index(drop=True)
+    # Extrait intervalles et valeurs
+    interv = data.iloc[:,0].astype(str).tolist()
+    valeurs = data.iloc[:,1].apply(lambda v: float(v.replace(',','.')) if re.match(r'^[0-9]', str(v)) else None).tolist()
+    descs = []
+    extrema = []
+    for i in range(len(valeurs)-1):
+        a,b = interv[i], interv[i+1]
+        v1,v2 = valeurs[i], valeurs[i+1]
+        if v1 is None or v2 is None: continue
+        sens = "croissante" if v2>v1 else "décroissante" if v2<v1 else "constante"
+        descs.append(f"f {sens} de {a} à {b}")
+    # Cherche un extremum (v2<v1>v3 ou v2>v1<v3)
+    for i in range(1, len(valeurs)-1):
+        if valeurs[i] is not None:
+            if valeurs[i]>valeurs[i-1] and valeurs[i]>valeurs[i+1]:
+                extrema.append(f"maximum en {interv[i]} = {valeurs[i]}")
+            if valeurs[i]<valeurs[i-1] and valeurs[i]<valeurs[i+1]:
+                extrema.append(f"minimum en {interv[i]} = {valeurs[i]}")
+    texte = ""
+    if descs:
+        texte += "Tableau de variation : " + "; ".join(descs) + "."
+    if extrema:
+        texte += " Extrema : " + "; ".join(extrema) + "."
+    return texte if texte else None
 
-        data = df.iloc[1:].values.tolist()
-        intervalles = [str(row[0]).strip() for row in data]
-        valeurs = []
-        for row in data:
-            try:
-                valeurs.append(float(str(row[1]).replace(',', '.')))
-            except:
-                valeurs.append(None)
-
-        descs = []
-        for i in range(len(valeurs)-1):
-            v1, v2 = valeurs[i], valeurs[i+1]
-            a, b = intervalles[i], intervalles[i+1]
-            if v1 is None or v2 is None:
-                continue
-            if v2 > v1:
-                descs.append(f"f croissante de {a} à {b}")
-            elif v2 < v1:
-                descs.append(f"f décroissante de {a} à {b}")
-            else:
-                descs.append(f"f constante de {a} à {b}")
-
-        if not descs:
-            return None
-
-        texte = "Tableau de variation détecté : " + "; ".join(descs) + "."
-        return texte
-
-    except Exception as e:
-        print(f"❌ Erreur decrire_table_variation: {e}")
-        return None
 
 def decrire_image(path_image: str) -> str:
     """
@@ -579,178 +576,205 @@ def nettoyer_pour_deepseek(concat_text: str) -> str:
         return concat_text
 
 # ============== DESSIN DE GRAPHIQUES ==============
+def style_axes(ax, graphique_dict):
+    """
+    Colorie les axes en rouge et synchronise les graduations y sur x
+    (sauf si x_ticks ou y_ticks sont fournis dans graphique_dict).
+    """
+    # colorer spines et ticks
+    ax.spines['bottom'].set_color('red')
+    ax.spines['left'].set_color('red')
+    ax.tick_params(axis='x', colors='red')
+    ax.tick_params(axis='y', colors='red')
+
+    # graduations sur x
+    if graphique_dict.get("x_ticks") is not None:
+        ax.set_xticks(graphique_dict["x_ticks"])
+    # graduations sur y
+    if graphique_dict.get("y_ticks") is not None:
+        ax.set_yticks(graphique_dict["y_ticks"])
+    else:
+        # par défaut, on réutilise les mêmes que sur x
+        ax.set_yticks(ax.get_xticks())
+
+    # noms d’axes
+    ax.set_xlabel(graphique_dict.get("x_label", "x"), color='red')
+    ax.set_ylabel(graphique_dict.get("y_label", "y"), color='red')
+
 
 def tracer_graphique(graphique_dict, output_name):
-    if 'graphique' in graphique_dict:
-        graphique_dict = graphique_dict['graphique']
-
-    gtype = graphique_dict.get("type", "fonction").lower().strip()
-    titre = graphique_dict.get("titre", "Graphique généré")
-
-    def safe_float(expr):
-        try:
-            return float(eval(str(expr), {"__builtins__": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
-        except Exception:
-            try:
-                return float(expr)
-            except Exception:
-                return None
-
     try:
-        dossier = os.path.join(settings.MEDIA_ROOT, "graphes")
-        os.makedirs(dossier, exist_ok=True)
-        chemin_png = os.path.join(dossier, output_name)
+        # --- Gestion du multigraph ---
+        if "multigraph" in graphique_dict:
+            print("🎨 Tracé MULTIGRAPHE détecté")
+            graf_dir = os.path.join(settings.MEDIA_ROOT, "graphes")
+            os.makedirs(graf_dir, exist_ok=True)
+            chemin_png = os.path.join(graf_dir, output_name)
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+            style_axes(ax, graphique_dict)
+
+            for g in graphique_dict["multigraph"]:
+                expr   = g.get("expression", "x")
+                xmin   = float(g.get("x_min", -2))
+                xmax   = float(g.get("x_max", 4))
+                x_vals = np.linspace(xmin, xmax, 400)
+                y_vals = eval(expr.replace('^','**'),
+                              {"x": x_vals, "np": np, "__builtins__": None})
+                style  = g.get("style", "solid")
+                label  = g.get("label", expr)
+                ax.plot(x_vals, y_vals, linestyle=style, label=label)
+
+            ax.legend()
+            ax.grid(True)
+            plt.tight_layout()
+            plt.savefig(chemin_png)
+            plt.close()
+            print(f"✅ Multigraph sauvegardé: {chemin_png}")
+            return "graphes/" + output_name
+
+        # sinon, on continue la logique existante...
+        if 'graphique' in graphique_dict:
+            graphique_dict = graphique_dict['graphique']
+
+        gtype = graphique_dict.get("type", "fonction").lower().strip()
+        titre = graphique_dict.get("titre", "Graphique généré")
+        graf_dir = os.path.join(settings.MEDIA_ROOT, "graphes")
+        os.makedirs(graf_dir, exist_ok=True)
+        chemin_png = os.path.join(graf_dir, output_name)
 
         print(f"🎨 Traçage graphique type: {gtype}")
 
+        # Fonction utilitaire safe_float...
+        def safe_float(expr):
+            try:
+                return float(eval(str(expr),
+                                  {"__builtins__": None,
+                                   "pi": np.pi, "np": np, "sqrt": np.sqrt}))
+            except:
+                try:
+                    return float(expr)
+                except:
+                    return None
+
+        # Branche "fonction"
         if "fonction" in gtype:
             x_min = safe_float(graphique_dict.get("x_min", -2)) or -2
             x_max = safe_float(graphique_dict.get("x_max", 4)) or 4
-            expression = graphique_dict.get("expression", "x")
+            expr  = graphique_dict.get("expression", "x").replace('^','**')
+
             x = np.linspace(x_min, x_max, 400)
-            expr_patch = expression.replace('^', '*')
+            y = eval(expr, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
+            if np.isscalar(y):
+                y = np.full_like(x, y)
 
-            for func in ["sin", "cos", "tan", "exp", "log", "log10", "arcsin", "arccos", "arctan", "sinh", "cosh",
-                         "tanh", "sqrt", "abs"]:
-                expr_patch = re.sub(r'(?<![\w.])' + func + r'\s\(', f'np.{func}(', expr_patch)
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.plot(x, y, color="#008060", label=titre)
+            style_axes(ax, graphique_dict)
+            ax.set_title(titre)
+            ax.grid(True)
+            ax.legend()
 
-            expr_patch = expr_patch.replace('ln(', 'np.log(')
-
-            try:
-                y = eval(expr_patch, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
-                if np.isscalar(y):
-                    y = np.full_like(x, y)
-            except Exception as e:
-                print(f"❌ Erreur tracé expression: {e}")
-                return None
-
-            plt.figure(figsize=(6, 4))
-            plt.plot(x, y, color="#008060")
-            plt.title(titre)
-            plt.xlabel("x")
-            plt.ylabel("y")
-            plt.grid(True)
-
+        # Branche "histogramme"
         elif "histogramme" in gtype:
             intervalles = graphique_dict.get("intervalles") or graphique_dict.get("classes") or []
-            eff = graphique_dict.get("effectifs", [])
-            labels = [str(ival) for ival in intervalles]
-            x_pos = np.arange(len(labels))
-            eff = [float(e) for e in eff]
+            eff = [float(e) for e in graphique_dict.get("effectifs", [])]
+            labels = [str(i) for i in intervalles]
 
-            plt.figure(figsize=(7, 4.5))
-            plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.9)
-            plt.xticks(x_pos, labels, rotation=35)
-            plt.title(titre)
-            plt.xlabel(graphique_dict.get("xlabel", "Classes / Intervalles"))
-            plt.ylabel(graphique_dict.get("ylabel", "Effectif"))
-            plt.grid(axis='y')
+            fig, ax = plt.subplots(figsize=(7, 4.5))
+            ax.bar(labels, eff, color="#208060", edgecolor='black', width=0.9)
+            style_axes(ax, graphique_dict)
+            ax.set_title(titre)
+            ax.grid(axis='y')
 
-        elif "diagramme à bandes" in gtype or "diagramme en bâtons" in gtype or "bâtons" in gtype or "batons" in gtype:
+        # Branche "diagramme à bandes / bâtons"
+        elif any(k in gtype for k in ["diagramme à bandes", "bâtons", "batons"]):
             cat = graphique_dict.get("categories", [])
-            eff = graphique_dict.get("effectifs", [])
-            x_pos = np.arange(len(cat))
+            eff = [float(e) for e in graphique_dict.get("effectifs", [])]
 
-            plt.figure(figsize=(7, 4.5))
-            plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.7)
-            plt.xticks(x_pos, cat, rotation=15)
-            plt.title(titre)
-            plt.xlabel("Catégories")
-            plt.ylabel("Effectif")
+            fig, ax = plt.subplots(figsize=(7, 4.5))
+            ax.bar(cat, eff, color="#208060", edgecolor='black', width=0.7)
+            style_axes(ax, graphique_dict)
+            ax.set_title(titre)
+            ax.grid(axis='y')
 
+        # Branche "nuage de points"
         elif "nuage de points" in gtype or "scatter" in gtype:
-            x_points = graphique_dict.get("x", [])
-            y_points = graphique_dict.get("y", [])
+            x_pts = graphique_dict.get("x", [])
+            y_pts = graphique_dict.get("y", [])
 
-            plt.figure(figsize=(6, 4))
-            plt.scatter(x_points, y_points, color="#006080")
-            plt.title(titre)
-            plt.xlabel("x")
-            plt.ylabel("y")
-            plt.grid(True)
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.scatter(x_pts, y_pts, color="#006080")
+            style_axes(ax, graphique_dict)
+            ax.set_title(titre)
+            ax.grid(True)
 
-        elif "effectifs cumulés" in gtype or "courbe des effectifs cumulés" in gtype:
-            x_points = graphique_dict.get("x", [])
-            y_points = graphique_dict.get("y", [])
+        # Branche "effectifs cumulés"
+        elif "effectifs cumulés" in gtype:
+            x_pts = graphique_dict.get("x", [])
+            y_pts = graphique_dict.get("y", [])
 
-            plt.figure(figsize=(6, 4))
-            plt.plot(x_points, y_points, marker="o", color="#b65d2f")
-            plt.title(titre)
-            plt.xlabel("x")
-            plt.ylabel("Effectifs cumulés")
-            plt.grid(True)
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.plot(x_pts, y_pts, marker="o", color="#b65d2f")
+            style_axes(ax, graphique_dict)
+            ax.set_title(titre)
+            ax.grid(True)
 
-        elif "diagramme circulaire" in gtype or "camembert" in gtype or "pie" in gtype:
+        # Branche "camembert / pie"
+        elif any(k in gtype for k in ["diagramme circulaire", "camembert", "pie"]):
             cat = graphique_dict.get("categories", [])
             eff = graphique_dict.get("effectifs", [])
 
-            plt.figure(figsize=(5.3, 5.3))
-            plt.pie(
-                eff,
-                labels=cat,
-                autopct='%1.1f%%',
-                colors=plt.cm.Paired.colors,
-                startangle=90,
-                wedgeprops={"edgecolor": "k"}
-            )
-            plt.title(titre)
+            fig, ax = plt.subplots(figsize=(5.3, 5.3))
+            ax.pie(eff, labels=cat, autopct='%1.1f%%',
+                   colors=plt.cm.Paired.colors, startangle=90,
+                   wedgeprops={"edgecolor": "k"})
+            ax.set_title(titre)
 
+        # Branche "polygone"
         elif "polygone" in gtype or "polygon" in gtype:
-            points = graphique_dict.get("points")
-            points_x = graphique_dict.get("points_x")
-            points_y = graphique_dict.get("points_y")
-            absc = graphique_dict.get("abscisses")
-            ords = graphique_dict.get("ordonnees")
-
-            if points:
-                x = [float(p[0]) for p in points]
-                y = [float(p[1]) for p in points]
-            elif points_x and points_y:
-                x = [float(xx) for xx in points_x]
-                y = [float(yy) for yy in points_y]
-            elif absc and ords:
-                x = [float(xx) for xx in absc]
-                y = [float(yy) for yy in ords]
+            # extraction des points
+            pts = graphique_dict.get("points") or []
+            if pts:
+                x = [float(p[0]) for p in pts]
+                y = [float(p[1]) for p in pts]
             else:
-                print("❌ Erreur polygone : aucun point")
-                x = []
-                y = []
+                x = [float(xx) for xx in graphique_dict.get("points_x", [])]
+                y = [float(yy) for yy in graphique_dict.get("points_y", [])]
 
-            plt.figure(figsize=(7, 4.5))
-            plt.plot(x, y, marker="o", color="#003355")
-            plt.title(graphique_dict.get("titre", "Polygone"))
-            plt.xlabel(graphique_dict.get("x_label", "Abscisse"))
-            plt.ylabel(graphique_dict.get("y_label", "Ordonnée"))
-            plt.grid(True)
+            fig, ax = plt.subplots(figsize=(7, 4.5))
+            ax.plot(x, y, marker="o", color="#003355")
+            style_axes(ax, graphique_dict)
+            ax.set_title(titre)
+            ax.grid(True)
 
+        # Branche "cercle trigo"
         elif "cercle trigo" in gtype:
             angles = graphique_dict.get("angles", [])
             labels = graphique_dict.get("labels", [])
 
-            plt.figure(figsize=(5, 5))
-            circle = plt.Circle((0, 0), 1, fill=False, edgecolor='black', linestyle='--')
-            ax = plt.gca()
+            fig, ax = plt.subplots(figsize=(5, 5))
+            circle = plt.Circle((0,0), 1, fill=False,
+                                edgecolor='black', linestyle='--')
             ax.add_artist(circle)
-
-            for i, angle_txt in enumerate(angles):
+            for i, ang in enumerate(angles):
                 try:
-                    a = float(eval(angle_txt, {"pi": np.pi}))
-                except Exception:
+                    a = float(eval(ang, {"pi": np.pi}))
+                except:
                     a = 0
                 x, y = np.cos(a), np.sin(a)
                 ax.plot([0, x], [0, y], color='#992020')
-                label = labels[i] if i < len(labels) else f"S{i + 1}"
-                ax.text(1.1 * x, 1.1 * y, label, fontsize=12)
-
-            ax.set_xlim(-1.5, 1.5)
-            ax.set_ylim(-1.5, 1.5)
-            plt.axis('off')
-            plt.title(titre)
+                ax.text(1.1*x, 1.1*y,
+                        labels[i] if i < len(labels) else f"S{i+1}")
+            ax.set_xlim(-1.5,1.5); ax.set_ylim(-1.5,1.5)
+            ax.axis('off')
+            ax.set_title(titre)
 
         else:
             print(f"❌ Type graphique non supporté : {gtype}")
             return None
 
+        # Sauvegarde des graphiques "classiques"
         plt.tight_layout()
         plt.savefig(chemin_png)
         plt.close()
@@ -760,7 +784,6 @@ def tracer_graphique(graphique_dict, output_name):
     except Exception as ee:
         print(f"❌ Erreur générale sauvegarde PNG: {ee}")
         return None
-
 
 # ============== PROMPT PAR DEFAUT ==============
 
