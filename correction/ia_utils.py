@@ -494,34 +494,69 @@ def extraire_tables_pdf(path_pdf: str):
         return []
 
 def decrire_table_variation(table):
-    df = table.df.replace('', np.nan).ffill().dropna(how='all', axis=1)
-    # Identifie les colonnes : x vs f(x) ou dérivée f'
-    cols = [c.lower() for c in df.iloc[0].tolist()]
-    data = df.iloc[1:].reset_index(drop=True)
-    # Extrait intervalles et valeurs
-    interv = data.iloc[:,0].astype(str).tolist()
-    valeurs = data.iloc[:,1].apply(lambda v: float(v.replace(',','.')) if re.match(r'^[0-9]', str(v)) else None).tolist()
-    descs = []
-    extrema = []
-    for i in range(len(valeurs)-1):
-        a,b = interv[i], interv[i+1]
-        v1,v2 = valeurs[i], valeurs[i+1]
-        if v1 is None or v2 is None: continue
-        sens = "croissante" if v2>v1 else "décroissante" if v2<v1 else "constante"
-        descs.append(f"f {sens} de {a} à {b}")
-    # Cherche un extremum (v2<v1>v3 ou v2>v1<v3)
-    for i in range(1, len(valeurs)-1):
-        if valeurs[i] is not None:
-            if valeurs[i]>valeurs[i-1] and valeurs[i]>valeurs[i+1]:
-                extrema.append(f"maximum en {interv[i]} = {valeurs[i]}")
-            if valeurs[i]<valeurs[i-1] and valeurs[i]<valeurs[i+1]:
-                extrema.append(f"minimum en {interv[i]} = {valeurs[i]}")
-    texte = ""
-    if descs:
-        texte += "Tableau de variation : " + "; ".join(descs) + "."
-    if extrema:
-        texte += " Extrema : " + "; ".join(extrema) + "."
-    return texte if texte else None
+    """
+    Si table.df ressemble à un tableau de variation, renvoie
+    une description détaillée (sens de variation, extrema…).
+    Sinon, retourne None sans lever d’exception.
+    """
+    try:
+        df = table.df.replace('', np.nan) \
+                     .dropna(how='all', axis=1) \
+                     .fillna(method='ffill')
+
+        # 1) S’assurer qu’il y a au moins 2 colonnes et 2 lignes (1 en-tête + 1 donnée)
+        if df.shape[1] < 2 or df.shape[0] < 2:
+            return None
+
+        # 2) Extraction des données (on saute la 1ʳᵉ ligne d’en-tête)
+        data = df.iloc[1:].reset_index(drop=True)
+        intervalles = data.iloc[:, 0].astype(str).tolist()
+
+        # 3) Conversion sécurisée des valeurs f(x)
+        valeurs = []
+        for val in data.iloc[:, 1]:
+            try:
+                valeurs.append(float(str(val).replace(',', '.')))
+            except:
+                valeurs.append(None)
+
+        # 4) Construction des descriptions de variation
+        descs = []
+        for i in range(len(valeurs) - 1):
+            v1, v2 = valeurs[i], valeurs[i+1]
+            a, b = intervalles[i], intervalles[i+1]
+            if v1 is None or v2 is None:
+                continue
+            if v2 > v1:
+                descs.append(f"f croissante de {a} à {b}")
+            elif v2 < v1:
+                descs.append(f"f décroissante de {a} à {b}")
+            else:
+                descs.append(f"f constante de {a} à {b}")
+
+        # 5) Recherche d’extrema
+        extrema = []
+        for i in range(1, len(valeurs) - 1):
+            v0, v1, v2 = valeurs[i-1], valeurs[i], valeurs[i+1]
+            x = intervalles[i]
+            if v1 is None or v0 is None or v2 is None:
+                continue
+            if v1 > v0 and v1 > v2:
+                extrema.append(f"maximum en {x} = {v1}")
+            elif v1 < v0 and v1 < v2:
+                extrema.append(f"minimum en {x} = {v1}")
+
+        # 6) Composition du texte final
+        parts = []
+        if descs:
+            parts.append("Tableau de variation : " + "; ".join(descs) + ".")
+        if extrema:
+            parts.append("Extrema : " + "; ".join(extrema) + ".")
+        return " ".join(parts) if parts else None
+
+    except Exception as e:
+        print(f"❌ Erreur decrire_table_variation: {e}")
+        return None
 
 
 def decrire_image(path_image: str) -> str:
