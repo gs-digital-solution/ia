@@ -694,21 +694,56 @@ def tracer_graphique(graphique_dict, output_name):
 
         # Branche "fonction"
         if "fonction" in gtype:
+            # 1) préparer safe_float si pas déjà en haut
+            def safe_float(expr):
+                try:
+                    return float(eval(str(expr),
+                                      {"__builtins__": None,
+                                       "pi": np.pi, "np": np, "sqrt": np.sqrt}))
+                except:
+                    try:
+                        return float(expr)
+                    except:
+                        return None
+
+            # 2) lire et patcher l'expression
+            expr_raw = graphique_dict.get("expression", "x")
+            expr = expr_raw.replace('^', '**')
+            expr = re.sub(r'ln\|\s*([^\|]+?)\s*\|', r'np.log(np.abs(\1))', expr)
+            expr = re.sub(r'(?<=\d)(?=x)', '*', expr)
+            for func in ["sin","cos","tan","exp","sqrt","log","log10","arcsin","arccos","arctan"]:
+                expr = re.sub(rf'(?<![\w\.]){func}\(', f'np.{func}(', expr)
+            print(f"🖼️ DEBUG – fonction brute : {expr_raw}")
+            print(f"🖼️ DEBUG – fonction patchée : {expr}")
+
+            # 3) calculer x_min et x_max
             x_min = safe_float(graphique_dict.get("x_min", -2)) or -2
             x_max = safe_float(graphique_dict.get("x_max", 4)) or 4
-            expr  = graphique_dict.get("expression", "x").replace('^','**')
 
+            # 4) créer les abscisses et évaluer y
             x = np.linspace(x_min, x_max, 400)
-            y = eval(expr, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
-            if np.isscalar(y):
-                y = np.full_like(x, y)
+            try:
+                y = eval(expr, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
+                if np.isscalar(y):
+                    y = np.full_like(x, y)
+            except Exception as e:
+                print(f"❌ Erreur évaluation expr '{expr}': {e}")
+                return None
 
+            # 5) tracer avec style_axes
             fig, ax = plt.subplots(figsize=(6, 4))
             ax.plot(x, y, color="#008060", label=titre)
             style_axes(ax, graphique_dict)
             ax.set_title(titre)
             ax.grid(True)
             ax.legend()
+
+            # 6) sauvegarde
+            plt.tight_layout()
+            plt.savefig(chemin_png)
+            plt.close()
+            print(f"✅ Graphique sauvegardé: {chemin_png}")
+            return "graphes/" + output_name
 
         # Branche "histogramme"
         elif "histogramme" in gtype:
