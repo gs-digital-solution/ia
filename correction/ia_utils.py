@@ -325,13 +325,26 @@ def format_table_markdown(table_text):
 
 
 def generate_corrige_html(corrige_text):
+    """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
     if not corrige_text:
         return ""
 
+    # Formatage des expressions mathématiques (Latex) et tableaux
     formatted = detect_and_format_math_expressions(corrige_text)
     lines = formatted.strip().split('\n')
+
+    # Pattern pour détecter les débuts d'exercice/partie
+    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
+                                  re.IGNORECASE)
     html_output = []
     i = 0
+
+    # Branding CIS en haut
+    html_output.append(
+        '<div class="cis-message"><strong>SUJET CORRIGÉ PAR L\'APPLICATION CIS, DISPO SUR PLAYSTORE</strong></div>')
+
+    # Pour gérer la séparation en blocs
+    in_bloc_exercice = False
 
     while i < len(lines):
         line = lines[i].strip()
@@ -339,6 +352,42 @@ def generate_corrige_html(corrige_text):
             i += 1
             continue
 
+        # Début d'un nouvel exercice/partie
+        if pattern_exercice.match(line):
+            # Ferme le bloc précédent s'il y en avait un
+            if in_bloc_exercice:
+                html_output.append('</div>')
+            # Ouvre un nouveau bloc, titre en gros
+            html_output.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
+            in_bloc_exercice = True
+            i += 1
+            continue
+
+        # Sous-titre question principale (Question 1, 2, etc.)
+        if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
+            html_output.append(f'<h2 class="titre-question">{line}</h2>')
+            i += 1
+            continue
+
+        # Sous-titre secondaire (1., 2., etc.)
+        if re.match(r'^\d+\.', line):
+            html_output.append(f'<h3 class="titre-question">{line}</h3>')
+            i += 1
+            continue
+
+        # Sous-question (a), b), etc.)
+        if re.match(r'^[a-z]\)', line):
+            html_output.append(f'<p><strong>{line}</strong></p>')
+            i += 1
+            continue
+
+        # Listes
+        if line.startswith('•') or line.startswith('-'):
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+            continue
+
+        # Tableaux markdown
         if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
             table_lines = []
             j = i
@@ -350,27 +399,19 @@ def generate_corrige_html(corrige_text):
             i = j
             continue
 
-        if re.search(r'\\\[.?\\\]', line):
-            line = re.sub(r'\\\[(\s)(.?)(\s)\\\]', r'\[\2\]', line)
-            html_output.append(f'<p>{line}</p>')
+        # Formules LaTeX
+        if '\\(' in line or '\\[' in line:
+            html_output.append(f'<p class="reponse-question mathjax">{line}</p>')
             i += 1
-        elif re.match(r'^\d+\.', line):
-            html_output.append(f'<h2>{line}</h2>')
-            i += 1
-        elif re.match(r'^[a-z]\)', line):
-            html_output.append(f'<p><strong>{line}</strong></p>')
-            i += 1
-        elif line.startswith('•') or line.startswith('-') or line.startswith('•'):
-            html_output.append(f'<p>{line}</p>')
-            i += 1
-        elif '\\(' in line or '\\[' in line:
-            line = re.sub(r'\\\(\s*([^)]?)\s\\\)', r'\\(\1\\)', line)
-            line = re.sub(r'\\\[\s*([^]]?)\s\\\]', r'\[\1\]', line)
-            html_output.append(f'<p>{line}</p>')
-            i += 1
-        else:
-            html_output.append(f'<p>{line}</p>')
-            i += 1
+            continue
+
+        # Cas général : paragraphe de réponse ou explication
+        html_output.append(f'<p class="reponse-question">{line}</p>')
+        i += 1
+
+    # Ferme le dernier bloc exercice si ouvert
+    if in_bloc_exercice:
+        html_output.append('</div>')
 
     return mark_safe("".join(html_output))
 
