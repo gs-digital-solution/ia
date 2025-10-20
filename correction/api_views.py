@@ -19,7 +19,7 @@ from rest_framework.parsers import MultiPartParser, JSONParser
 from django.shortcuts import get_object_or_404
 import markdown
 import re
-from .ia_utils import detect_and_format_math_expressions, generate_corrige_html
+from .ia_utils import detect_and_format_math_expressions, generate_corrige_html,format_corrige_pdf_structure
 from django.shortcuts import render, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
@@ -276,7 +276,11 @@ class StatutSoumissionAPIView(APIView):
 
             # 🏆 Sanitation ONLY if string is not empty
             if corrige_raw.strip() != "":
-                latex_clean = detect_and_format_math_expressions(corrige_raw)
+                # 1) Structure le texte
+                corrige_structured = format_corrige_pdf_structure(corrige_raw)
+                # 2) Corrige le LaTeX
+                latex_clean = detect_and_format_math_expressions(corrige_structured)
+                # 3) Transforme en HTML stylisé final
                 html_corrige = generate_corrige_html(latex_clean)
                 resultat['corrige_text'] = html_corrige
             else:
@@ -451,7 +455,8 @@ class CorrigeHTMLView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
-        latex = detect_and_format_math_expressions(raw)
+        corrige_structured = format_corrige_pdf_structure(raw)
+        latex = detect_and_format_math_expressions(corrige_structured)
         html_body = generate_corrige_html(latex)
 
         return render(request, "correction/corrige_view.html", {
@@ -469,7 +474,8 @@ class CorrigePDFView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
-        latex = detect_and_format_math_expressions(raw)
+        corrige_structured = format_corrige_pdf_structure(raw)
+        latex = detect_and_format_math_expressions(corrige_structured)
         html_body = generate_corrige_html(latex)
 
         context = {

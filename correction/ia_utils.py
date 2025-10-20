@@ -20,6 +20,80 @@ import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 
+# ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
+
+PATTERNS_BLOCS = [
+    r'COMENTARIO DEL TEXTO', r'ESTRUCTURAS DE COMUNICACIÓN', r'PRODUCCIÓN DE TEXTOS',
+    r'RECEPCIÓN DE TEXTOS', r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
+    r'TEIL[1I]? *LESEVERSTEHEN', r'MEDIATION', r'SCHRIFTLICHE PRODUKTION',
+    r'STRUKTUREN UND KOMMUNIKATION', r'SCHRIFTLICHER AUSDRUCK',
+    r'GRAMMAR', r'VOCABULARY', r'COMPREHENSION', r'ESSAY',
+    r'PARTIE[- ]?[AIB]{0,2}\s*:?.*EVALUATION DES RESOURCES',
+    r'PARTIE[- ]?[AIB]{0,2}\s*:?.*EVALUATION DES COMPETENCES',
+    r'PARTIE[- ]?[AIB]{0,2}', r'EXERCICE[- ]?\d+', r'EXERICE[- ]?\d+',
+    r'1ere partie', r'2e partie',
+    r'EVALUATION DES RESOURCES', r'EVALUATION DES COMPETENCES',
+    r'COMPETENCE'
+]
+
+PATTERNS_QUESTIONS = [
+    r'^\d{1,2,3,4,5,6,7,8,9}[.\-]',                   # 1. ou 2. ou 1- ou 2-
+    r'^\d{1,2,3,4,5,6,7,8,9}[.]\d{1,2,3,4,5,6,7,8,9}[.-]?',          # 1.1. ou 2.1-
+    r'^\d{1,2,3,4,5,6,7,8,9}[a-z]{1}[.]',              # 1a.
+    r'^[ivxIVX]{1,4}[.)-]',              # i. ou i) ou ii-) (romain)
+    r'^[a-z]{1}[.)]',                    # a) b)
+    r'^[A-Z]{1}[.)]',                    # A) B)
+    r'^\d{1,2,3,4,5,6,7,8,9}[.][a-z]{1}[.]',           # 1.a.
+    r'^\d{1,2,3,4,5,6,7,8,9}[.][A-Z]{1}[.]',           # 2.A.
+    r'^\(\d+\)',                         # (1)
+    r'^\([a-z]\)',                       # (a)
+    r'^\([ivxIVX]+\)',                   # (i)
+]
+
+# ========== FONCTION DE STRUCTURATION POUR ORGANISER LES EXERCICES SUR LE PDF==========
+
+def format_corrige_pdf_structure(texte_corrige_raw):
+    """
+    Nettoie et structure le corrigé pour le PDF/HTML.
+    Gère les titres, exercices, questions et réponses.
+    """
+    # Supprime les marqueurs parasites générés par l'IA
+    texte = re.sub(r"(#+\s*)", "", texte_corrige_raw)
+    texte = re.sub(r"(\*{2,})", "", texte)
+    texte = re.sub(r"\n{3,}", "\n\n", texte)  # réduit les multiples sauts de lignes
+
+    lignes = texte.strip().split('\n')
+    html_output = []
+    in_bloc = False
+
+    for line in lignes:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Bloc/exercice/partie
+        if any(re.search(pat, line, re.IGNORECASE) for pat in PATTERNS_BLOCS):
+            if in_bloc: html_output.append("</div>")
+            html_output.append(f'<div class="bloc-exercice" style="margin-top:60px;"><h1 class="titre-exercice">{line}</h1>')
+            in_bloc = True
+            continue
+
+        # Question/sous-question
+        if any(re.match(pat, line) for pat in PATTERNS_QUESTIONS):
+            html_output.append(f'<h2 class="titre-question">{line}</h2>')
+            continue
+
+        # Code/algorithme (optionnel, à personnaliser)
+        if line.lower().startswith(("algorithme", "début", "fin", "code")):
+            html_output.append(f'<div class="code-block">{line}</div>')
+            continue
+
+        # Réponse standard
+        html_output.append(f'<p class="reponse-question">{line}</p>')
+
+    if in_bloc: html_output.append("</div>")
+    return "".join(html_output)
+
 # ============== BLIP IMAGE CAPTIONING ==============
 # On détecte si CUDA est dispo, sinon on reste sur CPU.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -264,35 +338,37 @@ def flatten_multiline_latex_blocks(text):
 def detect_and_format_math_expressions(text):
     if not text:
         return ""
-    # Convertir les dollars en balises LaTeX pour MathJax
-    # inline : $...$ → \(...\)
-    text = re.sub(r'\$(.+?)\$', r'\\(\1\\)', text)
-    # block : $$...$$ → \[...\]
-    text = re.sub(r'\$\$([\s\S]+?)\$\$', r'\\[\1\\]', text)
+
+    # Block formulas $$...$$ -> \[ ... \]
     text = re.sub(
-        r'\$\$\s*([\s\S]+?)\s*\$\$',
+        r'\$\$([\s\S]+?)\$\$',
         lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]',
         text,
         flags=re.DOTALL
     )
-
+    # Inline formulas $...$ -> \( ... \)
+    # On évite d'attraper les "$$...$$"
     text = re.sub(
-        r'\$\s*([^$]+?)\s*\$',
+        r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)',
         lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
-        text
+        text,
+        flags=re.DOTALL
     )
-
+    # Nettoyage des blocs LaTeX multiligne
     text = re.sub(
-        r'(?<!\\)\[\s*([\s\S]+?)\s*\]',
-        lambda m: r'\[' + ' '.join(m.group(1).splitlines()).strip() + r'\]',
-        text
+        r'\\\[\s*([\s\S]+?)\s*\\\]',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()) + r'\]',
+        text,
+        flags=re.DOTALL
     )
-
-    text = flatten_multiline_latex_blocks(text)
+    text = re.sub(
+        r'\\\(\s*([\s\S]+?)\s*\\\)',
+        lambda m: r'\(' + " ".join(m.group(1).splitlines()) + r'\)',
+        text,
+        flags=re.DOTALL
+    )
     text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
-
     return text
-
 
 def format_table_markdown(table_text):
     lines = table_text.strip().split('\n')
