@@ -37,14 +37,14 @@ PATTERNS_BLOCS = [
 ]
 
 PATTERNS_QUESTIONS = [
-    r'^\d{1,2,3,4,5,6,7,8,9}[.\-]',                   # 1. ou 2. ou 1- ou 2-
-    r'^\d{1,2,3,4,5,6,7,8,9}[.]\d{1,2,3,4,5,6,7,8,9}[.-]?',          # 1.1. ou 2.1-
-    r'^\d{1,2,3,4,5,6,7,8,9}[a-z]{1}[.]',              # 1a.
+    r'^\d{1,2}[.\-]',                   # 1. ou 2. ou 1- ou 2-
+    r'^\d{1,2}[.]\d{1,2}[.-]?',          # 1.1. ou 2.1-
+    r'^\d{1,2,3}[a-z]{1}[.]',              # 1a.
     r'^[ivxIVX]{1,4}[.)-]',              # i. ou i) ou ii-) (romain)
     r'^[a-z]{1}[.)]',                    # a) b)
     r'^[A-Z]{1}[.)]',                    # A) B)
-    r'^\d{1,2,3,4,5,6,7,8,9}[.][a-z]{1}[.]',           # 1.a.
-    r'^\d{1,2,3,4,5,6,7,8,9}[.][A-Z]{1}[.]',           # 2.A.
+    r'^\d{1,2}[.][a-z]{1}[.]',           # 1.a.
+    r'^\d{1,2}[.][A-Z]{1}[.]',           # 2.A.
     r'^\(\d+\)',                         # (1)
     r'^\([a-z]\)',                       # (a)
     r'^\([ivxIVX]+\)',                   # (i)
@@ -1094,7 +1094,8 @@ Rappels :
 
 def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere):
     """
-    Traitement direct pour les épreuves courtes (ANCIENNE MÉTHODE)
+    Traitement direct pour les épreuves courtes.
+    Nettoie/structure le corrigé juste après la réponse IA, avant toute manipulation HTML/graphique.
     """
     print("🎯 Traitement DIRECT (épreuve courte)")
 
@@ -1165,14 +1166,18 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
         print(output)
         print("=" * 50)
 
-        # Traitement des graphiques
-        regex_all_json = re.findall(r'---corrigé---\s\n*({[\s\S]+?})', output)
+        # === AJOUT CRUCIAL : nettoyage et structuration DÈS reception! ===
+        output_structured = format_corrige_pdf_structure(output)
+
+        # --- Traitement des graphiques sur texte structuré ---
+        regex_all_json = re.findall(r'---corrigé---\s\n*({[\s\S]+?})', output_structured)
         graph_list = []
 
         print(f"🔍 JSONs détectés: {len(regex_all_json)}")
 
+        corrige_txt = output_structured
+
         if regex_all_json:
-            corrige_txt = output
             for idx, found_json in enumerate(regex_all_json, 1):
                 try:
                     sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
@@ -1227,7 +1232,7 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
             return corrige_txt.strip(), graph_list
 
         print("✅ Traitement direct terminé (sans graphiques)")
-        return output.strip(), None
+        return corrige_txt.strip(), None  # Toujours renvoyer la version nettoyée et structurée
 
     except Exception as e:
         error_msg = f"Erreur API: {str(e)}"
