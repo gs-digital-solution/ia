@@ -339,36 +339,33 @@ def detect_and_format_math_expressions(text):
     if not text:
         return ""
 
-    # Block formulas $$...$$ -> \[ ... \]
+    # Block formulas $$...$$ → \[...\] (multilignes fusionnées sur une ligne)
     text = re.sub(
         r'\$\$([\s\S]+?)\$\$',
-        lambda m: r'\[' + m.group(1).replace('\n', ' ').strip() + r'\]',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
         text,
         flags=re.DOTALL
     )
-    # Inline formulas $...$ -> \( ... \)
-    # On évite d'attraper les "$$...$$"
+    # Inline formulas $...$ → \(...\)
     text = re.sub(
         r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)',
         lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
         text,
         flags=re.DOTALL
     )
-    # Nettoyage des blocs LaTeX multiligne
+    # Blocs déjà en \[...\] : fusionne aussi les lignes ! (très important)
     text = re.sub(
         r'\\\[\s*([\s\S]+?)\s*\\\]',
-        lambda m: r'\[' + " ".join(m.group(1).splitlines()) + r'\]',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
         text,
         flags=re.DOTALL
     )
-    text = re.sub(
-        r'\\\(\s*([\s\S]+?)\s*\\\)',
-        lambda m: r'\(' + " ".join(m.group(1).splitlines()) + r'\)',
-        text,
-        flags=re.DOTALL
-    )
+    # Corrige les doubles anti-slashs parasites
+    text = re.sub(r'\\\\\s*\[', r'\[', text)
+    text = re.sub(r'\\\\\s*\]', r'\]', text)
     text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
     return text
+
 
 def format_table_markdown(table_text):
     lines = table_text.strip().split('\n')
@@ -850,6 +847,38 @@ def tracer_graphique(graphique_dict, output_name):
             # 5) tracer avec style_axes
             fig, ax = plt.subplots(figsize=(6, 4))
             ax.plot(x, y, color="#008060", label=titre)
+
+            # --- AJOUT POUR GERER LES ASYMPTOTES FORMAT DICT/LIST ---
+            asymptotes = graphique_dict.get("asymptotes", None)
+            if asymptotes:
+                if isinstance(asymptotes, dict):
+                    # Ex : {"verticale": 2, "horizontale": 1}
+                    if "verticale" in asymptotes:
+                        try:
+                            ax.axvline(x=float(asymptotes["verticale"]), color="red", linestyle="--",
+                                       label=f"x={asymptotes['verticale']}")
+                        except Exception as e:
+                            print(f"Erreur tracé asymptote verticale : {e}")
+                    if "horizontale" in asymptotes:
+                        try:
+                            ax.axhline(y=float(asymptotes["horizontale"]), color="green", linestyle="--",
+                                       label=f"y={asymptotes['horizontale']}")
+                        except Exception as e:
+                            print(f"Erreur tracé asymptote horizontale : {e}")
+                elif isinstance(asymptotes, list):
+                    for asy in asymptotes:
+                        if isinstance(asy, str):
+                            if asy.startswith("x="):
+                                try:
+                                    ax.axvline(x=float(asy.split("=")[1]), color="red", linestyle="--", label=asy)
+                                except Exception as e:
+                                    print(f"Erreur tracé asymptote verticale : {e}")
+                            if asy.startswith("y="):
+                                try:
+                                    ax.axhline(y=float(asy.split("=")[1]), color="green", linestyle="--", label=asy)
+                                except Exception as e:
+                                    print(f"Erreur tracé asymptote horizontale : {e}")
+
             style_axes(ax, graphique_dict)
             ax.set_title(titre)
             ax.grid(True)
