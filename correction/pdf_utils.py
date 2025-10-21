@@ -58,7 +58,7 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         "print-media-type": None,
         "no-stop-slow-scripts": None,
         "javascript-delay": "8000",  # le temps
-        "zoom": "3",  # Zoom pour agrandir le contenu
+        "zoom": "12",  # Zoom pour agrandir le contenu
         "margin-top": "2mm",
         "margin-bottom": "2mm",
         "margin-left": "1mm",
