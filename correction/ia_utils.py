@@ -184,7 +184,8 @@ def estimer_tokens(texte):
 
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     """
-    Génère le corrigé pour un seul exercice
+    Génère le corrigé pour un seul exercice et extrait graphiques éventuels.
+    Le parsing JSON est robuste à tout formatage IA.
     """
     print("🎯 Génération corrigé pour exercice individuel...")
 
@@ -229,7 +230,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
             {"role": "user", "content": prompt_ia}
         ],
         "temperature": 0.1,
-        "max_tokens": 4000,  # Suffisant pour un exercice individuel
+        "max_tokens": 4000,
         "top_p": 0.9,
         "frequency_penalty": 0.1
     }
@@ -247,17 +248,64 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         output = response_data['choices'][0]['message']['content']
         print(f"✅ Réponse API reçue: {len(output)} caractères")
 
-        # Traitement des graphiques pour cet exercice
-        corrige_final, graphiques = extract_and_process_graphs(output)
+        # Nettoyage/structuration dès la réception IA
+        output_structured = format_corrige_pdf_structure(output)
 
-        print(f"📊 Exercice traité: {len(graphiques)} graphique(s) généré(s)")
-        return corrige_final, graphiques
+        graph_list = []
+        corrige_txt = output_structured
+        # Extraction graphique: regex robuste !
+        regex_all_json = re.findall(r'---corrigé---[\s\r\n]*({[\s\S]+?})', output_structured)
+        print(f"🔍 JSONs détectés (robuste): {len(regex_all_json)}")
+
+        if regex_all_json:
+            for idx, found_json in enumerate(regex_all_json, 1):
+                try:
+                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
+                    sjson = re.sub(r'},\s*$', '}', sjson)
+                    sjson = re.sub(r',\s*}', '}', sjson)
+                    sjson = re.sub(r',\s*\]', ']', sjson)
+                    nb_open = sjson.count("{")
+                    nb_close = sjson.count("}")
+                    if nb_close < nb_open:
+                        sjson = sjson + "}" * (nb_open - nb_close)
+                    nb_open = sjson.count("[")
+                    nb_close = sjson.count("]")
+                    if nb_close < nb_open:
+                        sjson = sjson + "]" * (nb_open - nb_close)
+                    print(f'DEBUG PATCHED sjson {idx}: {sjson[:200]}...')
+                    graph_dict = json.loads(sjson)
+                    output_name = f"graphique{idx}{int(1000 * np.random.rand())}.png"
+                    img_path = tracer_graphique(graph_dict, output_name)
+                    if img_path:
+                        abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                        img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
+                        for tag in [
+                            f"---corrigé---\n{found_json}",
+                            f"---corrigé---\r\n{found_json}",
+                            f"---corrigé--- {found_json}",
+                            f"---corrigé---{found_json}",
+                            found_json
+                        ]:
+                            corrige_txt = corrige_txt.replace(tag, img_tag, 1)
+                    else:
+                        for tag in [
+                            f"---corrigé---\n{found_json}",
+                            f"---corrigé---\r\n{found_json}",
+                            f"---corrigé--- {found_json}",
+                            f"---corrigé---{found_json}",
+                            found_json
+                        ]:
+                            corrige_txt = corrige_txt.replace(tag, "[Erreur génération graphique]", 1)
+                    graph_list.append(graph_dict)
+                except Exception as e:
+                    print(f"❌ Erreur parsing JSON graphique {idx}: {e}")
+                    continue
+        return corrige_txt.strip(), graph_list
 
     except Exception as e:
         error_msg = f"Erreur: {str(e)}"
         print(f"❌ {error_msg}")
         return error_msg, None
-
 
 def extract_and_process_graphs(output):
     """
@@ -1128,150 +1176,11 @@ Rappels :
 
 def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere):
     """
-    Traitement direct pour les épreuves courtes.
-    Nettoie/structure le corrigé juste après la réponse IA, avant toute manipulation HTML/graphique.
+    Traitement direct pour les épreuves courtes (un seul exercice).
+    Appelle la fonction par exercice pour centraliser l'extraction graphique.
     """
     print("🎯 Traitement DIRECT (épreuve courte)")
-
-    system_prompt = DEFAULT_SYSTEM_PROMPT
-    exemple_prompt = ""
-    consignes_finales = "Format de réponse strict : LaTeX pour les maths, Markdown pour les tableaux"
-
-    if matiere and hasattr(matiere, 'prompt_ia'):
-        promptia = matiere.prompt_ia
-        system_prompt = promptia.system_prompt or system_prompt
-        exemple_prompt = promptia.exemple_prompt or exemple_prompt
-        consignes_finales = promptia.consignes_finales or consignes_finales
-
-    lecons = [f"### {t}\n{c}" for t, c in lecons_contenus[:3]]
-    exemples = exemples_corriges[:2]
-
-    prompt_ia = f"""### CONTEXTE DU COURS
-{contexte}
-
-### LEÇONS UTILES
-{"".join(lecons) if lecons else 'Aucune leçon supplémentaire'}
-
-### EXEMPLES DE CORRIGÉS
-{exemple_prompt if exemple_prompt else ("".join(exemples) if exemples else 'Aucun exemple fourni')}
-
-### EXERCICE À CORRIGER
-{texte_enonce.strip()}
-
-### CONSIGNES FINALES
-{consignes_finales}
-"""
-
-    api_key = os.getenv('DEEPSEEK_API_KEY')
-    api_url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt_ia}
-        ],
-        "temperature": 0.12,
-        "max_tokens": 6000,
-        "top_p": 0.3,
-        "frequency_penalty": 0.2
-    }
-
-    try:
-        print("📡 Appel API DeepSeek (traitement direct)...")
-        response = requests.post(api_url, headers=headers, json=data, timeout=120)
-        response_data = response.json()
-
-        if response.status_code != 200:
-            error_msg = f"Erreur API DeepSeek: {response_data.get('message', 'Pas de détail')}"
-            print(f"❌ {error_msg}")
-            return error_msg, None
-
-        output = response_data['choices'][0]['message']['content']
-        print(f"✅ Réponse API reçue: {len(output)} caractères")
-
-        print("\n" + "=" * 50)
-        print("DEBUG: OUTPUT BRUT DE L'IA")
-        print("=" * 50)
-        print(output)
-        print("=" * 50)
-
-        # === AJOUT CRUCIAL : nettoyage et structuration DÈS reception! ===
-        output_structured = format_corrige_pdf_structure(output)
-
-        # --- Traitement des graphiques sur texte structuré ---
-        regex_all_json = re.findall(r'---corrigé---\s\n*({[\s\S]+?})', output_structured)
-        graph_list = []
-
-        print(f"🔍 JSONs détectés: {len(regex_all_json)}")
-
-        corrige_txt = output_structured
-
-        if regex_all_json:
-            for idx, found_json in enumerate(regex_all_json, 1):
-                try:
-                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
-                    sjson = re.sub(r'},\s*$', '}', sjson)
-                    sjson = re.sub(r',\s*}', '}', sjson)
-                    sjson = re.sub(r',\s*\]', ']', sjson)
-
-                    nb_open = sjson.count("{")
-                    nb_close = sjson.count("}")
-                    if nb_close < nb_open:
-                        sjson = sjson + "}" * (nb_open - nb_close)
-
-                    nb_open = sjson.count("[")
-                    nb_close = sjson.count("]")
-                    if nb_close < nb_open:
-                        sjson = sjson + "]" * (nb_open - nb_close)
-
-                    print(f'DEBUG PATCHED sjson {idx}: {sjson[:200]}...')
-                    graph_dict = json.loads(sjson)
-                    output_name = f"graphique{idx}{int(1000 * np.random.rand())}.png"
-                    img_path = tracer_graphique(graph_dict, output_name)
-
-                    if img_path:
-                        abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                        img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
-
-                        for tag in [
-                            f"---corrigé---\n{found_json}",
-                            f"---corrigé---\r\n{found_json}",
-                            f"---corrigé--- {found_json}",
-                            f"---corrigé---{found_json}",
-                            found_json
-                        ]:
-                            corrige_txt = corrige_txt.replace(tag, img_tag, 1)
-                    else:
-                        for tag in [
-                            f"---corrigé---\n{found_json}",
-                            f"---corrigé---\r\n{found_json}",
-                            f"---corrigé--- {found_json}",
-                            f"---corrigé---{found_json}",
-                            found_json
-                        ]:
-                            corrige_txt = corrige_txt.replace(tag, "[Erreur génération graphique]", 1)
-
-                    graph_list.append(graph_dict)
-
-                except Exception as e:
-                    print(f"❌ Erreur parsing JSON graphique {idx}: {e}")
-                    continue
-
-            print(f"✅ Traitement direct terminé: {len(graph_list)} graphique(s)")
-            return corrige_txt.strip(), graph_list
-
-        print("✅ Traitement direct terminé (sans graphiques)")
-        return corrige_txt.strip(), None  # Toujours renvoyer la version nettoyée et structurée
-
-    except Exception as e:
-        error_msg = f"Erreur API: {str(e)}"
-        print(f"❌ {error_msg}")
-        return error_msg, None
+    return generer_corrige_par_exercice(texte_enonce, contexte, matiere)
 
 
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
@@ -1280,35 +1189,26 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
     """
     print("🎯 Traitement AVEC DÉCOUPAGE (épreuve longue)")
 
-    # 1. SÉPARER LES EXERCICES
     exercices = separer_exercices(texte_epreuve)
-
-    # 2. TRAITER CHAQUE EXERCICE
     tous_corriges = []
     tous_graphiques = []
 
     for i, exercice in enumerate(exercices, 1):
         print(f"📝 Traitement exercice {i}/{len(exercices)}...")
 
-        # Générer le corrigé pour cet exercice
         corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere)
 
         if corrige and "Erreur" not in corrige:
-            # Ajouter un titre pour cet exercice
             titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
             tous_corriges.append(titre_exercice + corrige)
-
             if graphiques:
                 tous_graphiques.extend(graphiques)
             print(f"✅ Exercice {i} traité avec succès")
         else:
             print(f"❌ Exercice {i} en erreur: {corrige}")
-
-        # Petite pause pour éviter la surcharge API
         import time
         time.sleep(1)
 
-    # 3. COMBINER TOUS LES CORRIGÉS
     if tous_corriges:
         corrige_final = "".join(tous_corriges)
         print(f"🎉 Découpage terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
