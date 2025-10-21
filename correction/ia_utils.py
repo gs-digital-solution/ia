@@ -33,7 +33,7 @@ PATTERNS_BLOCS = [
     r'PARTIE[- ]?[AIB]{0,2}', r'EXERCICE[- ]?\d+', r'EXERICE[- ]?\d+',
     r'1ere partie', r'2e partie',
     r'EVALUATION DES RESOURCES', r'EVALUATION DES COMPETENCES',
-    r'COMPETENCE'
+    r'COMPETENCE', r'SITUATION PROBLEME'
 ]
 
 PATTERNS_QUESTIONS = [
@@ -403,8 +403,7 @@ def generate_corrige_html(corrige_text):
         return ""
 
     # Formatage des expressions mathématiques (Latex) et tableaux
-    formatted = detect_and_format_math_expressions(corrige_text)
-    lines = formatted.strip().split('\n')
+    lines = corrige_text.strip().split('\n')
 
     # Pattern pour détecter les débuts d'exercice/partie
     pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
@@ -823,6 +822,12 @@ def tracer_graphique(graphique_dict, output_name):
             # 2) lire et patcher l'expression
             expr_raw = graphique_dict.get("expression", "x")
             expr = expr_raw.replace('^', '**')
+            # Carrés/cubes unicode → puissance python
+            expr = expr.replace('²', '^2').replace('³', '^3')
+            # Patch (x+1)2 → (x+1)**2
+            expr = re.sub(r'\)\s*([0-9]+)', r')**\1', expr)
+            # Abs : |...| → np.abs(...)
+            expr = re.sub(r'\|([^\|]+)\|', r'np.abs(\1)', expr)
             expr = re.sub(r'ln\|\s*([^\|]+?)\s*\|', r'np.log(np.abs(\1))', expr)
             expr = re.sub(r'(?<=\d)(?=x)', '*', expr)
             for func in ["sin","cos","tan","exp","sqrt","log","log10","arcsin","arccos","arctan"]:
