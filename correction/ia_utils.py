@@ -20,6 +20,32 @@ import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 
+
+# ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
+def extract_json_blocks(text: str):
+    """
+    Parcourt text et renvoie la liste des tuples (graph_dict, start, end)
+    pour chaque JSON détecté via json.JSONDecoder().
+    """
+    decoder = json.JSONDecoder()
+    idx = 0
+    blocks = []
+    while True:
+        # cherche la prochaine accolade ouvrante
+        start = text.find('{', idx)
+        if start == -1:
+            break
+        try:
+            # raw_decode décode un JSON à partir de text[start:]
+            obj, end = decoder.raw_decode(text[start:])
+            # obj = dict Python, end = longueur du JSON
+            blocks.append((obj, start, start + end))
+            idx = start + end
+        except ValueError:
+            # si échec de décodage, on glisse d’un caractère
+            idx = start + 1
+    return blocks
+
 # ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
 
 PATTERNS_BLOCS = [
@@ -250,56 +276,36 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
 
         # Nettoyage/structuration dès la réception IA
         output_structured = format_corrige_pdf_structure(output)
-
-        graph_list = []
-        corrige_txt = output_structured
         # Extraction graphique: regex robuste !
-        regex_all_json = re.findall(r'---corrigé---[\s\r\n]*({[\s\S]+?})', output_structured)
-        print(f"🔍 JSONs détectés (robuste): {len(regex_all_json)}")
+        #regex_all_json = re.findall(r'---corrigé---[\s\r\n]*({[\s\S]+?})', output_structured)
+        #print(f"🔍 JSONs détectés (robuste): {len(regex_all_json)}")
+        # on part de la version structurée du corrigé
+        corrige_txt = output_structured
+        graph_list = []
 
-        if regex_all_json:
-            for idx, found_json in enumerate(regex_all_json, 1):
-                try:
-                    sjson = found_json.replace("'", '"').replace('\n', '').replace('\r', '').strip()
-                    sjson = re.sub(r'},\s*$', '}', sjson)
-                    sjson = re.sub(r',\s*}', '}', sjson)
-                    sjson = re.sub(r',\s*\]', ']', sjson)
-                    nb_open = sjson.count("{")
-                    nb_close = sjson.count("}")
-                    if nb_close < nb_open:
-                        sjson = sjson + "}" * (nb_open - nb_close)
-                    nb_open = sjson.count("[")
-                    nb_close = sjson.count("]")
-                    if nb_close < nb_open:
-                        sjson = sjson + "]" * (nb_open - nb_close)
-                    print(f'DEBUG PATCHED sjson {idx}: {sjson[:200]}...')
-                    graph_dict = json.loads(sjson)
-                    output_name = f"graphique{idx}{int(1000 * np.random.rand())}.png"
-                    img_path = tracer_graphique(graph_dict, output_name)
-                    if img_path:
-                        abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                        img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
-                        for tag in [
-                            f"---corrigé---\n{found_json}",
-                            f"---corrigé---\r\n{found_json}",
-                            f"---corrigé--- {found_json}",
-                            f"---corrigé---{found_json}",
-                            found_json
-                        ]:
-                            corrige_txt = corrige_txt.replace(tag, img_tag, 1)
-                    else:
-                        for tag in [
-                            f"---corrigé---\n{found_json}",
-                            f"---corrigé---\r\n{found_json}",
-                            f"---corrigé--- {found_json}",
-                            f"---corrigé---{found_json}",
-                            found_json
-                        ]:
-                            corrige_txt = corrige_txt.replace(tag, "[Erreur génération graphique]", 1)
+        # 1) Extraire tous les blocs JSON valides
+        json_blocks = extract_json_blocks(output_structured)
+        print(f"🔍 JSON blocks détectés : {len(json_blocks)}")
+
+        # 2) Pour chaque bloc, on trace le graphique et on insère la balise <img>
+        for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
+            try:
+                # tracer_graphique renvoie le chemin relatif ou None
+                output_name = f"graphique_{idx}.png"
+                img_path = tracer_graphique(graph_dict, output_name)
+                if img_path:
+                    abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                    img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" ' \
+                              f'style="max-width:100%;margin:10px 0;" />'
+                    # on remplace la portion de texte par l'image
+                    corrige_txt = corrige_txt[:start] + img_tag + corrige_txt[end:]
                     graph_list.append(graph_dict)
-                except Exception as e:
-                    print(f"❌ Erreur parsing JSON graphique {idx}: {e}")
-                    continue
+                else:
+                    # en cas d'erreur de génération
+                    corrige_txt = corrige_txt[:start] + "[Erreur génération graphique]" + corrige_txt[end:]
+            except Exception as e:
+                print(f"❌ Erreur sur bloc graphique {idx}: {e}")
+
         return corrige_txt.strip(), graph_list
 
     except Exception as e:
@@ -307,55 +313,52 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         print(f"❌ {error_msg}")
         return error_msg, None
 
-def extract_and_process_graphs(output):
+def extract_and_process_graphs(output: str):
     """
-    Extrait et traite les graphiques d'un corrigé
+    Extrait et traite les graphiques d'un corrigé en utilisant extract_json_blocks.
     """
-    print("🖼️ Extraction des graphiques...")
+    print("🖼️ Extraction des graphiques (via JSONDecoder)…")
 
     graphs_data = []
     final_text = output
 
-    pattern = r'---corrigé---\s*\n*\s*(\{[\s\S]*?\})(?=\s*$|\s*---|\s*\n\s*\w)'
-    matches = re.finditer(pattern, output)
+    # 1) Extractions des blocs JSON
+    json_blocks = extract_json_blocks(output)
+    print(f"🔍 JSON blocks détectés dans extract_and_process_graphs: {len(json_blocks)}")
 
-    print(f"🔍 Recherche de JSON graphique: {len(list(matches))} correspondance(s) trouvée(s)")
-
-    # Réinitialiser l'itérateur
-    matches = re.finditer(pattern, output)
-
-    for match_idx, match in enumerate(matches):
-        json_str = match.group(1).strip()
-        print(f"📦 JSON brut {match_idx + 1}: {json_str[:100]}...")
-
+    # 2) On parcourt et on insère les images
+    #    Pour gérer les remplacements successifs, on conserve un décalage 'offset'
+    offset = 0
+    for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
         try:
-            # Nettoyage du JSON
-            json_str = re.sub(r"'", '"', json_str)
-            json_str = re.sub(r'(\w+):', r'"\1":', json_str)
-            json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-            json_str = re.sub(r'\s+', ' ', json_str)
-
-            print(f"🧹 JSON nettoyé {match_idx + 1}: {json_str[:100]}...")
-
-            graph_data = json.loads(json_str)
-            graphs_data.append(graph_data)
-
-            output_name = f"graphique_{match_idx + 1}_{np.random.randint(1000)}.png"
-            print(f"🎨 Génération graphique {match_idx + 1}...")
-            img_path = tracer_graphique(graph_data, output_name)
+            output_name = f"graphique_{idx}.png"
+            img_path = tracer_graphique(graph_dict, output_name)
 
             if img_path:
-                img_tag = f'<div class="graphique-container"><img src="/media/{img_path}" alt="Graphique {match_idx + 1}" style="max-width:100%;margin:10px 0;" />'
-                final_text = final_text.replace(match.group(0), img_tag)
-                print(f"✅ Graphique {match_idx + 1} généré: {img_path}")
+                abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                img_tag = (
+                    f'<img src="/media/{img_path}" alt="Graphique {idx}" '
+                    f'style="max-width:100%;margin:10px 0;" />'
+                )
+
+                # Ajuster les indices de remplacement avec l'offset
+                s, e = start + offset, end + offset
+                final_text = final_text[:s] + img_tag + final_text[e:]
+                # Mettre à jour l’offset en fonction de la différence de longueur
+                offset += len(img_tag) - (end - start)
+
+                graphs_data.append(graph_dict)
+                print(f"✅ Graphique {idx} inséré.")
             else:
-                final_text = final_text.replace(match.group(0),
-                                                '<div class="graphique-error">Erreur génération graphique</div>')
-                print(f"❌ Erreur génération graphique {match_idx + 1}")
+                # En cas d’échec de tracé, on remplace par un message
+                s, e = start + offset, end + offset
+                final_text = final_text[:s] + "[Erreur génération graphique]" + final_text[e:]
+                offset += len("[Erreur génération graphique]") - (end - start)
+                print(f"❌ Graphique {idx} : erreur de tracé.")
 
         except Exception as e:
-            print(f"❌ Erreur parsing JSON graphique {match_idx + 1}: {e}")
-            final_text = final_text.replace(match.group(0), f'<div class="graph-error">Erreur: {str(e)}</div>')
+            print(f"❌ Exception sur bloc graphique {idx}: {e}")
+            continue
 
     print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s) traité(s)")
     return final_text, graphs_data
