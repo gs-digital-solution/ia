@@ -36,7 +36,11 @@ from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from correction.models import AppConfig
 from rest_framework.response import Response
 import time
-
+from .ia_utils import (
+    flatten_multiline_latex_blocks,
+    extract_and_process_graphs,
+    format_corrige_pdf_structure
+)
 
 
 
@@ -264,28 +268,31 @@ class StatutSoumissionAPIView(APIView):
 
     def get(self, request, soumission_id):
         try:
-            from .ia_utils import detect_and_format_math_expressions, generate_corrige_html
-
             soumission = SoumissionIA.objects.get(id=soumission_id, user=request.user)
-            resultat = soumission.resultat_json or {}
+            resultat   = soumission.resultat_json or {}
 
-            # Corrigé existant = string, sinon chaîne vide
             corrige_raw = resultat.get('corrige_text') or ""
             print("==== DEBUG: corrige_text avant sanitation ====")
             print(repr(corrige_raw))
 
-            # 🏆 Sanitation ONLY if string is not empty
-            if corrige_raw.strip() != "":
-                # 1) Structure le texte
-                corrige_structured = format_corrige_pdf_structure(corrige_raw)
-                # 2) Corrige le LaTeX
-                latex_clean = detect_and_format_math_expressions(corrige_structured)
-                # 3) Transforme en HTML stylisé final
-                html_corrige = generate_corrige_html(latex_clean)
+            if corrige_raw.strip():
+                # 1) Structuration
+                corrige_struct = format_corrige_pdf_structure(corrige_raw)
+                # 2) Fusion LaTeX multi-lignes
+                corrige_flat   = flatten_multiline_latex_blocks(corrige_struct)
+                # 3) Passage MathJax (inline & display)
+                latex_clean    = detect_and_format_math_expressions(corrige_flat)
+                # 4) Extraction + insertion des graphiques
+                corrige_graphs, graphs_data = extract_and_process_graphs(latex_clean)
+                # 5) Génération du HTML final
+                html_corrige   = generate_corrige_html(corrige_graphs)
+
                 resultat['corrige_text'] = html_corrige
+                # (optionnel) renvoyer aussi la liste des graphiques JSON
+                resultat['graphiques']   = graphs_data
             else:
                 print("==== DEBUG: AUCUN corrigé renvoyé ou string vide ====")
-                resultat['corrige_text'] = ""  # Renvoyer une chaîne vide
+                resultat['corrige_text'] = ""
 
             return Response({
                 "statut": soumission.statut,
@@ -449,15 +456,18 @@ class DebugExtractionAPIView(APIView):
 
 class CorrigeHTMLView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes     = [IsAuthenticated]
 
     def get(self, request, soumission_id):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
+        raw  = soum.resultat_json.get("corrige_text") or ""
 
-        raw = soum.resultat_json.get("corrige_text") or ""
-        corrige_structured = format_corrige_pdf_structure(raw)
-        latex = detect_and_format_math_expressions(corrige_structured)
-        html_body = generate_corrige_html(latex)
+        # Même pipeline que pour StatutSoumissionAPIView
+        corrige_struct = format_corrige_pdf_structure(raw)
+        corrige_flat   = flatten_multiline_latex_blocks(corrige_struct)
+        latex_clean    = detect_and_format_math_expressions(corrige_flat)
+        corrige_graphs, _  = extract_and_process_graphs(latex_clean)
+        html_body      = generate_corrige_html(corrige_graphs)
 
         return render(request, "correction/corrige_view.html", {
             "titre_corrige": f"Corrigé CIS – Exercice {soum.demande.id}",
@@ -466,17 +476,21 @@ class CorrigeHTMLView(APIView):
         })
 
 
+
 class CorrigePDFView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes     = [IsAuthenticated]
 
     def get(self, request, soumission_id):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
+        raw  = soum.resultat_json.get("corrige_text") or ""
 
-        raw = soum.resultat_json.get("corrige_text") or ""
-        corrige_structured = format_corrige_pdf_structure(raw)
-        latex = detect_and_format_math_expressions(corrige_structured)
-        html_body = generate_corrige_html(latex)
+        # Pipeline identique avant génération PDF
+        corrige_struct = format_corrige_pdf_structure(raw)
+        corrige_flat   = flatten_multiline_latex_blocks(corrige_struct)
+        latex_clean    = detect_and_format_math_expressions(corrige_flat)
+        corrige_graphs, _  = extract_and_process_graphs(latex_clean)
+        html_body      = generate_corrige_html(corrige_graphs)
 
         context = {
             "titre_corrige": f"Corrigé CIS – Exercice {soum.demande.id}",
@@ -485,8 +499,6 @@ class CorrigePDFView(APIView):
         }
 
         pdf_url = generer_pdf_corrige(context, soum.id)
-
-        # Renvoie l'URL du PDF (texte brut)
         return HttpResponse(pdf_url, content_type="text/plain")
 
 
