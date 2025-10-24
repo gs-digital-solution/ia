@@ -23,29 +23,27 @@ from PIL import Image
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
-    """
-    Parcourt text et renvoie la liste des tuples (graph_dict, start, end)
-    pour chaque JSON détecté via json.JSONDecoder().
-    """
+    """Extrait les blocs JSON pour les graphiques"""
     decoder = json.JSONDecoder()
     idx = 0
     blocks = []
+
     while True:
-        # cherche la prochaine accolade ouvrante
+        # Cherche le début d'un bloc JSON (après ```json ou {)
         start = text.find('{', idx)
         if start == -1:
             break
+
         try:
-            # raw_decode décode un JSON à partir de text[start:]
+            # Vérifie si c'est un bloc graphique
             obj, end = decoder.raw_decode(text[start:])
-            # obj = dict Python, end = longueur du JSON
-            blocks.append((obj, start, start + end))
+            if isinstance(obj, dict) and 'graphique' in obj:
+                blocks.append((obj, start, start + end))
             idx = start + end
         except ValueError:
-            # si échec de décodage, on glisse d’un caractère
             idx = start + 1
-    return blocks
 
+    return blocks
 # ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
 
 PATTERNS_BLOCS = [
@@ -1060,61 +1058,62 @@ def tracer_graphique(graphique_dict, output_name):
 # ============== PROMPT PAR DEFAUT ==============
 
 DEFAULT_SYSTEM_PROMPT = r"""
-résous moi cet exercice 
+Tu es un expert en résolution d'exercices mathématiques. Pour chaque exercice, fournis :
 
-s'il y a un graphique à tracer alors saches que Tu es un assistant spécialisé en génération de code Python pour les tracés mathématiques. Pour chaque problème de tracé de fonction ou courbe, fournis UNIQUEMENT une réponse JSON structurée comme suit :
+1. **UNE CORRECTION DÉTAILLÉE** avec :
+   - Domaine de définition
+   - Dérivée et variations  
+   - Limites et asymptotes
+   - Points remarquables
+   - Tableau de variations
+   - Explications pédagogiques
 
+2. **POUR CHAQUE GRAPHIQUE À TRACER**, inclus un bloc JSON structuré comme ceci :
+
+```json
 {
-  "function_expression": "expression_latex",
-  "domain": [x_min, x_max],
-  "points_of_interest": [
-    {"type": "zero", "x": value, "y": 0},
-    {"type": "y_intercept", "x": 0, "y": value},
-    {"type": "asymptote", "x": value, "orientation": "vertical/horizontal"}
-  ],
-  "python_code": "import matplotlib.pyplot as plt\nimport numpy as np\n\n# Configuration du graphique\nfig, ax = plt.subplots()\n\n# Domaine de tracé\nx = np.linspace(domain_min, domain_max, 1000)\n# Exclusion des points problématiques (asymptotes)\n# Tracé de la fonction\n# Ajout des asymptotes, points remarquables\n# Configuration des axes et légendes\n\nplt.show()",
-  "plot_parameters": {
-    "title": "Titre du graphique",
-    "xlabel": "x",
-    "ylabel": "y",
-    "grid": true,
-    "asymptote_style": "r--"
+  "graphique": {
+    "function_expression": "expression_latex",
+    "type": "fonction",
+    "domain": [x_min, x_max],
+    "points_of_interest": [
+      {"type": "zero", "x": value, "y": 0},
+      {"type": "y_intercept", "x": 0, "y": value},
+      {"type": "asymptote", "x": value, "orientation": "vertical"}
+    ],
+    "python_code": "import matplotlib.pyplot as plt\\nimport numpy as np\\n# Code complet pour le tracé"
   }
 }
+FORMAT DE RÉPONSE :
 
-**INSTRUCTIONS SPÉCIFIQUES :**
-1. Analyse complète de la fonction (domaine, limites, dérivées)
-2. Détection automatique des points remarquables
-3. Adaptation intelligente du domaine de tracé
-4. Gestion des asymptotes et discontinuités
-5. Code Python exécutable immédiatement
-6. Style clair et professionnel pour le graphique
+Texte de correction normal
 
-**FORMAT DE SORTIE :** Uniquement du JSON valide, sans texte supplémentaire.
+Blocs JSON intégrés aux endroits appropriés
 
-Si l'exercice parle de la fonction : "f(x) = ln|2 - 5x|"
+Code Python exécutable immédiatement
 
-Alors tu  dois produire :
+Gestion des asymptotes et discontinuités
+
+EXEMPLE POUR f(x) = ln|2 - 5x| :
+
+La fonction f(x) = ln|2 - 5x| a pour domaine R\{2/5}. Elle présente une asymptote verticale en x = 0.4 et des zéros en x = 0.2 et x = 0.6.
 
 json
 {
-  "function_expression": "\\ln |2 - 5x|",
-  "domain": [-1, 1.5],
-  "points_of_interest": [
-    {"type": "zero", "x": 0.2, "y": 0},
-    {"type": "zero", "x": 0.6, "y": 0},
-    {"type": "y_intercept", "x": 0, "y": 0.693},
-    {"type": "asymptote", "x": 0.4, "orientation": "vertical"}
-  ],
-  "python_code": "import matplotlib.pyplot as plt\nimport numpy as np\n\nfig, ax = plt.subplots(figsize=(10, 6))\n\n# Domaine avec exclusion de l'asymptote\nx_left = np.linspace(-1, 0.39, 500)\ny_left = np.log(np.abs(2 - 5*x_left))\n\nx_right = np.linspace(0.41, 1.5, 500)\ny_right = np.log(np.abs(2 - 5*x_right))\n\nax.plot(x_left, y_left, 'b-', linewidth=2, label='$f(x) = \\\\ln |2 - 5x|$')\nax.plot(x_right, y_right, 'b-', linewidth=2)\n\n# Asymptote verticale\nax.axvline(x=0.4, color='red', linestyle='--', alpha=0.7, label='Asymptote x=0.4')\n\n# Points remarquables\nax.plot(0.2, 0, 'go', markersize=8, label='Zéro (1/5, 0)')\nax.plot(0.6, 0, 'go', markersize=8, label='Zéro (3/5, 0)')\nax.plot(0, 0.693, 'mo', markersize=8, label='Intersection y (0, ln2)')\n\nax.set_xlabel('x')\nax.set_ylabel('y')\nax.set_title('Courbe de $f(x) = \\\\ln |2 - 5x|$')\nax.grid(True, alpha=0.3)\nax.legend()\nax.set_ylim(-5, 5)\nplt.show()",
-  "plot_parameters": {
-    "title": "Courbe de $f(x) = \\ln |2 - 5x|$",
-    "xlabel": "x",
-    "ylabel": "y",
-    "grid": true,
-    "asymptote_style": "r--"
+  "graphique": {
+    "function_expression": "\\\\ln |2 - 5x|", 
+    "type": "fonction",
+    "domain": [-1, 1.5],
+    "points_of_interest": [
+      {"type": "zero", "x": 0.2, "y": 0},
+      {"type": "zero", "x": 0.6, "y": 0},
+      {"type": "y_intercept", "x": 0, "y": 0.693},
+      {"type": "asymptote", "x": 0.4, "orientation": "vertical"}
+    ],
+    "python_code": "import matplotlib.pyplot as plt\\nimport numpy as np\\nfig, ax = plt.subplots(figsize=(10, 6))\\nx_left = np.linspace(-1, 0.39, 500)\\ny_left = np.log(np.abs(2 - 5*x_left))\\nax.plot(x_left, y_left, 'b-', linewidth=2, label='$f(x) = \\\\\\\\ln |2 - 5x|$')\\n# ... code complet ...\\nplt.show()"
   }
 }
+La courbe a deux branches séparées par l'asymptote...
 """
 
 
