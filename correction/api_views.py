@@ -19,7 +19,7 @@ from rest_framework.parsers import MultiPartParser, JSONParser
 from django.shortcuts import get_object_or_404
 import markdown
 import re
-from .ia_utils import detect_and_format_math_expressions, generate_corrige_html
+from .ia_utils import detect_and_format_math_expressions, generate_corrige_html,format_corrige_pdf_structure
 from django.shortcuts import render, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
@@ -35,6 +35,7 @@ from rest_framework.permissions import AllowAny
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 from correction.models import AppConfig
 from rest_framework.response import Response
+import time
 
 
 
@@ -181,6 +182,7 @@ class SoumissionExerciceAPIView(APIView):
                     {"error": "Impossible de débiter un crédit. Réessayez plus tard."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
+
             # Récupérer les données
             pays_id = request.data.get('pays')
             sous_systeme_id = request.data.get('sous_systeme')
@@ -200,9 +202,16 @@ class SoumissionExerciceAPIView(APIView):
                     lecons_ids = []
 
             # Validation des données requises
-            if not matiere_id or not fichier:
+            if not matiere_id:
                 return Response(
-                    {"error": "Matière et fichier sont obligatoires"},
+                    {"error": "Matière obligatoire"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Vérifier qu'on a au moins un énoncé ou un fichier
+            if not fichier and not enonce_texte.strip():
+                return Response(
+                    {"error": "Fichier ou énoncé texte requis"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -231,17 +240,15 @@ class SoumissionExerciceAPIView(APIView):
                 statut='en_attente'
             )
 
-            # Lancer le traitement async
+            # Lancer le traitement async AVEC DÉCOUPAGE
             from .ia_utils import generer_corrige_ia_et_graphique_async
             generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
-
-            # Débiter le crédit (commenté temporairement)
-            debiter_credit_abonnement(request.user)
 
             return Response({
                 "success": True,
                 "soumission_id": soumission.id,
-                "message": "Exercice soumis avec succès. Traitement en cours..."
+                "message": "Exercice soumis avec succès. Traitement en cours...",
+                "info": "Le système détectera automatiquement si un découpage est nécessaire"
             })
 
         except Exception as e:
@@ -269,7 +276,11 @@ class StatutSoumissionAPIView(APIView):
 
             # 🏆 Sanitation ONLY if string is not empty
             if corrige_raw.strip() != "":
-                latex_clean = detect_and_format_math_expressions(corrige_raw)
+                # 1) Structure le texte
+                corrige_structured = format_corrige_pdf_structure(corrige_raw)
+                # 2) Corrige le LaTeX
+                latex_clean = detect_and_format_math_expressions(corrige_structured)
+                # 3) Transforme en HTML stylisé final
                 html_corrige = generate_corrige_html(latex_clean)
                 resultat['corrige_text'] = html_corrige
             else:
@@ -444,7 +455,8 @@ class CorrigeHTMLView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
-        latex = detect_and_format_math_expressions(raw)
+        corrige_structured = format_corrige_pdf_structure(raw)
+        latex = detect_and_format_math_expressions(corrige_structured)
         html_body = generate_corrige_html(latex)
 
         return render(request, "correction/corrige_view.html", {
@@ -462,7 +474,8 @@ class CorrigePDFView(APIView):
         soum = get_object_or_404(SoumissionIA, id=soumission_id, user=request.user)
 
         raw = soum.resultat_json.get("corrige_text") or ""
-        latex = detect_and_format_math_expressions(raw)
+        corrige_structured = format_corrige_pdf_structure(raw)
+        latex = detect_and_format_math_expressions(corrige_structured)
         html_body = generate_corrige_html(latex)
 
         context = {
