@@ -875,6 +875,9 @@ def tracer_graphique(graphique_dict, output_name):
             expr = expr.replace('²', '^2').replace('³', '^3')
             # Patch (x+1)2 → (x+1)**2
             expr = re.sub(r'\)\s*([0-9]+)', r')**\1', expr)
+            # normaliser ln(...) et abs(...)
+            expr = re.sub(r'(?<![\w\.])ln\(', 'np.log(', expr)
+            expr = re.sub(r'(?<![\w\.])abs\(', 'np.abs(', expr)
             # Abs : |...| → np.abs(...)
             expr = re.sub(r'\|([^\|]+)\|', r'np.abs(\1)', expr)
             expr = re.sub(r'ln\|\s*([^\|]+?)\s*\|', r'np.log(np.abs(\1))', expr)
