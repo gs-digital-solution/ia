@@ -208,17 +208,17 @@ def estimer_tokens(texte):
 
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     """
-    Génère le corrigé d’un exercice, extrait et trace les graphiques.
-    Retourne (texte_HTML, liste_graph_dict).
+    Génère le corrigé pour un seul exercice et extrait graphiques éventuels.
+    Le parsing JSON est robuste à tout formatage IA.
     """
     print("🎯 Génération corrigé pour exercice individuel...")
 
-    # --- 1) Préparer le prompt IA ---
-    system_prompt   = DEFAULT_SYSTEM_PROMPT
+    system_prompt = DEFAULT_SYSTEM_PROMPT
     consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
+
     if matiere and hasattr(matiere, 'prompt_ia'):
         promptia = matiere.prompt_ia
-        system_prompt     = promptia.system_prompt or system_prompt
+        system_prompt = promptia.system_prompt or system_prompt
         consignes_finales = promptia.consignes_finales or consignes_finales
 
     prompt_ia = f"""
@@ -227,13 +227,13 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
 ### CONTEXTE
 {contexte}
 
-### EXERCICE À CORRIGER
+### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
 {texte_exercice.strip()}
 
 ### CONSIGNES
 {consignes_finales}
 
-**Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
+**Important : Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
 """
 
     api_key = os.getenv('DEEPSEEK_API_KEY')
@@ -241,96 +241,83 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         print("❌ Erreur: Clé API non configurée")
         return "Erreur: Clé API non configurée", None
 
-    # --- 2) Appel DeepSeek Chat API ---
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system",  "content": system_prompt},
-            {"role": "user",    "content": prompt_ia}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt_ia}
         ],
         "temperature": 0.1,
         "max_tokens": 4000,
         "top_p": 0.9,
         "frequency_penalty": 0.1
     }
-    try:
-        print("📡 Appel API DeepSeek pour exercice…")
-        response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=data,
-            timeout=90
-        )
-        resp = response.json()
-        if response.status_code != 200:
-            msg = resp.get("message", "Pas de détail")
-            print(f"❌ Erreur API DeepSeek : {msg}")
-            return f"Erreur API: {msg}", None
 
-        output = resp['choices'][0]['message']['content']
-        print(f"✅ Réponse IA reçue : {len(output)} caractères")
+    try:
+        print("📡 Appel API DeepSeek pour exercice...")
+        response = requests.post(api_url, headers=headers, json=data, timeout=90)
+        response_data = response.json()
+
+        if response.status_code != 200:
+            error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
+            print(f"❌ {error_msg}")
+            return error_msg, None
+
+        output = response_data['choices'][0]['message']['content']
+        print(f"✅ Réponse API reçue: {len(output)} caractères")
+
+        # Nettoyage/structuration dès la réception IA
+        output_structured = format_corrige_pdf_structure(output)
+        # Extraction graphique: regex robuste !
+        #regex_all_json = re.findall(r'---corrigé---[\s\r\n]*({[\s\S]+?})', output_structured)
+        #print(f"🔍 JSONs détectés (robuste): {len(regex_all_json)}")
+        # on part de la version structurée du corrigé
+        # on part de la version structurée du corrigé
+        corrige_txt = output_structured
+        graph_list = []
+
+        # 1) Extraire tous les blocs JSON valides
+        json_blocks = extract_json_blocks(output_structured)
+        print(f"🔍 JSON blocks détectés : {len(json_blocks)}")
+
+        # 2) Pour éviter tout décalage, on traite du plus loin au plus près
+        json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
+
+        for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
+            try:
+                output_name = f"graphique_{idx}.png"
+                img_path = tracer_graphique(graph_dict, output_name)
+                if img_path is None:
+                    raise ValueError("tracer_graphique a retourné None")
+
+                abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                img_tag = (
+                    f'<img src="file://{abs_path}" alt="Graphique {idx}" '
+                    f'style="max-width:100%;margin:10px 0;" />'
+                )
+                # remplacement sans offset, indices toujours valables
+                corrige_txt = corrige_txt[:start] + img_tag + corrige_txt[end:]
+                graph_list.append(graph_dict)
+                print(f"✅ Graphique {idx} inséré")
+            except Exception as e:
+                print(f"❌ Erreur génération graphique {idx}: {e}")
+                continue
+
+        return corrige_txt.strip(), graph_list
 
     except Exception as e:
-        print(f"❌ Erreur appel DeepSeek : {e}")
-        return f"Erreur API : {e}", None
+        error_msg = f"Erreur: {str(e)}"
+        print(f"❌ {error_msg}")
+        return error_msg, None
 
-    # --- 3) Structuration et nettoyage LaTeX ---
-    structuré    = format_corrige_pdf_structure(output)
-    fusionné     = flatten_multiline_latex_blocks(structuré)
-    latex_clean  = detect_and_format_math_expressions(fusionné)
 
-    # --- 4) Extraction des blocs JSON graphiques ---
-    json_blocks = extract_json_blocks(latex_clean)
-    print(f"🔍 JSON graphiques détectés : {len(json_blocks)}")
 
-    # --- 5) Tracer et insérer les <img> (ordre inverse pour pas décaler) ---
-    corrige_txt = latex_clean
-    graph_list  = []
-
-    for idx, (gd, start, end) in enumerate(sorted(json_blocks, key=lambda x: x[1], reverse=True), start=1):
-        try:
-            output_name = f"graphique_{idx}.png"
-            # Si l'IA fournit du code Python, on l'exécute
-            if gd.get("python_code"):
-                local = {}
-                exec(gd["python_code"], {}, local)
-                # On suppose que ce code a généré graphes/output_name
-            else:
-                # On construit l'expression à tracer
-                expr_raw = gd.get("function_expression", gd.get("expression", "x"))
-                expr = expr_raw.replace('^','**')
-                # Patchs rapides : abs(...) et ln(...)
-                expr = re.sub(r'(?<![\w\.])abs\(', 'np.abs(', expr)
-                expr = re.sub(r'(?<![\w\.])ln\(',  'np.log(', expr)
-                # Évaluer la fonction
-                x_min = float(gd.get("x_min", -2))
-                x_max = float(gd.get("x_max",  4))
-                x = np.linspace(x_min, x_max, 400)
-                # Attention : nécessite import numexpr as ne si on veut ne.evaluate()
-                y = eval(expr, {'x': x, 'np': np, '__builtins__': None})
-                fig, ax = plt.subplots(figsize=(6,4))
-                ax.plot(x, y, color="#008060", label=gd.get("titre",""))
-                ax.set_title(gd.get("titre",""))
-                ax.grid(True)
-                plt.tight_layout()
-                chemin_png = os.path.join(settings.MEDIA_ROOT, "graphes", output_name)
-                os.makedirs(os.path.dirname(chemin_png), exist_ok=True)
-                fig.savefig(chemin_png)
-                plt.close()
-
-            # Construire l'URL publique
-            url = settings.MEDIA_URL.rstrip('/') + '/' + f"graphes/{output_name}"
-            img_tag = f'<img src="{url}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
-
-            # Insertion
-            corrige_txt = corrige_txt[:start] + img_tag + corrige_txt[end:]
-            graph_list.append(gd)
-            print(f"✅ Graphique {idx} inséré")
-        except Exception as e:
-            print(f"❌ Échec graphique {idx} : {e}")
-            continue
-
-    return corrige_txt.strip(), graph_list
 
 def extract_and_process_graphs(output: str):
     """
