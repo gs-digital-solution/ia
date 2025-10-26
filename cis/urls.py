@@ -16,6 +16,9 @@ urlpatterns = [
     # Routes des ressources (pays, sous-systèmes)
     path('api/', include('resources.api_urls')),
 
+  # Routes des ressources dynamique (exercices corrigés, matière, leçons, classes)
+    path('resources/', include('resources.urls')),
+
 # Routes pour afficher le corrige web et envoyer le PDF de ce corrigé coté flutter
     path(
         'correction/',

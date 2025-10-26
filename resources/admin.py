@@ -42,6 +42,7 @@ class MatiereAdmin(admin.ModelAdmin):
     list_display = ('id', 'nom', 'code', 'classe')
     list_filter = ('classe',)
     search_fields = ('nom', 'code')
+    
 
 @admin.register(Departement)
 class DepartementAdmin(admin.ModelAdmin):
