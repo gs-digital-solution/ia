@@ -821,7 +821,7 @@ def style_axes(ax, graphique_dict):
     ax.set_ylabel(graphique_dict.get("y_label", "y"), color='red')
 
 
-def tracer_graphique(graphique_dict, output_name):
+def tracer_graphique(graphique_dict, output_name, expr_raw=None):
     if 'graphique' in graphique_dict:
         graphique_dict = graphique_dict['graphique']
 
@@ -854,7 +854,12 @@ def tracer_graphique(graphique_dict, output_name):
                 expr_patch = re.sub(r'(?<![\w.])' + func + r'\s\(', f'np.{func}(', expr_patch)
 
             expr_patch = expr_patch.replace('ln(', 'np.log(')
-
+            expr = expr_raw.replace('^', '**')
+            # on gère (x+1)2 → (x+1)**2
+            expr = re.sub(r'\)\s*([0-9]+)', r')**\1', expr)
+            # autres patchs (abs, ln, etc.)
+            expr = re.sub(r'(?<![\w\.])abs\(', 'np.abs(', expr)
+            expr = re.sub(r'(?<![\w\.])ln\(', 'np.log(', expr)
             try:
                 y = eval(expr_patch, {'x': x, 'np': np, 'builtins': None, "pi": np.pi})
                 if np.isscalar(y):
