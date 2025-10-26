@@ -807,321 +807,240 @@ def style_axes(ax, graphique_dict):
 
 
 def tracer_graphique(graphique_dict, output_name):
+    if 'graphique' in graphique_dict:
+        graphique_dict = graphique_dict['graphique']
+
+    gtype = graphique_dict.get("type", "fonction").lower().strip()
+    titre = graphique_dict.get("titre", "Graphique généré")
+
+    def safe_float(expr):
+        try:
+            return float(eval(str(expr), {"_builtins": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
+        except Exception as e:
+            try:
+                return float(expr)
+            except Exception:
+                return None
+
     try:
-        # --- Gestion du multigraph ---
-        if "multigraph" in graphique_dict:
-            print("🎨 Tracé MULTIGRAPHE détecté")
-            graf_dir = os.path.join(settings.MEDIA_ROOT, "graphes")
-            os.makedirs(graf_dir, exist_ok=True)
-            chemin_png = os.path.join(graf_dir, output_name)
+        dossier = os.path.join(settings.MEDIA_ROOT, "graphes")
+        os.makedirs(dossier, exist_ok=True)
+        chemin_png = os.path.join(dossier, output_name)
 
-            fig, ax = plt.subplots(figsize=(6, 4))
-            style_axes(ax, graphique_dict)
-
-            for g in graphique_dict["multigraph"]:
-                expr   = g.get("expression", "x")
-                xmin   = float(g.get("x_min", -2))
-                xmax   = float(g.get("x_max", 4))
-                x_vals = np.linspace(xmin, xmax, 400)
-                y_vals = eval(expr.replace('^','**'),
-                              {"x": x_vals, "np": np, "__builtins__": None})
-                style  = g.get("style", "solid")
-                label  = g.get("label", expr)
-                ax.plot(x_vals, y_vals, linestyle=style, label=label)
-
-            ax.legend()
-            ax.grid(True)
-            plt.tight_layout()
-            plt.savefig(chemin_png)
-            plt.close()
-            print(f"✅ Multigraph sauvegardé: {chemin_png}")
-            return "graphes/" + output_name
-
-        # sinon, on continue la logique existante...
-        if 'graphique' in graphique_dict:
-            graphique_dict = graphique_dict['graphique']
-
-        gtype = graphique_dict.get("type", "fonction").lower().strip()
-        titre = graphique_dict.get("titre", "Graphique généré")
-        graf_dir = os.path.join(settings.MEDIA_ROOT, "graphes")
-        os.makedirs(graf_dir, exist_ok=True)
-        chemin_png = os.path.join(graf_dir, output_name)
-
-        print(f"🎨 Traçage graphique type: {gtype}")
-
-        # Fonction utilitaire safe_float...
-        def safe_float(expr):
-            try:
-                return float(eval(str(expr),
-                                  {"__builtins__": None,
-                                   "pi": np.pi, "np": np, "sqrt": np.sqrt}))
-            except:
-                try:
-                    return float(expr)
-                except:
-                    return None
-
-        # Branche "fonction"
         if "fonction" in gtype:
-            # 1) préparer safe_float si pas déjà en haut
-            def safe_float(expr):
-                try:
-                    return float(eval(str(expr),
-                                      {"__builtins__": None,
-                                       "pi": np.pi, "np": np, "sqrt": np.sqrt}))
-                except:
-                    try:
-                        return float(expr)
-                    except:
-                        return None
-
-            # 2) lire et patcher l'expression
-            expr_raw = graphique_dict.get("expression", "x")
-            expr = expr_raw.replace('^', '**')
-            # Carrés/cubes unicode → puissance python
-            expr = expr.replace('²', '^2').replace('³', '^3')
-            # Patch (x+1)2 → (x+1)**2
-            expr = re.sub(r'\)\s*([0-9]+)', r')**\1', expr)
-            # Abs : |...| → np.abs(...)
-            expr = re.sub(r'\|([^\|]+)\|', r'np.abs(\1)', expr)
-            expr = re.sub(r'ln\|\s*([^\|]+?)\s*\|', r'np.log(np.abs(\1))', expr)
-            expr = re.sub(r'(?<=\d)(?=x)', '*', expr)
-            for func in ["sin","cos","tan","exp","sqrt","log","log10","arcsin","arccos","arctan"]:
-                expr = re.sub(rf'(?<![\w\.]){func}\(', f'np.{func}(', expr)
-            print(f"🖼️ DEBUG – fonction brute : {expr_raw}")
-            print(f"🖼️ DEBUG – fonction patchée : {expr}")
-
-            # 3) calculer x_min et x_max
-            x_min = safe_float(graphique_dict.get("x_min", -2)) or -2
-            x_max = safe_float(graphique_dict.get("x_max", 4)) or 4
-
-            # 4) créer les abscisses et évaluer y
+            x_min = safe_float(graphique_dict.get("x_min", -2))
+            x_max = safe_float(graphique_dict.get("x_max", 4))
+            expression = graphique_dict.get("expression", "x")
             x = np.linspace(x_min, x_max, 400)
+            expr_patch = expression.replace('^', '*')
+
+            for func in ["sin", "cos", "tan", "exp", "log", "log10", "arcsin", "arccos", "arctan", "sinh", "cosh",
+                         "tanh", "sqrt", "abs"]:
+                expr_patch = re.sub(r'(?<![\w.])' + func + r'\s\(', f'np.{func}(', expr_patch)
+
+            expr_patch = expr_patch.replace('ln(', 'np.log(')
+
             try:
-                y = eval(expr, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi})
+                y = eval(expr_patch, {'x': x, 'np': np, 'builtins': None, "pi": np.pi})
                 if np.isscalar(y):
                     y = np.full_like(x, y)
             except Exception as e:
-                print(f"❌ Erreur évaluation expr '{expr}': {e}")
+                print(f"Erreur tracé fonction : {e}")
                 return None
 
-            # 5) tracer avec style_axes
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.plot(x, y, color="#008060", label=titre)
+            plt.figure(figsize=(6, 4))
+            plt.plot(x, y, color="#008060")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.grid(True)
 
-            # --- AJOUT POUR GERER LES ASYMPTOTES FORMAT DICT/LIST ---
-            asymptotes = graphique_dict.get("asymptotes", None)
-            if asymptotes:
-                if isinstance(asymptotes, dict):
-                    # Ex : {"verticale": 2, "horizontale": 1}
-                    if "verticale" in asymptotes:
-                        try:
-                            ax.axvline(x=float(asymptotes["verticale"]), color="red", linestyle="--",
-                                       label=f"x={asymptotes['verticale']}")
-                        except Exception as e:
-                            print(f"Erreur tracé asymptote verticale : {e}")
-                    if "horizontale" in asymptotes:
-                        try:
-                            ax.axhline(y=float(asymptotes["horizontale"]), color="green", linestyle="--",
-                                       label=f"y={asymptotes['horizontale']}")
-                        except Exception as e:
-                            print(f"Erreur tracé asymptote horizontale : {e}")
-                elif isinstance(asymptotes, list):
-                    for asy in asymptotes:
-                        if isinstance(asy, str):
-                            if asy.startswith("x="):
-                                try:
-                                    ax.axvline(x=float(asy.split("=")[1]), color="red", linestyle="--", label=asy)
-                                except Exception as e:
-                                    print(f"Erreur tracé asymptote verticale : {e}")
-                            if asy.startswith("y="):
-                                try:
-                                    ax.axhline(y=float(asy.split("=")[1]), color="green", linestyle="--", label=asy)
-                                except Exception as e:
-                                    print(f"Erreur tracé asymptote horizontale : {e}")
-
-            style_axes(ax, graphique_dict)
-            ax.set_title(titre)
-            ax.grid(True)
-            ax.legend()
-
-            # 6) sauvegarde
-            plt.tight_layout()
-            plt.savefig(chemin_png)
-            plt.close()
-            print(f"✅ Graphique sauvegardé: {chemin_png}")
-            return "graphes/" + output_name
-
-        # Branche "histogramme"
         elif "histogramme" in gtype:
             intervalles = graphique_dict.get("intervalles") or graphique_dict.get("classes") or []
-            eff = [float(e) for e in graphique_dict.get("effectifs", [])]
-            labels = [str(i) for i in intervalles]
+            eff = graphique_dict.get("effectifs", [])
+            labels = [str(ival) for ival in intervalles]
+            x_pos = np.arange(len(labels))
+            eff = [float(e) for e in eff]
 
-            fig, ax = plt.subplots(figsize=(7, 4.5))
-            ax.bar(labels, eff, color="#208060", edgecolor='black', width=0.9)
-            style_axes(ax, graphique_dict)
-            ax.set_title(titre)
-            ax.grid(axis='y')
+            plt.figure(figsize=(7, 4.5))
+            plt.axhline(y=0, color='#000000', linewidth=1.8)  # Axe des abscisses
+            plt.axvline(x=0, color='#000000', linewidth=1.8)  # Axe des ordonnées
+            plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.9)
+            plt.xticks(x_pos, labels, rotation=35)
+            plt.title(titre)
+            plt.xlabel(graphique_dict.get("xlabel", "Classes / Intervalles"))
+            plt.ylabel(graphique_dict.get("ylabel", "Effectif"))
+            plt.grid(axis='y')
 
-        # Branche "diagramme à bandes / bâtons"
-        elif any(k in gtype for k in ["diagramme à bandes", "bâtons", "batons"]):
+        elif "diagramme à bandes" in gtype or "diagramme en bâtons" in gtype or "bâtons" in gtype or "batons" in gtype:
             cat = graphique_dict.get("categories", [])
-            eff = [float(e) for e in graphique_dict.get("effectifs", [])]
+            eff = graphique_dict.get("effectifs", [])
+            x_pos = np.arange(len(cat))
 
-            fig, ax = plt.subplots(figsize=(7, 4.5))
-            ax.bar(cat, eff, color="#208060", edgecolor='black', width=0.7)
-            style_axes(ax, graphique_dict)
-            ax.set_title(titre)
-            ax.grid(axis='y')
+            plt.figure(figsize=(7, 4.5))
+            plt.bar(x_pos, eff, color="#208060", edgecolor='black', width=0.7)
+            plt.xticks(x_pos, cat, rotation=15)
+            plt.title(titre)
+            plt.xlabel("Catégories")
+            plt.ylabel("Effectif")
 
-        # Branche "nuage de points"
         elif "nuage de points" in gtype or "scatter" in gtype:
-            x_pts = graphique_dict.get("x", [])
-            y_pts = graphique_dict.get("y", [])
+            x_points = graphique_dict.get("x", [])
+            y_points = graphique_dict.get("y", [])
 
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.scatter(x_pts, y_pts, color="#006080")
-            style_axes(ax, graphique_dict)
-            ax.set_title(titre)
-            ax.grid(True)
+            plt.figure(figsize=(6, 4))
+            plt.scatter(x_points, y_points, color="#006080")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.grid(True)
 
-        # Branche "effectifs cumulés"
-        elif "effectifs cumulés" in gtype:
-            x_pts = graphique_dict.get("x", [])
-            y_pts = graphique_dict.get("y", [])
+        elif "effectifs cumulés" in gtype or "courbe des effectifs cumulés" in gtype:
+            x_points = graphique_dict.get("x", [])
+            y_points = graphique_dict.get("y", [])
 
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.plot(x_pts, y_pts, marker="o", color="#b65d2f")
-            style_axes(ax, graphique_dict)
-            ax.set_title(titre)
-            ax.grid(True)
+            plt.figure(figsize=(6, 4))
+            plt.plot(x_points, y_points, marker="o", color="#b65d2f")
+            plt.title(titre)
+            plt.xlabel("x")
+            plt.ylabel("Effectifs cumulés")
+            plt.grid(True)
 
-        # Branche "camembert / pie"
-        elif any(k in gtype for k in ["diagramme circulaire", "camembert", "pie"]):
+        elif "diagramme circulaire" in gtype or "camembert" in gtype or "pie" in gtype:
             cat = graphique_dict.get("categories", [])
             eff = graphique_dict.get("effectifs", [])
 
-            fig, ax = plt.subplots(figsize=(5.3, 5.3))
-            ax.pie(eff, labels=cat, autopct='%1.1f%%',
-                   colors=plt.cm.Paired.colors, startangle=90,
-                   wedgeprops={"edgecolor": "k"})
-            ax.set_title(titre)
+            plt.figure(figsize=(5.3, 5.3))
+            plt.pie(
+                eff,
+                labels=cat,
+                autopct='%1.1f%%',
+                colors=plt.cm.Paired.colors,
+                startangle=90,
+                wedgeprops={"edgecolor": "k"}
+            )
+            plt.title(titre)
 
-        # Branche "polygone"
         elif "polygone" in gtype or "polygon" in gtype:
-            # extraction des points
-            pts = graphique_dict.get("points") or []
-            if pts:
-                x = [float(p[0]) for p in pts]
-                y = [float(p[1]) for p in pts]
+            points = graphique_dict.get("points")
+            points_x = graphique_dict.get("points_x")
+            points_y = graphique_dict.get("points_y")
+            absc = graphique_dict.get("abscisses")
+            ords = graphique_dict.get("ordonnees")
+
+            if points:
+                x = [float(p[0]) for p in points]
+                y = [float(p[1]) for p in points]
+            elif points_x and points_y:
+                x = [float(xx) for xx in points_x]
+                y = [float(yy) for yy in points_y]
+            elif absc and ords:
+                x = [float(xx) for xx in absc]
+                y = [float(yy) for yy in ords]
             else:
-                x = [float(xx) for xx in graphique_dict.get("points_x", [])]
-                y = [float(yy) for yy in graphique_dict.get("points_y", [])]
+                print("Erreur polygone : aucun point")
+                x = []
+                y = []
 
-            fig, ax = plt.subplots(figsize=(7, 4.5))
-            ax.plot(x, y, marker="o", color="#003355")
-            style_axes(ax, graphique_dict)
-            ax.set_title(titre)
-            ax.grid(True)
+            plt.figure(figsize=(7, 4.5))
+            plt.plot(x, y, marker="o", color="#003355")
+            plt.title(graphique_dict.get("titre", "Polygone"))
+            plt.xlabel(graphique_dict.get("x_label", "Abscisse"))
+            plt.ylabel(graphique_dict.get("y_label", "Ordonnée"))
+            plt.grid(True)
 
-        # Branche "cercle trigo"
         elif "cercle trigo" in gtype:
             angles = graphique_dict.get("angles", [])
             labels = graphique_dict.get("labels", [])
 
-            fig, ax = plt.subplots(figsize=(5, 5))
-            circle = plt.Circle((0,0), 1, fill=False,
-                                edgecolor='black', linestyle='--')
+            plt.figure(figsize=(5, 5))
+            circle = plt.Circle((0, 0), 1, fill=False, edgecolor='black', linestyle='--')
+            ax = plt.gca()
             ax.add_artist(circle)
-            for i, ang in enumerate(angles):
+
+            for i, angle_txt in enumerate(angles):
                 try:
-                    a = float(eval(ang, {"pi": np.pi}))
-                except:
+                    a = float(eval(angle_txt, {"pi": np.pi}))
+                except Exception:
                     a = 0
                 x, y = np.cos(a), np.sin(a)
                 ax.plot([0, x], [0, y], color='#992020')
-                ax.text(1.1*x, 1.1*y,
-                        labels[i] if i < len(labels) else f"S{i+1}")
-            ax.set_xlim(-1.5,1.5); ax.set_ylim(-1.5,1.5)
-            ax.axis('off')
-            ax.set_title(titre)
+                label = labels[i] if i < len(labels) else f"S{i + 1}"
+                ax.text(1.1 * x, 1.1 * y, label, fontsize=12)
+
+            ax.set_xlim(-1.5, 1.5)
+            ax.set_ylim(-1.5, 1.5)
+            plt.axis('off')
+            plt.title(titre)
 
         else:
-            print(f"❌ Type graphique non supporté : {gtype}")
+            print("Type graphique non supporté :", gtype)
             return None
 
-        # Sauvegarde des graphiques "classiques"
         plt.tight_layout()
         plt.savefig(chemin_png)
         plt.close()
-        print(f"✅ Graphique sauvegardé: {chemin_png}")
         return "graphes/" + output_name
 
     except Exception as ee:
-        print(f"❌ Erreur générale sauvegarde PNG: {ee}")
+        print(f"Erreur générale sauvegarde PNG {chemin_png if 'chemin_png' in locals() else output_name} :", ee)
         return None
 
-# ============== PROMPT PAR DEFAUT ==============
 
-DEFAULT_SYSTEM_PROMPT = r"""
-Tu es un expert en résolution d'exercices mathématiques. Pour chaque exercice, fournis :
+# ===========================
+# PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
+DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
 
-1. **UNE CORRECTION DÉTAILLÉE** avec :
-   - Domaine de définition
-   - Dérivée et variations  
-   - Limites et asymptotes
-   - Points remarquables
-   - Tableau de variations
-   - Explications pédagogiques
+Règles :
+- Dès qu'un exercice demande un graphique, tu termines la réponse concernée par la balise ---corrigé--- sur une ligne, puis sur la ligne suivante, le JSON du graphique : {"graphique": {...}}
 
-2. **POUR CHAQUE GRAPHIQUE À TRACER**, inclus un bloc JSON structuré comme ceci :
+Types supportés : "fonction", "histogramme", "diagramme à bandes", "nuage de points", "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo".
 
-```json
-{
-  "graphique": {
-    "function_expression": "expression_latex",
-    "type": "fonction",
-    "domain": [x_min, x_max],
-    "points_of_interest": [
-      {"type": "zero", "x": value, "y": 0},
-      {"type": "y_intercept", "x": 0, "y": value},
-      {"type": "asymptote", "x": value, "orientation": "vertical"}
-    ],
-    "python_code": "import matplotlib.pyplot as plt\\nimport numpy as np\\n# Code complet pour le tracé"
-  }
-}
-FORMAT DE RÉPONSE :
+EXEMPLES :
 
-Texte de correction normal
+--- EX 1 : Fonction ---
+Corrigé détaillé...
+---corrigé---
+{"graphique": {"type": "fonction", "expression": "x*2 - 2*x + 1", "x_min": -1, "x_max": 3, "titre": "Courbe parabole"}}
 
-Blocs JSON intégrés aux endroits appropriés
+--- EX 2 : Cercle trigo ---
+...
+---corrigé---
+{"graphique": {"type":"cercle trigo", "angles":["-pi/4","pi/4"], "labels":["S1","S2"], "titre":"Solutions trigonométriques"}}
 
-Code Python exécutable immédiatement
+--- EX 3 : Histogramme ---
+...
+---corrigé---
+{"graphique": {"type": "histogramme", "intervalles": ["0-5","5-10","10-15"], "effectifs":[3,5,7], "titre":"Histogramme des effectifs"}}
 
-Gestion des asymptotes et discontinuités
+--- EX 4 : Diagramme à bandes ---
+---corrigé---
+{"graphique": {"type":"diagramme à bandes","categories":["A","B","C"],"effectifs":[10,7,12],"titre":"Comparaison"}}
 
-EXEMPLE POUR f(x) = ln|2 - 5x| :
+--- EX 5 : Nuage de points ---
+---corrigé---
+{"graphique": {"type":"nuage de points","x":[1,2,3,4],"y":[2,5,7,3],"titre":"Nuage"}}
 
-La fonction f(x) = ln|2 - 5x| a pour domaine R\{2/5}. Elle présente une asymptote verticale en x = 0.4 et des zéros en x = 0.2 et x = 0.6.
+--- EX 6 : Effectifs cumulés ---
+---corrigé---
+{"graphique": {"type":"effectifs cumulés","x":[5,10,15,20],"y":[3,9,16,20],"titre":"Effectifs cumulés"}}
 
-json
-{
-  "graphique": {
-    "function_expression": "\\\\ln |2 - 5x|", 
-    "type": "fonction",
-    "domain": [-1, 1.5],
-    "points_of_interest": [
-      {"type": "zero", "x": 0.2, "y": 0},
-      {"type": "zero", "x": 0.6, "y": 0},
-      {"type": "y_intercept", "x": 0, "y": 0.693},
-      {"type": "asymptote", "x": 0.4, "orientation": "vertical"}
-    ],
-    "python_code": "import matplotlib.pyplot as plt\\nimport numpy as np\\nfig, ax = plt.subplots(figsize=(10, 6))\\nx_left = np.linspace(-1, 0.39, 500)\\ny_left = np.log(np.abs(2 - 5*x_left))\\nax.plot(x_left, y_left, 'b-', linewidth=2, label='$f(x) = \\\\\\\\ln |2 - 5x|$')\\n# ... code complet ...\\nplt.show()"
-  }
-}
-La courbe a deux branches séparées par l'asymptote...
+--- EX 7 : Diagramme circulaire ---
+---corrigé---
+{"graphique":{"type":"camembert","categories":["L1","L2","L3"],"effectifs":[4,6,5],"titre":"Répartition"}}
+
+--- EX 8 : Polygone ---
+---corrigé---
+{"graphique": {"type": "polygone", "points": [[0,0],[5,3],[10,9]], "titre": "Polygone des ECC", "x_label": "Borne", "y_label": "ECC"}}
+
+Rappels :
+- Si plusieurs graphiques, recommence cette structure à chaque question concernée.
+- Pas de texte entre ---corrigé--- et le JSON.
+- Le JSON est obligatoire dès qu'un tracé est demandé.
+
+"Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python. Pour les listes/types, toujours notation JSON [ ... ] et jamais { ... } sauf pour des objets. N’insère JAMAIS de virgule en trop."
 """
+
 
 
 # ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
