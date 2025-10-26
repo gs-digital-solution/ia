@@ -296,9 +296,11 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
                 if img_path is None:
                     raise ValueError("tracer_graphique a retourné None")
 
-                abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                # Construire l'URL publique du graphique
+                # MEDIA_URL doit être configuré, p.ex. "/media/"
+                url = settings.MEDIA_URL.rstrip('/') + '/' + img_path.lstrip('/')
                 img_tag = (
-                    f'<img src="file://{abs_path}" alt="Graphique {idx}" '
+                    f'<img src="{url}" alt="Graphique {idx}" '
                     f'style="max-width:100%;margin:10px 0;" />'
                 )
                 # remplacement sans offset, indices toujours valables
