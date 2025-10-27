@@ -572,28 +572,150 @@ def extraire_texte_pdf(fichier_path):
 
 def extraire_texte_image(fichier_path):
     """
-    Amélioration OCR : grossissement, filtre et contraste puis Tesseract.
+    OCR amélioré avec pré-traitement PIL uniquement (sans OpenCV)
     """
     try:
         image = Image.open(fichier_path)
-        # niveaux de gris
-        image = image.convert("L")
-        # redimensionnement pour doubler la résolution
-        image = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
-        # filtre médian pour réduire le bruit
-        image = image.filter(ImageFilter.MedianFilter())
-        # augmenter le contraste
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.0)
-        # binarisation manuelle (seuil à ajuster si besoin)
-        image = image.point(lambda x: 0 if x < 140 else 255, '1')
 
-        texte = pytesseract.image_to_string(image, lang="fra+eng")
-        print(f"🖨️ DEBUG – OCR image améliorée : {len(texte)} caractères")
-        return texte.strip()
+        # === PRÉ-TRAITEMENT AVEC PIL SEULEMENT ===
+
+        # 1. Conversion en niveaux de gris
+        image = image.convert("L")
+
+        # 2. Redimensionnement adaptatif
+        scale_factor = 3 if max(image.size) < 1500 else 2
+        new_width = image.width * scale_factor
+        new_height = image.height * scale_factor
+        image = image.resize((new_width, new_height), Image.LANCZOS)
+
+        # 3. Filtres pour améliorer la netteté
+        image = image.filter(ImageFilter.SHARPEN)
+        image = image.filter(ImageFilter.MedianFilter(size=3))  # Réduction bruit
+
+        # 4. Amélioration du contraste avec PIL
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2.5)
+
+        # 5. Amélioration de la luminosité
+        enhancer = ImageEnhance.Brightness(image)
+        image = enhancer.enhance(1.2)
+
+        # 6. Binarisation avec PIL (alternative à OpenCV)
+        # Méthode 1: Seuil adaptatif manuel
+        def binarisation_pil(img):
+            # Calcul du seuil basé sur l'histogramme
+            histogram = img.histogram()
+            total_pixels = img.width * img.height
+            cumulative = 0
+            threshold = 128  # valeur par défaut
+
+            # Trouver un seuil adaptatif (méthode Otsu simplifiée)
+            for i, count in enumerate(histogram):
+                cumulative += count
+                if cumulative > total_pixels * 0.1:  # Seuil à 10%
+                    threshold = i
+                    break
+
+            return img.point(lambda x: 0 if x < threshold else 255, '1')
+
+        image = binarisation_pil(image)
+
+        # 7. Configuration Tesseract optimisée pour les maths
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()[]{}<>+-=*/\\|^_€¥£§%°²³±≤≥≈≠∞∫∑∏√∂∆∇¬∧∨∀∃∈∋⊂⊃∪∩∅αβγδεζηθικλμνξοπρστυφχψωΓΔΘΛΞΠΣΦΨΩℕℤℚℝℂ '
+
+        # === ESSAI AVEC DIFFÉRENTS PARAMÈTRES ===
+
+        text_results = []
+
+        # Essai 1: Tesseract standard
+        try:
+            texte_std = pytesseract.image_to_string(image, lang="fra+eng", config=custom_config)
+            text_results.append(("Standard", texte_std))
+        except Exception as e:
+            print(f"❌ OCR standard échoué: {e}")
+
+        # Essai 2: Avec image inversée
+        try:
+            inverted = Image.eval(image, lambda x: 255 - x)
+            texte_inv = pytesseract.image_to_string(inverted, lang="fra+eng", config=custom_config)
+            text_results.append(("Inversé", texte_inv))
+        except Exception as e:
+            print(f"❌ OCR inversé échoué: {e}")
+
+        # Essai 3: Avec différents modes PSM
+        psm_modes = {
+            "PSM6": "6",  # Bloc uniforme de texte
+            "PSM8": "8",  # Mot unique
+            "PSM11": "11"  # Texte dense
+        }
+
+        for psm_name, psm_value in psm_modes.items():
+            try:
+                psm_config = f'--oem 3 --psm {psm_value} {custom_config}'
+                texte_psm = pytesseract.image_to_string(image, lang="fra+eng", config=psm_config)
+                if texte_psm.strip():
+                    text_results.append((psm_name, texte_psm))
+            except Exception as e:
+                print(f"❌ OCR {psm_name} échoué: {e}")
+
+        # === SÉLECTION DU MEILLEUR RÉSULTAT ===
+        meilleur_texte = ""
+        meilleur_score = 0
+
+        for nom, texte in text_results:
+            if texte and len(texte.strip()) > 10:  # Ignorer les textes trop courts
+                # Score basé sur la longueur et la présence de mots-clés mathématiques
+                score = len(texte.strip())
+
+                # Bonus pour les mots-clés mathématiques
+                mots_cles_maths = ['lim', 'cos', 'sin', 'tan', 'exp', 'ln', 'log', '∫', '∑', '∞', '∈', '∀', '∃', 'frac']
+                for mot in mots_cles_maths:
+                    if mot.lower() in texte.lower():
+                        score += 15
+
+                # Bonus pour les structures LaTeX
+                if '\\' in texte or '^' in texte or '_' in texte:
+                    score += 25
+
+                # Malus pour les caractères improbables
+                if '$$$' in texte or '@@@' in texte:
+                    score -= 50
+
+                print(f"📊 Score OCR {nom}: {score} - Texte: {texte[:80].replace(chr(10), ' ')}...")
+
+                if score > meilleur_score:
+                    meilleur_score = score
+                    meilleur_texte = texte
+
+        # Nettoyage du texte final
+        if meilleur_texte:
+            # Correction des erreurs OCR courantes en maths
+            corrections = {
+                'reos': 'cos', 'c0s': 'cos', 's1n': 'sin', 't an': 'tan',
+                'l1m': 'lim', 'ln1': 'lim', '€': '∈', '¥': '∞',
+                '--': '→', '++': '∞', 'I1': 'll', 'O': '0', '|': 'l',
+                ']1': '[1', ']0': '[0', 'coo': '∞', 'ooo': '∞',
+                ']a': '[a', ']b': '[b', ']x': '[x', ']y': '[y'
+            }
+
+            for erreur, correction in corrections.items():
+                meilleur_texte = meilleur_texte.replace(erreur, correction)
+
+            print(f"🖨️ DEBUG – OCR image améliorée : {len(meilleur_texte)} caractères")
+            print(f"📝 Extrait OCR final : {meilleur_texte[:200].replace(chr(10), ' ')}")
+            return meilleur_texte.strip()
+        else:
+            print("❌ Aucun résultat OCR valide")
+            # Fallback sur l'ancienne méthode
+            return pytesseract.image_to_string(image, lang="fra+eng").strip()
+
     except Exception as e:
         print(f"❌ Erreur OCR image (améliorée) : {e}")
-        return ""
+        # Fallback ultime
+        try:
+            return pytesseract.image_to_string(Image.open(fichier_path), lang="fra+eng").strip()
+        except:
+            return ""
 
 
 # ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
