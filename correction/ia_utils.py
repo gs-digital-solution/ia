@@ -828,37 +828,67 @@ def tracer_graphique(graphique_dict, output_name):
     gtype = graphique_dict.get("type", "fonction").lower().strip()
     print(">>> gtype détecté :", repr(gtype))
     titre = graphique_dict.get("titre", "Graphique généré")
+
     def safe_float(expr):
         try:
             return float(eval(str(expr), {"__builtins__": None, "pi": np.pi, "np": np, "sqrt": np.sqrt}))
         except Exception as e:
             print("Erreur safe_float sur :", expr, e)
-            try: return float(expr)
-            except Exception as e2: print("Erreur safe_float cast direct:", expr, e2); return None
+            try:
+                return float(expr)
+            except Exception as e2:
+                print("Erreur safe_float cast direct:", expr, e2); return None
+
+    def corriger_expression(expr):
+        """Corrige les expressions mathématiques courantes"""
+        if not isinstance(expr, str):
+            return expr
+
+        # 1. Remplacer les exposants implicites (x2 → x**2, (x+1)2 → (x+1)**2)
+        expr = re.sub(r'(\w+|\([^)]+\))(\d+)', r'\1**\2', expr)
+
+        # 2. Remplacer ^ par **
+        expr = expr.replace('^', '**')
+
+        # 3. Fonctions mathématiques → np.fonction
+        funcs = ["sin", "cos", "tan", "exp", "log", "log10",
+                 "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "sqrt", "abs"]
+
+        for fct in funcs:
+            expr = re.sub(r'(?<![\w.])' + fct + r'\s*\(', f'np.{fct}(', expr)
+
+        # 4. ln → np.log
+        expr = expr.replace('ln(', 'np.log(')
+
+        print(f">>> Expression corrigée: {expr}")
+        return expr
+
     try:
         from django.conf import settings
         dossier = os.path.join(settings.MEDIA_ROOT, "graphes")
         os.makedirs(dossier, exist_ok=True)
         chemin_png = os.path.join(dossier, output_name)
+
         if "fonction" in gtype:
             x_min = graphique_dict.get("x_min", -2)
             x_max = graphique_dict.get("x_max", 4)
             expression = graphique_dict.get("expression", "x")
+
+            # CORRECTION APPLIQUEE ICI
+            expression = corriger_expression(expression)
+
             x_min_val = safe_float(x_min)
             x_max_val = safe_float(x_max)
             if x_min_val is None: x_min_val = -2
             if x_max_val is None: x_max_val = 4
+
             x = np.linspace(x_min_val, x_max_val, 400)
-            expression_patch = expression.replace('^', '**')
-            # PATCH pour ln et autres fonctions/math
-            funcs = [
-                "sin", "cos", "tan", "exp", "log", "log10",
-                "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "sqrt", "abs"
-            ]
-            for fct in funcs:
-                expression_patch = re.sub(r'(?<![\w.])' + fct + r'\s*\(', f'np.{fct}(', expression_patch)
-            expression_patch = expression_patch.replace('ln(', 'np.log(')
-            print(f">>> final expression to eval = {expression_patch}")
+
+            # Plus besoin des patches ici, c'est déjà fait dans corriger_expression
+            expression_patch = expression  # Déjà corrigée
+
+            print(f">>> Expression finale pour eval: {expression_patch}")
+
             try:
                 y = eval(expression_patch, {'x': x, 'np': np, '__builtins__': None, "pi": np.pi, "sqrt": np.sqrt})
                 if np.isscalar(y) or (isinstance(y, np.ndarray) and y.shape == ()):
@@ -866,6 +896,7 @@ def tracer_graphique(graphique_dict, output_name):
             except Exception as e:
                 print(f"Erreur tracé (eval expression): {expression_patch}. Exception: {e}")
                 return None
+
             plt.figure(figsize=(6, 4))
             plt.plot(x, y, color="#008060")
             plt.title(titre)
