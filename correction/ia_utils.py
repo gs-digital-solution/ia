@@ -209,7 +209,6 @@ def estimer_tokens(texte):
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     """
     Génère le corrigé pour un seul exercice et extrait graphiques éventuels.
-    Le parsing JSON est robuste à tout formatage IA.
     """
     print("🎯 Génération corrigé pour exercice individuel...")
 
@@ -269,7 +268,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
             print(f"❌ {error_msg}")
             return error_msg, None
 
-        # 1) On récupère et loggue la réponse brute de l’IA
+        # 1) On récupère et loggue la réponse brute de l'IA
         output = response_data['choices'][0]['message']['content']
         print("✅ Réponse IA brute (début):")
         print(output[:500].replace("\n", "\\n"))
@@ -279,15 +278,15 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         output_structured = format_corrige_pdf_structure(output)
         print("🧩 output_structured après format_corrige_pdf_structure:")
         print(output_structured[:500].replace("\n", "\\n"), "\n…\n")
-        # Extraction graphique: regex robuste !
-        #regex_all_json = re.findall(r'---corrigé---[\s\r\n]*({[\s\S]+?})', output_structured)
-        #print(f"🔍 JSONs détectés (robuste): {len(regex_all_json)}")
-        # on part de la version structurée du corrigé
-        # on part de la version structurée du corrigé
 
-        # 1) Extraire tous les blocs JSON valides
+        # Initialisation des variables de retour
+        corrige_txt = output_structured
+        graph_list = []
+
+        # Extraction graphique: regex robuste !
         json_blocks = extract_json_blocks(output_structured)
         print(f"🔍 JSON blocks détectés : {len(json_blocks)}")
+
         # 2) Afficher chaque JSON brut et son dict Python
         for i, (graph_dict, start, end) in enumerate(json_blocks, start=1):
             raw_json = output_structured[start:end]
@@ -295,9 +294,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
             print(raw_json.replace("\n", "\\n"))
             print("   ▶️ Parsed Python dict :", graph_dict)
 
-            corrige_txt = output_structured
-            graph_list = []
-        # 2) Pour éviter tout décalage, on traite du plus loin au plus près
+        # 3) Pour éviter tout décalage, on traite du plus loin au plus près
         json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
 
         for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
@@ -319,10 +316,12 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
             except Exception as e:
                 print(f"❌ Erreur génération graphique {idx}: {e}")
                 continue
-          # 4) Afficher un extrait du corrigé HTML final
-            print("📝 Corrigé final (début) :")
-            print(corrige_txt[:1000].replace("\n", "\\n"))
-            print("… fin extrait Corrigé\n")
+
+        # 4) Afficher un extrait du corrigé HTML final
+        print("📝 Corrigé final (début) :")
+        print(corrige_txt[:1000].replace("\n", "\\n"))
+        print("… fin extrait Corrigé\n")
+
         return corrige_txt.strip(), graph_list
 
     except Exception as e:
