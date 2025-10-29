@@ -390,24 +390,32 @@ def extract_and_process_graphs(output: str):
 # ============== UTILITAIRES TEXTE / LATEX / TABLEAU ==============
 
 def flatten_multiline_latex_blocks(text):
+    """
+    Fusionne les blocs LaTeX multilignes :
+      \[ ... \] et \( ... \)
+    en une seule ligne pour éviter qu'ils soient éclatés
+    en plusieurs <p> dans le HTML final.
+    """
     if not text:
         return ""
 
-    def block_replacer(match):
-        contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
-        contents = re.sub(r' {2,}', ' ', contents)
-        return r'\[' + contents.strip() + r'\]'
+    # 1) Fusionner les blocs display math \[ ... \]
+    text = re.sub(
+        r'\\\[\s*([\s\S]+?)\s*\\\]',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
+        text,
+        flags=re.DOTALL
+    )
 
-    def inline_replacer(match):
-        contents = match.group(1).replace('\n', ' ').replace('\r', ' ')
-        contents = re.sub(r' {2,}', ' ', contents)
-        return r'\(' + contents.strip() + r'\)'
-
-    text = re.sub(r'\\\[\s*([\s\S]?)\s\\\]', block_replacer, text)
-    text = re.sub(r'\\\(\s*([\s\S]?)\s\\\)', inline_replacer, text)
+    # 2) Fusionner les blocs inline math \( ... \)
+    text = re.sub(
+        r'\\\(\s*([\s\S]+?)\s*\\\)',
+        lambda m: r'\(' + " ".join(m.group(1).splitlines()).strip() + r'\)',
+        text,
+        flags=re.DOTALL
+    )
 
     return text
-
 
 def detect_and_format_math_expressions(text):
     if not text:
