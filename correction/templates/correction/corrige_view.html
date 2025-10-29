@@ -6,28 +6,24 @@
   <title>{{ titre_corrige }}</title>
 
   <!-- MathJax Configuration CORRECTE + mhchem pour chimie -->
-<script>
-  window.MathJax = {
-    tex: {
-      inlineMath: [['\\(', '\\)']],
-      displayMath: [['\\[', '\\]']],
-      processEscapes: true,
-      tags: 'ams',
-      packages: {'[+]': ['mhchem']}  // AJOUT mhchem pour formules chimiques
-    },
-    svg: {
-      fontCache: 'global'
-    },
-    options: {
-      skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
-      renderActions: {
-        addMenu: [0, '', '']
-      }
-    }
-  };
-</script>
-<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/input/tex/extensions/mhchem.js"></script>
+     <script>
+       window.MathJax = {
+         loader: {
+           load: ['[tex]/mhchem']      // on charge l’extension mhchem
+         },
+         tex: {
+           packages: ['base','mhchem'],// on inclut base + mhchem
+           inlineMath: [['\\(','\\)']],
+           displayMath: [['\\[','\\]']]
+         },
+         svg: {
+           fontCache: 'global'
+         }
+       };
+     </script>
+     <script id="MathJax-script" async
+             src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+     </script>
 
   <style>
     /* RESET ET BASE */
