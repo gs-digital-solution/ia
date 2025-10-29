@@ -273,7 +273,11 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         print("✅ Réponse IA brute (début):")
         print(output[:500].replace("\n", "\\n"))
         print("… (total", len(output), "caractères)\n")
-
+        # 2) Fusion des blocs LaTeX multi-lignes (\[ … \]) en une seule ligne
+        output = flatten_multiline_latex_blocks(output)
+        print("🛠️ Après flatten_multiline_latex_blocks (début):")
+        print(output[:500].replace("\n", "\\n"))
+        print("… (total", len(output), "caractères)\n")
         # Nettoyage/structuration dès la réception IA
         output_structured = format_corrige_pdf_structure(output)
         print("🧩 output_structured après format_corrige_pdf_structure:")
