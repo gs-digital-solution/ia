@@ -232,7 +232,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
 ### CONSIGNES
 {consignes_finales}
 
-**Important : Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
+**Important : Réponds UNIQUEMENT à cet exercice. Sois pédagogique et détaille les étapes de chaque réponse.**
 """
 
     api_key = os.getenv('DEEPSEEK_API_KEY')
