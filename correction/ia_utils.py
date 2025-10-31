@@ -1253,7 +1253,7 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
 
         corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere)
 
-        if corrige and "Erreur" not in corrige:
+        if corrige and not corrige.startswith("Erreur") and not corrige.startswith("Erreur API"):
             titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
             tous_corriges.append(titre_exercice + corrige)
             if graphiques:
