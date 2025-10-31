@@ -213,7 +213,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     print("🎯 Génération corrigé pour exercice individuel...")
 
     system_prompt = DEFAULT_SYSTEM_PROMPT
-    consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
+    consignes_finales = "Format de réponse strict : LaTeX pour les maths"
 
     if matiere and hasattr(matiere, 'prompt_ia'):
         promptia = matiere.prompt_ia
@@ -232,7 +232,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
 ### CONSIGNES
 {consignes_finales}
 
-**Important : Réponds UNIQUEMENT à cet exercice. Sois pédagogique et détaille les étapes de chaque réponse.**
+**Important : résous UNIQUEMENT à cet exercice.**
 """
 
     api_key = os.getenv('DEEPSEEK_API_KEY')
