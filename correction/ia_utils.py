@@ -206,6 +206,42 @@ def estimer_tokens(texte):
     return tokens
 
 
+def verifier_qualite_corrige(corrige_text, exercice_original):
+    """
+    Vérifie si le corrigé généré est de bonne qualité
+    Retourne False si le corrigé semble incomplet ou confus
+    """
+    if not corrige_text:
+        return False
+
+    indicateurs_problemes = [
+        "je pense qu'il manque une donnée",
+        "l'énoncé est ambigu",
+        "je vais arrêter ici",
+        "cela pourrait signifier",
+        "interprétation correcte est",
+        "je crois avoir compris",
+        "je vais plutôt utiliser",
+        "approche différente",
+        "arrêter ici cette question"
+    ]
+
+    # Compter les indicateurs de confusion
+    problemes_trouves = sum(1 for indicateur in indicateurs_problemes
+                            if indicateur.lower() in corrige_text.lower())
+
+    # Si trop d'indicateurs ou corrigé trop court
+    if problemes_trouves >= 2:
+        print(f"🔄 Qualité insuffisante détectée ({problemes_trouves} indicateurs)")
+        return False
+
+    # Vérifier si le corrigé est significativement plus court que l'énoncé
+    if len(corrige_text) < len(exercice_original) * 0.3:
+        print("🔄 Corrigé trop court par rapport à l'énoncé")
+        return False
+
+    return True
+
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     """
     Génère le corrigé pour un seul exercice et extrait graphiques éventuels.
@@ -221,19 +257,33 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         consignes_finales = promptia.consignes_finales or consignes_finales
 
     prompt_ia = f"""
-{system_prompt}
+    {system_prompt}
 
-### CONTEXTE
-{contexte}
+    ### CONTEXTE
+    {contexte}
 
-### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
-{texte_exercice.strip()}
+    ### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
+    {texte_exercice.strip()}
 
-### CONSIGNES
-{consignes_finales}
+    ### CONSIGNES STRICTES - À RESPECTER IMPÉRATIVEMENT
+    {consignes_finales}
 
-**Important : Réponds UNIQUEMENT à cet exercice. Sois complet mais concis.**
-"""
+    **EXIGENCES ABSOLUES :**
+    1. Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
+    2. Vérifie systématiquement chaque résultat intermédiaire  
+    3. Donne TOUTES les étapes de calcul détaillées
+    4. Les réponses doivent être NUMÉRIQUEMENT EXACTES
+    5. Ne laisse AUCUNE question sans réponse complète
+    6. Si l'énoncé semble ambigu, prends l'interprétation mathématique standard
+
+    **FORMAT DE RÉPONSE :**
+    - Réponses complètes avec justification
+    - Calculs intermédiaires détaillés
+    - Solutions numériques exactes
+    - Ne jamais dire "je pense" ou "c'est ambigu"
+
+    Réponds UNIQUEMENT à cet exercice avec une rigueur absolue.
+    """
 
     api_key = os.getenv('DEEPSEEK_API_KEY')
     if not api_key:
@@ -260,13 +310,38 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
 
     try:
         print("📡 Appel API DeepSeek pour exercice...")
-        response = requests.post(api_url, headers=headers, json=data, timeout=90)
-        response_data = response.json()
 
-        if response.status_code != 200:
-            error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
-            print(f"❌ {error_msg}")
-            return error_msg, None
+        # Tentative avec vérification de qualité
+        output = None
+        for tentative in range(2):  # Maximum 2 tentatives
+            response = requests.post(api_url, headers=headers, json=data, timeout=90)
+            response_data = response.json()
+
+            if response.status_code != 200:
+                error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
+                print(f"❌ {error_msg}")
+                return error_msg, None
+
+            # Récupération de la réponse
+            output = response_data['choices'][0]['message']['content']
+            print(f"✅ Réponse IA brute (tentative {tentative + 1}): {len(output)} caractères")
+
+            # Vérification de la qualité
+            if verifier_qualite_corrige(output, texte_exercice):
+                print("✅ Qualité du corrigé validée")
+                break
+            else:
+                print(f"🔄 Tentative {tentative + 1} - Qualité insuffisante, régénération...")
+                # Ajouter une consigne de rigueur pour la prochaine tentative
+                data["messages"][1][
+                    "content"] += "\n\n⚠️ ATTENTION : Sois plus rigoureux ! Vérifie tous tes calculs. Donne des réponses complètes et exactes. Ne laisse aucune question sans réponse."
+
+                if tentative == 0:  # Attendre un peu avant la 2ème tentative
+                    import time
+                    time.sleep(2)
+        else:
+            print("❌ Échec après 2 tentatives - qualité insuffisante")
+            return "Erreur: Qualité du corrigé insuffisante après plusieurs tentatives", None
 
         # 1) On récupère et loggue la réponse brute de l'IA
         output = response_data['choices'][0]['message']['content']
@@ -1173,9 +1248,38 @@ def tracer_graphique(graphique_dict, output_name):
 
 # ===========================
 # PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
-DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert niveau secondaire (Maths, Physique, SVT, Chimie, Anglais, francais, histoire, géographie, ECM, allemand, espagnol...etc).
+DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert niveau Terminale C (Mathématiques).
 
-Règles :
+Règles ABSOLUES :
+- Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
+- Vérifie systématiquement tes résultats intermédiaires
+- Ne laisse JAMAIS une question sans réponse complète
+- Si l'énoncé semble ambigu, prends l'interprétation mathématique standard
+- Donne TOUTES les étapes de calcul détaillées
+- Les réponses doivent être NUMÉRIQUEMENT EXACTES
+
+EXEMPLES DE RIGUEUR OBLIGATOIRE :
+
+--- DIVISIBILITÉ PAR 11 ---
+N = 26x95y → positions: (1:2, 2:6, 3:x, 4:9, 5:5, 6:y)
+Rang impair: positions 1,3,5 → 2 + x + 5 = 7 + x
+Rang pair: positions 2,4,6 → 6 + 9 + y = 15 + y
+Divisible par 11 ⇒ (7+x) - (15+y) = x - y - 8 ≡ 0 [11]
+⇒ x - y ≡ 8 [11] ⇒ x - y = 8 ou -3
+
+--- TRIPLETS PYTHAGORICIENS ---
+2015 = 5 × 13 × 31
+TP connu : (33,56,65) → multiplier par 31 → (1023,1736,2015)
+Formule : (2n+1)² + (2n²+2n)² = (2n²+2n+1)²
+
+--- COMPLEXES ---
+z = 1 - e^(iα) = e^(iα/2)(e^(-iα/2)-e^(iα/2)) = -2i e^(iα/2) sin(α/2)
+Module = 2|sin(α/2)|, Argument = α/2 - π/2 (mod π)
+
+FORMAT DE RÉPONSE :
+- Réponses complètes avec tous les calculs
+- Justifications détaillées pour chaque étape
+- Ne jamais dire "je pense" ou "c'est ambigu" - prends une décision claire
 - Dès qu'un exercice demande un graphique, tu termines la réponse concernée par la balise ---corrigé--- sur une ligne, puis sur la ligne suivante, le JSON du graphique : {"graphique": {...}}
 
 Types supportés : "fonction", "histogramme", "diagramme à bandes", "nuage de points", "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo".
