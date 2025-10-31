@@ -904,7 +904,7 @@ def nettoyer_pour_deepseek(concat_text: str) -> str:
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
     prompt = (
-        "Tu es un assistant chargé de reformuler un énoncé scientifique "
+        "Tu es un assistant chargé de reformuler un énoncé scientifique ou autre type de sujet "
         "pour qu'il soit clair et complet pour DeepSeek. Corrige les "
         "imprécisions et structure en paragraphes.\n\n"
         f"{concat_text}"
@@ -1173,7 +1173,7 @@ def tracer_graphique(graphique_dict, output_name):
 
 # ===========================
 # PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
-DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en sciences (Maths, Physique, SVT, Chimie, Statistique).
+DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert niveau secondaire (Maths, Physique, SVT, Chimie, Anglais, francais, histoire, géographie, ECM, allemand, espagnol...etc).
 
 Règles :
 - Dès qu'un exercice demande un graphique, tu termines la réponse concernée par la balise ---corrigé--- sur une ligne, puis sur la ligne suivante, le JSON du graphique : {"graphique": {...}}
@@ -1292,7 +1292,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     tokens_estimes = estimer_tokens(texte_enonce)
 
     # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
-    if tokens_estimes < 1000:  # Épreuve courte
+    if tokens_estimes < 1500:  # Épreuve courte
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere)
     else:  # Épreuve longue
