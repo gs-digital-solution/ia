@@ -13,6 +13,9 @@ from django.utils.safestring import mark_safe
 from celery import shared_task
 import base64
 
+# Récupérer ta clé OpenAI et initialiser le client
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
 # ========== EXTRACTION DE L'ÉNONCE AVEC GPT-4 AVANT DE PASSER A DEEPSEEK ==========
 def extraire_texte_gpt4(fichier_field):
     """
@@ -45,17 +48,22 @@ def extraire_texte_gpt4(fichier_field):
         f"data:{mime};base64,{b64}"
     )
 
-    # 4) Appel à l'API GPT-4 Vision
-    resp = openai.ChatCompletion.create(
-        model="gpt-4o-mini",   # ou "gpt-4v-small" selon config
-        messages=[
-          {"role": "system", "content": "Extrait le contenu du document."},
-          {"role": "user",   "content": prompt}
-        ],
-        temperature=0.0,
-    )
-    extrait = resp.choices[0].message.content.strip()
-
+    # 4) Appel à l'API GPT-4 Vision (avec log d'éventuelle exception)
+    try:
+        resp = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Extrait le contenu du document."},
+                {"role": "user",   "content": prompt}
+            ],
+            temperature=0.0,
+        )
+        extrait = resp.choices[0].message.content.strip()
+    except Exception as e:
+        # Ce print apparaîtra dans tes logs si l'appel échoue
+        print("❌ Erreur GPT-4 Vision lors de l'extraction :", e)
+        # On ré-lève l'exception pour la voir dans ton try global
+        raise
     # 5) Suppression du fichier temporaire
     try: os.remove(temp_path)
     except: pass
