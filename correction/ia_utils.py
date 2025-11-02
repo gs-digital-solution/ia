@@ -22,18 +22,20 @@ def extraire_texte_gpt4(fichier_field):
     Envoie le fichier (image ou PDF) à GPT-4 Vision pour en extraire
     l'énoncé, les formules (en LaTeX) et les tableaux (en markdown).
     """
-    # 1) Récupérer le path local (Django a déjà écrit le fichier)
+    # 1) Récupération du chemin local du fichier (Django)
     try:
         fichier_local = fichier_field.path
     except AttributeError:
-        # fallback : écrire les chunks si on n'a pas .path
-        fichier_local = os.path.join(tempfile.gettempdir(),
-                                     os.path.basename(fichier_field.name))
+        # Si .path n’existe pas, on recrée un fichier temporaire
+        fichier_local = os.path.join(
+            tempfile.gettempdir(),
+            os.path.basename(fichier_field.name)
+        )
         with open(fichier_local, "wb") as f:
             for chunk in fichier_field.chunks():
                 f.write(chunk)
 
-    # 2) Encodage en base64 + détermination du MIME
+    # 2) Encodage en base64 + détection du MIME
     ext = os.path.splitext(fichier_local)[1].lower()
     mime = {
         ".png": "image/png",
@@ -52,25 +54,34 @@ def extraire_texte_gpt4(fichier_field):
         f"data:{mime};base64,{b64}"
     )
 
-    # 4) Appel à l'API GPT-4 Vision (avec log d'éventuelle exception)
+    # 4) Appel à l'API GPT-4 Vision (avec logs précis)
     try:
+        # ←– AJOUT #1 : avant l’appel, indique que l’on démarre GPT-4 Vision
+        print("⚙️ Appel à OpenAI GPT-4 Vision…")
+
         resp = openai.ChatCompletion.create(
-            model="gpt-4",
+            model="gpt-4",   # ou le modèle GPT-4 auquel vous avez accès
             messages=[
                 {"role": "system", "content": "Extrait le contenu du document."},
                 {"role": "user",   "content": prompt}
             ],
             temperature=0.0,
         )
+
+        # ←– AJOUT #2 : juste après l’appel, on logge le nom du modèle utilisé
+        print("✅ Réponse OpenAI reçue. Modèle utilisé :", getattr(resp, "model", "inconnu"))
+
         extrait = resp.choices[0].message.content.strip()
+
     except Exception as e:
-        # Ce print apparaîtra dans tes logs si l'appel échoue
+        # ←– EXISTANT / AMÉLIORÉ : on logge l’erreur détaillée
         print("❌ Erreur GPT-4 Vision lors de l'extraction :", e)
-        # On ré-lève l'exception pour la voir dans ton try global
+        # pour ne pas masquer l’erreur en amont
         raise
-    # 5) Suppression du fichier temporaire
-    try: os.remove(temp_path)
-    except: pass
+
+    # 5) (Optionnel) suppression du fichier temporaire si on l’a créé
+    # try: os.remove(fichier_local)
+    # except: pass
 
     return extrait
 
