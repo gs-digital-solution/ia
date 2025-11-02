@@ -22,22 +22,26 @@ def extraire_texte_gpt4(fichier_field):
     Envoie le fichier (image ou PDF) à GPT-4 Vision pour en extraire
     l'énoncé, les formules (en LaTeX) et les tableaux (en markdown).
     """
-    # 1) Sauvegarde temporaire
-    temp_dir  = tempfile.gettempdir()
-    temp_path = os.path.join(temp_dir, fichier_field.name)
-    with open(temp_path, "wb") as f:
-        for chunk in fichier_field.chunks():
-            f.write(chunk)
+    # 1) Récupérer le path local (Django a déjà écrit le fichier)
+    try:
+        fichier_local = fichier_field.path
+    except AttributeError:
+        # fallback : écrire les chunks si on n'a pas .path
+        fichier_local = os.path.join(tempfile.gettempdir(),
+                                     os.path.basename(fichier_field.name))
+        with open(fichier_local, "wb") as f:
+            for chunk in fichier_field.chunks():
+                f.write(chunk)
 
     # 2) Encodage en base64 + détermination du MIME
-    ext = os.path.splitext(temp_path)[1].lower()
+    ext = os.path.splitext(fichier_local)[1].lower()
     mime = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".pdf": "application/pdf"
     }.get(ext, "application/octet-stream")
-    with open(temp_path, "rb") as f:
+    with open(fichier_local, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
 
     # 3) Construction du prompt multimodal
