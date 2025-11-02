@@ -1249,6 +1249,7 @@ def tracer_graphique(graphique_dict, output_name):
 # ===========================
 # PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
 DEFAULT_SYSTEM_PROMPT = r""" résous ce sujet
+si une question demande un graphite alors trace-le
 """
 
 
