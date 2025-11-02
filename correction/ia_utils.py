@@ -16,74 +16,85 @@ import base64
 # Récupérer ta clé OpenAI et initialiser le client
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+from pdf2image import convert_from_path
+
+def extraire_texte_gpt4_par_page(pdf_path):
+    """
+    Convertit chaque page du PDF en image et appelle GPT-4 Vision page par page.
+    Retourne la concaténation des extraits.
+    """
+    textes = []
+    # 1) transformer le PDF en liste d'images PIL
+    pages = convert_from_path(pdf_path, dpi=200)
+    for i, img in enumerate(pages, start=1):
+        # 2) sauvegarder la page en PNG temporaire
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        img.save(tmp.name, format="PNG")
+        # 3) appeler la même logique que pour une image
+        try:
+            print(f"🔍 GPT-4 Vision extraction page {i}/{len(pages)}…")
+            # on réutilise extraire_texte_gpt4 mais en lui passant un path
+            ext = tmp.name  # hack pour passer dans la branche image
+            # on factorise le code dans une nouvelle fonction interne :
+            extrait = extraire_texte_gpt4_image(tmp.name)
+            textes.append(extrait)
+        finally:
+            os.unlink(tmp.name)
+    return "\n\n".join(textes)
+
 # ========== EXTRACTION DE L'ÉNONCE AVEC GPT-4 AVANT DE PASSER A DEEPSEEK ==========
+
+# Version pour les fichiers image déjà sur disque
+def extraire_texte_gpt4_image(image_path):
+    """
+    Même logique que extraire_texte_gpt4, mais pour une image sur disque.
+    """
+    # MIME
+    mime = "image/png"
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    prompt = f"Tu es un outil d'extraction… data:{mime};base64,{b64}"
+    # appel GPT-4 Vision
+    try:
+        print("⚙️ Appel à GPT-4 Vision (image)…")
+        resp = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role":"system","content":"Extrait le contenu du document."},
+                {"role":"user","content":prompt}
+            ],
+            temperature=0.0,
+        )
+        print("✅ Modèle utilisé :", getattr(resp, "model","?"))
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        print("❌ Erreur GPT-4 Vision image :", e)
+        raise
+
+
 def extraire_texte_gpt4(fichier_field):
     """
     Envoie le fichier (image ou PDF) à GPT-4 Vision pour en extraire
     l'énoncé, les formules (en LaTeX) et les tableaux (en markdown).
     """
-    # 1) Récupération du chemin local du fichier (Django)
+    # 1) récupérer le path local ou sauvegarder temporaire
     try:
-        fichier_local = fichier_field.path
+        local = fichier_field.path
     except AttributeError:
-        # Si .path n’existe pas, on recrée un fichier temporaire
-        fichier_local = os.path.join(
-            tempfile.gettempdir(),
-            os.path.basename(fichier_field.name)
-        )
-        with open(fichier_local, "wb") as f:
+        local = os.path.join(tempfile.gettempdir(),
+                             os.path.basename(fichier_field.name))
+        with open(local, "wb") as f:
             for chunk in fichier_field.chunks():
                 f.write(chunk)
 
-    # 2) Encodage en base64 + détection du MIME
-    ext = os.path.splitext(fichier_local)[1].lower()
-    mime = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".pdf": "application/pdf"
-    }.get(ext, "application/octet-stream")
-    with open(fichier_local, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
+    ext = os.path.splitext(local)[1].lower()
+    if ext == ".pdf":
+        # 2) fractionner en pages
+        return extraire_texte_gpt4_par_page(local)
+    else:
+        # 3) traiter comme image
+        return extraire_texte_gpt4_image(local)
 
-    # 3) Construction du prompt multimodal
-    prompt = (
-        "Tu es un outil d'extraction. Je t'envoie le document encodé "
-        "en base64. Rends-moi tout le texte, les formules en LaTeX "
-        "et les tableaux en markdown.\n\n"
-        f"data:{mime};base64,{b64}"
-    )
-
-    # 4) Appel à l'API GPT-4 Vision (avec logs précis)
-    try:
-        # ←– AJOUT #1 : avant l’appel, indique que l’on démarre GPT-4 Vision
-        print("⚙️ Appel à OpenAI GPT-4 Vision…")
-
-        resp = openai.ChatCompletion.create(
-            model="gpt-4",   # ou le modèle GPT-4 auquel vous avez accès
-            messages=[
-                {"role": "system", "content": "Extrait le contenu du document."},
-                {"role": "user",   "content": prompt}
-            ],
-            temperature=0.0,
-        )
-
-        # ←– AJOUT #2 : juste après l’appel, on logge le nom du modèle utilisé
-        print("✅ Réponse OpenAI reçue. Modèle utilisé :", getattr(resp, "model", "inconnu"))
-
-        extrait = resp.choices[0].message.content.strip()
-
-    except Exception as e:
-        # ←– EXISTANT / AMÉLIORÉ : on logge l’erreur détaillée
-        print("❌ Erreur GPT-4 Vision lors de l'extraction :", e)
-        # pour ne pas masquer l’erreur en amont
-        raise
-
-    # 5) (Optionnel) suppression du fichier temporaire si on l’a créé
-    # try: os.remove(fichier_local)
-    # except: pass
-
-    return extrait
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
