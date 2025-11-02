@@ -18,7 +18,7 @@ from .api_views import (
     HistoriqueCorrectionsAPIView,
     FeedbackAPIView,
     PartagerCorrigeAPIView,
-    DebugExtractionAPIView,
+
 )
 
 # On importe les routes d’abonnement/paiement/ressources ici
@@ -58,7 +58,7 @@ urlpatterns = [
     path('historique/',    HistoriqueCorrectionsAPIView.as_view(), name='api_historique'),
     path('feedback/<int:correction_id>/', FeedbackAPIView.as_view(), name='api_feedback'),
     path('partager/<int:soumission_id>/', PartagerCorrigeAPIView.as_view(), name='api_partager'),
-    path('debug-extraction/', DebugExtractionAPIView.as_view(), name='api_debug_extraction'),
+
 
     # route de BLOCAGE PDF ou SOUMISSION coté backend
     path('app-config/', AppConfigAPIView.as_view(), name='api_app_config'),

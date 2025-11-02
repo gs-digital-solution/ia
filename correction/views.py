@@ -9,7 +9,7 @@ from resources.models import SousSysteme, Departement, Classe, Matiere, TypeExer
 from .models import AppConfig
 from django.contrib import messages
 from django.urls import reverse
-from .ia_utils import generer_corrige_ia_et_graphique, extraire_texte_fichier, tracer_graphique
+from .ia_utils import generer_corrige_ia_et_graphique, tracer_graphique
 import re
 from .forms import CustomUserCreationForm, SECRET_QUESTIONS  # Import la liste
 from resources.models import Pays, SousSysteme
@@ -68,6 +68,10 @@ def ajax_lecons(request):
 
 
 # Modification MAJEURE : injection multi-graphique à l'endroit voulu dans le texte.
+def extraire_texte_fichier(fichier):
+    pass
+
+
 @login_required
 def soumettre_exercice(request):
     # Vérifie si la correction est bloquée par l'admin

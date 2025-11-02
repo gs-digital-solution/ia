@@ -6,20 +6,61 @@ import re
 import numpy as np
 import matplotlib
 import openai
-import logging
-import camelot
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from pdfminer.high_level import extract_text
-from PIL import Image, ImageEnhance, ImageFilter
-import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
-import torch
-from transformers import BlipProcessor, BlipForConditionalGeneration
-from PIL import Image
+import base64
 
+# ========== EXTRACTION DE L'ÉNONCE AVEC GPT-4 AVANT DE PASSER A DEEPSEEK ==========
+def extraire_texte_gpt4(fichier_field):
+    """
+    Envoie le fichier (image ou PDF) à GPT-4 Vision pour en extraire
+    l'énoncé, les formules (en LaTeX) et les tableaux (en markdown).
+    """
+    # 1) Sauvegarde temporaire
+    temp_dir  = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, fichier_field.name)
+    with open(temp_path, "wb") as f:
+        for chunk in fichier_field.chunks():
+            f.write(chunk)
+
+    # 2) Encodage en base64 + détermination du MIME
+    ext = os.path.splitext(temp_path)[1].lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".pdf": "application/pdf"
+    }.get(ext, "application/octet-stream")
+    with open(temp_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+
+    # 3) Construction du prompt multimodal
+    prompt = (
+        "Tu es un outil d'extraction. Je t'envoie le document encodé "
+        "en base64. Rends-moi tout le texte, les formules en LaTeX "
+        "et les tableaux en markdown.\n\n"
+        f"data:{mime};base64,{b64}"
+    )
+
+    # 4) Appel à l'API GPT-4 Vision
+    resp = openai.ChatCompletion.create(
+        model="gpt-4o-mini",   # ou "gpt-4v-small" selon config
+        messages=[
+          {"role": "system", "content": "Extrait le contenu du document."},
+          {"role": "user",   "content": prompt}
+        ],
+        temperature=0.0,
+    )
+    extrait = resp.choices[0].message.content.strip()
+
+    # 5) Suppression du fichier temporaire
+    try: os.remove(temp_path)
+    except: pass
+
+    return extrait
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
@@ -44,8 +85,8 @@ def extract_json_blocks(text: str):
             idx = start + 1
 
     return blocks
-# ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
 
+# ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
 PATTERNS_BLOCS = [
     r'COMENTARIO DEL TEXTO', r'ESTRUCTURAS DE COMUNICACIÓN', r'PRODUCCIÓN DE TEXTOS',
     r'RECEPCIÓN DE TEXTOS', r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
@@ -75,7 +116,6 @@ PATTERNS_QUESTIONS = [
 ]
 
 # ========== FONCTION DE STRUCTURATION POUR ORGANISER LES EXERCICES SUR LE PDF==========
-
 def format_corrige_pdf_structure(texte_corrige_raw):
     """
     Nettoie et structure le corrigé pour le PDF/HTML.
@@ -118,19 +158,7 @@ def format_corrige_pdf_structure(texte_corrige_raw):
     if in_bloc: html_output.append("</div>")
     return "".join(html_output)
 
-# ============== BLIP IMAGE CAPTIONING ==============
-# On détecte si CUDA est dispo, sinon on reste sur CPU.
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🖼️ BLIP device utilisé : {device}")
-
-# Charger le processor et le modèle BLIP (tailles modestes pour la rapidité)
-_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-_model     = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")\
-                 .to(device).eval()
-print("🖼️ Modèle BLIP chargé avec succès")
-
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
-
 def separer_exercices(texte_epreuve):
     """
     Détecte et sépare automatiquement les exercices d'une épreuve
@@ -146,7 +174,7 @@ def separer_exercices(texte_epreuve):
         r'Partie\s+[IVXLCDM]+[:.]',
         r'\n\d+[-.)]\s', r'\n[a-z]\)\s',
         r'Question\s+\d+',
-        # Nouveaux genres d’épreuves (langues, lettres, geo, etc.)
+        # Nouveaux genres d'épreuves (langues, lettres, geo, etc.)
         r'COMENTARIO DEL TEXTO', r'ESTRUCTURAS DE COMUNICACIÓN',
         r'PRODUCCIÓN DE TEXTOS', r'RECEPCIÓN DE TEXTOS',
         r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
@@ -195,7 +223,6 @@ def separer_exercices(texte_epreuve):
 
     return exercices
 
-
 def estimer_tokens(texte):
     """
     Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
@@ -204,7 +231,6 @@ def estimer_tokens(texte):
     tokens = int(mots / 0.75)
     print(f"📊 Estimation tokens: {mots} mots → {tokens} tokens")
     return tokens
-
 
 def verifier_qualite_corrige(corrige_text, exercice_original):
     """
@@ -408,9 +434,6 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
         print(f"❌ {error_msg}")
         return error_msg, None
 
-
-
-
 def extract_and_process_graphs(output: str):
     """
     Extrait et traite les graphiques d'un corrigé en utilisant extract_json_blocks.
@@ -442,13 +465,13 @@ def extract_and_process_graphs(output: str):
                 # Ajuster les indices de remplacement avec l'offset
                 s, e = start + offset, end + offset
                 final_text = final_text[:s] + img_tag + final_text[e:]
-                # Mettre à jour l’offset en fonction de la différence de longueur
+                # Mettre à jour l'offset en fonction de la différence de longueur
                 offset += len(img_tag) - (end - start)
 
                 graphs_data.append(graph_dict)
                 print(f"✅ Graphique {idx} inséré.")
             else:
-                # En cas d’échec de tracé, on remplace par un message
+                # En cas d'échec de tracé, on remplace par un message
                 s, e = start + offset, end + offset
                 final_text = final_text[:s] + "[Erreur génération graphique]" + final_text[e:]
                 offset += len("[Erreur génération graphique]") - (end - start)
@@ -461,9 +484,7 @@ def extract_and_process_graphs(output: str):
     print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s) traité(s)")
     return final_text, graphs_data
 
-
 # ============== UTILITAIRES TEXTE / LATEX / TABLEAU ==============
-
 def flatten_multiline_latex_blocks(text):
     """
     Fusionne les blocs LaTeX multilignes :
@@ -523,7 +544,6 @@ def detect_and_format_math_expressions(text):
     text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
     return text
 
-
 def format_table_markdown(table_text):
     lines = table_text.strip().split('\n')
     html_table = ['<div class="table-container"><table>']
@@ -552,7 +572,6 @@ def format_table_markdown(table_text):
 
     html_table.append('</tbody></table></div>')
     return ''.join(html_table)
-
 
 def generate_corrige_html(corrige_text):
     """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
@@ -644,364 +663,6 @@ def generate_corrige_html(corrige_text):
 
     return mark_safe("".join(html_output))
 
-
-# ============== EXTRACTION TEXTE/FICHIER ==============
-
-def extraire_texte_pdf(fichier_path):
-    try:
-        texte = extract_text(fichier_path)
-        print(f"📄 PDF extrait: {len(texte)} caractères")
-        return texte.strip() if texte else ""
-    except Exception as e:
-        print(f"❌ Erreur extraction PDF: {e}")
-        return ""
-
-
-def extraire_texte_image(fichier_path):
-    """
-    OCR amélioré avec pré-traitement PIL uniquement (sans OpenCV)
-    """
-    try:
-        image = Image.open(fichier_path)
-
-        # === PRÉ-TRAITEMENT AVEC PIL SEULEMENT ===
-
-        # 1. Conversion en niveaux de gris
-        image = image.convert("L")
-
-        # 2. Redimensionnement adaptatif
-        scale_factor = 3 if max(image.size) < 1500 else 2
-        new_width = image.width * scale_factor
-        new_height = image.height * scale_factor
-        image = image.resize((new_width, new_height), Image.LANCZOS)
-
-        # 3. Filtres pour améliorer la netteté
-        image = image.filter(ImageFilter.SHARPEN)
-        image = image.filter(ImageFilter.MedianFilter(size=3))  # Réduction bruit
-
-        # 4. Amélioration du contraste avec PIL
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.5)
-
-        # 5. Amélioration de la luminosité
-        enhancer = ImageEnhance.Brightness(image)
-        image = enhancer.enhance(1.2)
-
-        # 6. Binarisation avec PIL (alternative à OpenCV)
-        # Méthode 1: Seuil adaptatif manuel
-        def binarisation_pil(img):
-            # Calcul du seuil basé sur l'histogramme
-            histogram = img.histogram()
-            total_pixels = img.width * img.height
-            cumulative = 0
-            threshold = 128  # valeur par défaut
-
-            # Trouver un seuil adaptatif (méthode Otsu simplifiée)
-            for i, count in enumerate(histogram):
-                cumulative += count
-                if cumulative > total_pixels * 0.1:  # Seuil à 10%
-                    threshold = i
-                    break
-
-            return img.point(lambda x: 0 if x < threshold else 255, '1')
-
-        image = binarisation_pil(image)
-
-        # 7. Configuration Tesseract optimisée pour les maths
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()[]{}<>+-=*/\\|^_€¥£§%°²³±≤≥≈≠∞∫∑∏√∂∆∇¬∧∨∀∃∈∋⊂⊃∪∩∅αβγδεζηθικλμνξοπρστυφχψωΓΔΘΛΞΠΣΦΨΩℕℤℚℝℂ '
-
-        # === ESSAI AVEC DIFFÉRENTS PARAMÈTRES ===
-
-        text_results = []
-
-        # Essai 1: Tesseract standard
-        try:
-            texte_std = pytesseract.image_to_string(image, lang="fra+eng", config=custom_config)
-            text_results.append(("Standard", texte_std))
-        except Exception as e:
-            print(f"❌ OCR standard échoué: {e}")
-
-        # Essai 2: Avec image inversée
-        try:
-            inverted = Image.eval(image, lambda x: 255 - x)
-            texte_inv = pytesseract.image_to_string(inverted, lang="fra+eng", config=custom_config)
-            text_results.append(("Inversé", texte_inv))
-        except Exception as e:
-            print(f"❌ OCR inversé échoué: {e}")
-
-        # Essai 3: Avec différents modes PSM
-        psm_modes = {
-            "PSM6": "6",  # Bloc uniforme de texte
-            "PSM8": "8",  # Mot unique
-            "PSM11": "11"  # Texte dense
-        }
-
-        for psm_name, psm_value in psm_modes.items():
-            try:
-                psm_config = f'--oem 3 --psm {psm_value} {custom_config}'
-                texte_psm = pytesseract.image_to_string(image, lang="fra+eng", config=psm_config)
-                if texte_psm.strip():
-                    text_results.append((psm_name, texte_psm))
-            except Exception as e:
-                print(f"❌ OCR {psm_name} échoué: {e}")
-
-        # === SÉLECTION DU MEILLEUR RÉSULTAT ===
-        meilleur_texte = ""
-        meilleur_score = 0
-
-        for nom, texte in text_results:
-            if texte and len(texte.strip()) > 10:  # Ignorer les textes trop courts
-                # Score basé sur la longueur et la présence de mots-clés mathématiques
-                score = len(texte.strip())
-
-                # Bonus pour les mots-clés mathématiques
-                mots_cles_maths = ['lim', 'cos', 'sin', 'tan', 'exp', 'ln', 'log', '∫', '∑', '∞', '∈', '∀', '∃', 'frac']
-                for mot in mots_cles_maths:
-                    if mot.lower() in texte.lower():
-                        score += 15
-
-                # Bonus pour les structures LaTeX
-                if '\\' in texte or '^' in texte or '_' in texte:
-                    score += 25
-
-                # Malus pour les caractères improbables
-                if '$$$' in texte or '@@@' in texte:
-                    score -= 50
-
-                print(f"📊 Score OCR {nom}: {score} - Texte: {texte[:80].replace(chr(10), ' ')}...")
-
-                if score > meilleur_score:
-                    meilleur_score = score
-                    meilleur_texte = texte
-
-        # Nettoyage du texte final
-        if meilleur_texte:
-            # Correction des erreurs OCR courantes en maths
-            corrections = {
-                'reos': 'cos', 'c0s': 'cos', 's1n': 'sin', 't an': 'tan',
-                'l1m': 'lim', 'ln1': 'lim', '€': '∈', '¥': '∞',
-                '--': '→', '++': '∞', 'I1': 'll', 'O': '0', '|': 'l',
-                ']1': '[1', ']0': '[0', 'coo': '∞', 'ooo': '∞',
-                ']a': '[a', ']b': '[b', ']x': '[x', ']y': '[y'
-            }
-
-            for erreur, correction in corrections.items():
-                meilleur_texte = meilleur_texte.replace(erreur, correction)
-
-            print(f"🖨️ DEBUG – OCR image améliorée : {len(meilleur_texte)} caractères")
-            print(f"📝 Extrait OCR final : {meilleur_texte[:200].replace(chr(10), ' ')}")
-            return meilleur_texte.strip()
-        else:
-            print("❌ Aucun résultat OCR valide")
-            # Fallback sur l'ancienne méthode
-            return pytesseract.image_to_string(image, lang="fra+eng").strip()
-
-    except Exception as e:
-        print(f"❌ Erreur OCR image (améliorée) : {e}")
-        # Fallback ultime
-        try:
-            return pytesseract.image_to_string(Image.open(fichier_path), lang="fra+eng").strip()
-        except:
-            return ""
-
-
-# ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
-def extraire_texte_fichier(fichier_field):
-    """
-    - Si PDF    : extraction via pdfminer.
-    - Si image  : OCR (pytesseract) + description (BLIP).
-    - Sinon     : fallback sur OCR + BLIP.
-    """
-    if not fichier_field:
-        return ""
-
-    temp_dir  = tempfile.gettempdir()
-    temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
-
-    # 1) Sauvegarde du fichier
-    with open(temp_path, "wb") as f:
-        for chunk in fichier_field.chunks():
-            f.write(chunk)
-
-    ext = os.path.splitext(fichier_field.name)[1].lower()
-    resultat = ""
-
-    if ext == ".pdf":
-        # extraction textuelle
-        texte = extract_text(temp_path)
-        print(f"📄 DEBUG – PDF extrait : {len(texte)} caractères")
-        resultat = texte.strip() if texte else ""
-    else:
-        # on considère tout le reste comme une image
-        # a) OCR du texte
-        try:
-            ocr = extraire_texte_image(temp_path)
-            print(f"🖨️ DEBUG – OCR image ({ext}) : {len(ocr)} caractères")
-        except Exception as e:
-            print(f"❌ Erreur OCR image : {e}")
-            ocr = ""
-
-        # b) Description visuelle via BLIP
-        try:
-            caption = decrire_image(temp_path)
-            # decrire_image inclut son propre print debug
-        except Exception as e:
-            print(f"❌ Erreur BLIP captioning : {e}")
-            caption = ""
-
-        # c) Assemblage
-        morceaux = []
-        if ocr.strip():
-            morceaux.append("Texte OCR :\n" + ocr.strip())
-        if caption.strip():
-            morceaux.append(caption.strip())
-
-        resultat = "\n\n".join(morceaux)
-
-    # supprime le temporaire
-    try:
-        os.remove(temp_path)
-    except:
-        pass
-
-    if not resultat.strip():
-        resultat = "(Impossible d'extraire l'énoncé du fichier envoyé.)"
-
-    print(f"📁 DEBUG – Extraction fichier ({ext}) terminée :")
-    print(resultat[:500].replace("\n", "\\n"), "...\n")
-    return resultat
-
-# ============== TABLEAUX DE VARIATION (Camelot) ==============
-
-def extraire_tables_pdf(path_pdf: str):
-    """
-    Détecte et renvoie la liste des tableaux dans le PDF.
-    """
-    try:
-        tables = camelot.read_pdf(path_pdf, pages='all', flavor='stream')
-        print(f"==== DEBUG Camelot : {len(tables)} table(s) détectée(s) dans {path_pdf} ====")
-        return tables
-    except Exception as e:
-        print(f"❌ Erreur Camelot.read_pdf sur {path_pdf} : {e}")
-        return []
-
-def decrire_table_variation(table):
-    """
-    Si table.df ressemble à un tableau de variation, renvoie
-    une description détaillée (sens de variation, extrema…).
-    Sinon, retourne None sans lever d’exception.
-    """
-    try:
-        df = table.df.replace('', np.nan) \
-                     .dropna(how='all', axis=1) \
-                     .fillna(method='ffill')
-
-        # 1) S’assurer qu’il y a au moins 2 colonnes et 2 lignes (1 en-tête + 1 donnée)
-        if df.shape[1] < 2 or df.shape[0] < 2:
-            return None
-
-        # 2) Extraction des données (on saute la 1ʳᵉ ligne d’en-tête)
-        data = df.iloc[1:].reset_index(drop=True)
-        intervalles = data.iloc[:, 0].astype(str).tolist()
-
-        # 3) Conversion sécurisée des valeurs f(x)
-        valeurs = []
-        for val in data.iloc[:, 1]:
-            try:
-                valeurs.append(float(str(val).replace(',', '.')))
-            except:
-                valeurs.append(None)
-
-        # 4) Construction des descriptions de variation
-        descs = []
-        for i in range(len(valeurs) - 1):
-            v1, v2 = valeurs[i], valeurs[i+1]
-            a, b = intervalles[i], intervalles[i+1]
-            if v1 is None or v2 is None:
-                continue
-            if v2 > v1:
-                descs.append(f"f croissante de {a} à {b}")
-            elif v2 < v1:
-                descs.append(f"f décroissante de {a} à {b}")
-            else:
-                descs.append(f"f constante de {a} à {b}")
-
-        # 5) Recherche d’extrema
-        extrema = []
-        for i in range(1, len(valeurs) - 1):
-            v0, v1, v2 = valeurs[i-1], valeurs[i], valeurs[i+1]
-            x = intervalles[i]
-            if v1 is None or v0 is None or v2 is None:
-                continue
-            if v1 > v0 and v1 > v2:
-                extrema.append(f"maximum en {x} = {v1}")
-            elif v1 < v0 and v1 < v2:
-                extrema.append(f"minimum en {x} = {v1}")
-
-        # 6) Composition du texte final
-        parts = []
-        if descs:
-            parts.append("Tableau de variation : " + "; ".join(descs) + ".")
-        if extrema:
-            parts.append("Extrema : " + "; ".join(extrema) + ".")
-        return " ".join(parts) if parts else None
-
-    except Exception as e:
-        print(f"❌ Erreur decrire_table_variation: {e}")
-        return None
-
-
-def decrire_image(path_image: str) -> str:
-    """
-    Génère une légende / description de l'image via BLIP.
-    """
-    try:
-        print(f"🖼️ DEBUG – Captioning image : {path_image}")
-        img = Image.open(path_image).convert("RGB")
-        inputs = _processor(img, return_tensors="pt").to(device)
-        # Génération en une passe
-        out = _model.generate(**inputs, max_new_tokens=50)
-        caption = _processor.decode(out[0], skip_special_tokens=True)
-        caption = caption.strip()
-        print(f"🖼️ DEBUG – Légende générée : {caption}")
-        return "Description image : " + caption
-    except Exception as e:
-        print(f"❌ Erreur decrire_image pour {path_image} : {e}")
-        return "(Erreur description image)"
-
-# ============== NETTOYAGE / REFORMULATION AVEC GPT-3.5 ==============
-def nettoyer_pour_deepseek(concat_text: str) -> str:
-    """
-    Reformule le texte brut + descriptions pour qu'il soit clair et complet
-    avant envoi à DeepSeek (GPT-3.5).
-    """
-    print("🧹 DEBUG – DÉBUT nettoyage GPT-3.5")
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-
-    prompt = (
-        "Tu es un assistant chargé de reformuler un énoncé scientifique ou autre type de sujet "
-        "pour qu'il soit clair et complet pour DeepSeek. Corrige les "
-        "imprécisions et structure en paragraphes.\n\n"
-        f"{concat_text}"
-    )
-
-    try:
-        resp = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=3000
-        )
-        cleaned = resp.choices[0].message.content.strip()
-        print("🧹 DEBUG – Texte nettoyé (début) :")
-        print(cleaned[:500].replace("\n", "\\n"), "...\n")
-        return cleaned
-
-    except Exception as e:
-        print(f"❌ Erreur nettoyage GPT-3.5: {e}")
-        # fallback : on renvoie le texte d’origine
-        return concat_text
-
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
     """
@@ -1024,10 +685,9 @@ def style_axes(ax, graphique_dict):
         # par défaut, on réutilise les mêmes que sur x
         ax.set_yticks(ax.get_xticks())
 
-    # noms d’axes
+    # noms d'axes
     ax.set_xlabel(graphique_dict.get("x_label", "x"), color='red')
     ax.set_ylabel(graphique_dict.get("y_label", "y"), color='red')
-
 
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
@@ -1112,7 +772,6 @@ def tracer_graphique(graphique_dict, output_name):
             plt.ylabel("y")
             plt.grid(True)
             plt.tight_layout()
-
 
         elif "histogramme" in gtype:
             intervalles = graphique_dict.get("intervalles") or graphique_dict.get("classes") or []
@@ -1245,17 +904,13 @@ def tracer_graphique(graphique_dict, output_name):
         print(f"Erreur générale sauvegarde PNG {chemin_png if 'chemin_png' in locals() else output_name} :", ee)
         return None
 
-
 # ===========================
 # PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
 DEFAULT_SYSTEM_PROMPT = r""" résous ce sujet
 si une question demande un graphite alors trace-le
 """
 
-
-
 # ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
-
 def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere):
     """
     Traitement direct pour les épreuves courtes (un seul exercice).
@@ -1263,7 +918,6 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     """
     print("🎯 Traitement DIRECT (épreuve courte)")
     return generer_corrige_par_exercice(texte_enonce, contexte, matiere)
-
 
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
     """
@@ -1299,7 +953,6 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
         print("❌ Aucun corrigé généré")
         return "Erreur: Aucun corrigé n'a pu être généré", []
 
-
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
                                     demande=None):
     """
@@ -1326,9 +979,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
         return generer_corrige_decoupe(texte_enonce, contexte, matiere)
 
-
 # ============== TÂCHE ASYNCHRONE ==============
-
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
@@ -1342,35 +993,20 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 20
         soumission.save()
 
-        # 1) Extraction initiale
-        texte_brut = ""
+        # 1) Extraction initiale PAR GPT-4 Vision
         if demande.fichier:
-            texte_brut = extraire_texte_fichier(demande.fichier)
+            print("🔍 Extraction via GPT-4 Vision…")
+            texte_brut = extraire_texte_gpt4(demande.fichier)
         else:
             texte_brut = demande.enonce_texte or ""
 
         print("📥 DEBUG – TEXTE BRUT (premiers 500 chars) :")
         print(texte_brut[:500].replace("\n", "\\n"), "...\n")
 
-        # 2) Extraction & description des tableaux
-        descs_tables = []
-        if demande.fichier:
-            path_pdf = demande.fichier.path
-            tables = extraire_tables_pdf(path_pdf)
-            for idx, table in enumerate(tables, start=1):
-                desc = decrire_table_variation(table)
-                if desc:
-                    descs_tables.append(desc)
-                    print(f"📋 DEBUG – Description table {idx} : {desc}")
-
-        print(f"🔍 DEBUG – Total descriptions tables : {len(descs_tables)}")
-
-        # 3) Assemblage du texte final pour l'IA
+        # 2) Assemblage du texte final pour l'IA
         texte_enonce = texte_brut
-        if descs_tables:
-            texte_enonce += "\n\n" + "\n".join(descs_tables)
 
-        print("📥 DEBUG – TEXTE ENRICHI (après tables) :")
+        print("📥 DEBUG – TEXTE ENRICHI :")
         print(texte_enonce[:500].replace("\n", "\\n"), "...\n")
 
         soumission.statut = 'analyse_ia'
@@ -1384,8 +1020,8 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 60
         soumission.save()
 
-        # 3.b) Nettoyage / reformulation avant DeepSeek
-        texte_pret = nettoyer_pour_deepseek(texte_enonce)
+        # plus de nettoyage GPT : on passe directement l'extraction à Deepseek
+        texte_pret = texte_enonce
         print("🧹 DEBUG – TEXTE PRÊT pour DeepSeek (premiers 500 chars) :")
         print(texte_pret[:500].replace("\n", "\\n"), "...\n")
 
@@ -1432,4 +1068,3 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         except:
             pass
         return False
-
