@@ -430,6 +430,25 @@ class PartagerCorrigeAPIView(APIView):
         return Response({"success": True, "message": "Fonctionnalité de partage à venir"})
 
 
+class DebugExtractionAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """Endpoint pour tester l'extraction"""
+        fichier = request.FILES.get('fichier')
+
+        if not fichier:
+            return Response({"error": "Aucun fichier"}, status=400)
+
+        from .ia_utils import extraire_texte_fichier
+        texte_extraite = extraire_texte_fichier(fichier)
+
+        return Response({
+            "success": True,
+            "texte_extraite": texte_extraite,
+            "type_fichier": fichier.content_type,
+            "taille_fichier": fichier.size
+        })
 
 #vue pour afficher le corrigé sur une page web dans le mobile ( nouvelle approche)
 #mais son url (route) se trouve dans correction/url.py et non api_urls.py car c'est pour le web
