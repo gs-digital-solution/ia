@@ -19,6 +19,31 @@ from celery import shared_task
 import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
+import base64
+
+# ======= CONFIGURATION MATHPIX OCR =======
+MATHPIX_APP_ID  = os.getenv("MATHPIX_APP_ID")
+MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
+
+def ocr_mathpix(path_image: str) -> dict:
+    """
+    Appelle l'API Mathpix pour extraire texte + LaTeX.
+    """
+    with open(path_image, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+    headers = {
+        "app_id":  MATHPIX_APP_ID,
+        "app_key": MATHPIX_APP_KEY,
+        "Content-type": "application/json"
+    }
+    payload = {
+        "src":    f"data:image/png;base64,{img_b64}",
+        "formats":["text","latex_simplified"]
+    }
+    resp = requests.post("https://api.mathpix.com/v3/text",
+                         headers=headers, json=payload, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
@@ -659,217 +684,117 @@ def extraire_texte_pdf(fichier_path):
 
 def extraire_texte_image(fichier_path):
     """
-    OCR amélioré avec pré-traitement PIL uniquement (sans OpenCV)
+    1) Pré-traitement PIL (gris, resize, sharpen, contraste, binarisation)
+    2) OCR Tesseract pour le texte courant
+    3) OCR Mathpix pour les formules (LaTeX)
+    4) Fusion des deux résultats
     """
     try:
-        image = Image.open(fichier_path)
-
-        # === PRÉ-TRAITEMENT AVEC PIL SEULEMENT ===
-
-        # 1. Conversion en niveaux de gris
-        image = image.convert("L")
-
-        # 2. Redimensionnement adaptatif
-        scale_factor = 3 if max(image.size) < 1500 else 2
-        new_width = image.width * scale_factor
-        new_height = image.height * scale_factor
-        image = image.resize((new_width, new_height), Image.LANCZOS)
-
-        # 3. Filtres pour améliorer la netteté
-        image = image.filter(ImageFilter.SHARPEN)
-        image = image.filter(ImageFilter.MedianFilter(size=3))  # Réduction bruit
-
-        # 4. Amélioration du contraste avec PIL
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.5)
-
-        # 5. Amélioration de la luminosité
-        enhancer = ImageEnhance.Brightness(image)
-        image = enhancer.enhance(1.2)
-
-        # 6. Binarisation avec PIL (alternative à OpenCV)
-        # Méthode 1: Seuil adaptatif manuel
-        def binarisation_pil(img):
-            # Calcul du seuil basé sur l'histogramme
-            histogram = img.histogram()
-            total_pixels = img.width * img.height
-            cumulative = 0
-            threshold = 128  # valeur par défaut
-
-            # Trouver un seuil adaptatif (méthode Otsu simplifiée)
-            for i, count in enumerate(histogram):
-                cumulative += count
-                if cumulative > total_pixels * 0.1:  # Seuil à 10%
-                    threshold = i
+        # 1) Chargement et pré-traitement
+        img = Image.open(fichier_path).convert("L")
+        # Resize adaptatif
+        scale = 3 if max(img.size) < 1500 else 2
+        img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+        # Netteté et réduction du bruit
+        img = img.filter(ImageFilter.SHARPEN)
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        # Contraste
+        img = ImageEnhance.Contrast(img).enhance(2.5)
+        # Luminosité
+        img = ImageEnhance.Brightness(img).enhance(1.2)
+        # Binarisation (seuil adaptatif simplifié)
+        def binarise(im):
+            hist = im.histogram()
+            total = im.width * im.height
+            cum = 0
+            thresh = 128
+            for i, c in enumerate(hist):
+                cum += c
+                if cum > total * 0.1:
+                    thresh = i
                     break
+            return im.point(lambda x: 0 if x < thresh else 255, '1')
+        img = binarise(img)
 
-            return img.point(lambda x: 0 if x < threshold else 255, '1')
+        # 2) OCR local (Tesseract)
+        custom_config = r'--oem 3 --psm 6'
+        texte_ocr = pytesseract.image_to_string(img, lang="fra+eng", config=custom_config).strip()
 
-        image = binarisation_pil(image)
-
-        # 7. Configuration Tesseract optimisée pour les maths
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()[]{}<>+-=*/\\|^_€¥£§%°²³±≤≥≈≠∞∫∑∏√∂∆∇¬∧∨∀∃∈∋⊂⊃∪∩∅αβγδεζηθικλμνξοπρστυφχψωΓΔΘΛΞΠΣΦΨΩℕℤℚℝℂ '
-
-        # === ESSAI AVEC DIFFÉRENTS PARAMÈTRES ===
-
-        text_results = []
-
-        # Essai 1: Tesseract standard
+        # 3) OCR formules (Mathpix)
         try:
-            texte_std = pytesseract.image_to_string(image, lang="fra+eng", config=custom_config)
-            text_results.append(("Standard", texte_std))
+            mp = ocr_mathpix(fichier_path)
+            latex = mp.get("latex_simplified", "").strip()
+            if latex:
+                # On encapsule le LaTeX en display math
+                latex = "\n\n\\[" + latex + "\\]\n"
         except Exception as e:
-            print(f"❌ OCR standard échoué: {e}")
+            print("❌ Mathpix OCR échoué :", e)
+            latex = ""
 
-        # Essai 2: Avec image inversée
-        try:
-            inverted = Image.eval(image, lambda x: 255 - x)
-            texte_inv = pytesseract.image_to_string(inverted, lang="fra+eng", config=custom_config)
-            text_results.append(("Inversé", texte_inv))
-        except Exception as e:
-            print(f"❌ OCR inversé échoué: {e}")
+        # 4) Fusionner texte + formules
+        result = texte_ocr
+        if latex:
+            result += "\n\nFormules détectées :\n" + latex
 
-        # Essai 3: Avec différents modes PSM
-        psm_modes = {
-            "PSM6": "6",  # Bloc uniforme de texte
-            "PSM8": "8",  # Mot unique
-            "PSM11": "11"  # Texte dense
-        }
-
-        for psm_name, psm_value in psm_modes.items():
-            try:
-                psm_config = f'--oem 3 --psm {psm_value} {custom_config}'
-                texte_psm = pytesseract.image_to_string(image, lang="fra+eng", config=psm_config)
-                if texte_psm.strip():
-                    text_results.append((psm_name, texte_psm))
-            except Exception as e:
-                print(f"❌ OCR {psm_name} échoué: {e}")
-
-        # === SÉLECTION DU MEILLEUR RÉSULTAT ===
-        meilleur_texte = ""
-        meilleur_score = 0
-
-        for nom, texte in text_results:
-            if texte and len(texte.strip()) > 10:  # Ignorer les textes trop courts
-                # Score basé sur la longueur et la présence de mots-clés mathématiques
-                score = len(texte.strip())
-
-                # Bonus pour les mots-clés mathématiques
-                mots_cles_maths = ['lim', 'cos', 'sin', 'tan', 'exp', 'ln', 'log', '∫', '∑', '∞', '∈', '∀', '∃', 'frac']
-                for mot in mots_cles_maths:
-                    if mot.lower() in texte.lower():
-                        score += 15
-
-                # Bonus pour les structures LaTeX
-                if '\\' in texte or '^' in texte or '_' in texte:
-                    score += 25
-
-                # Malus pour les caractères improbables
-                if '$$$' in texte or '@@@' in texte:
-                    score -= 50
-
-                print(f"📊 Score OCR {nom}: {score} - Texte: {texte[:80].replace(chr(10), ' ')}...")
-
-                if score > meilleur_score:
-                    meilleur_score = score
-                    meilleur_texte = texte
-
-        # Nettoyage du texte final
-        if meilleur_texte:
-            # Correction des erreurs OCR courantes en maths
-            corrections = {
-                'reos': 'cos', 'c0s': 'cos', 's1n': 'sin', 't an': 'tan',
-                'l1m': 'lim', 'ln1': 'lim', '€': '∈', '¥': '∞',
-                '--': '→', '++': '∞', 'I1': 'll', 'O': '0', '|': 'l',
-                ']1': '[1', ']0': '[0', 'coo': '∞', 'ooo': '∞',
-                ']a': '[a', ']b': '[b', ']x': '[x', ']y': '[y'
-            }
-
-            for erreur, correction in corrections.items():
-                meilleur_texte = meilleur_texte.replace(erreur, correction)
-
-            print(f"🖨️ DEBUG – OCR image améliorée : {len(meilleur_texte)} caractères")
-            print(f"📝 Extrait OCR final : {meilleur_texte[:200].replace(chr(10), ' ')}")
-            return meilleur_texte.strip()
-        else:
-            print("❌ Aucun résultat OCR valide")
-            # Fallback sur l'ancienne méthode
-            return pytesseract.image_to_string(image, lang="fra+eng").strip()
+        print(f"🖨️ OCR final image : {len(result)} caractères")
+        return result
 
     except Exception as e:
-        print(f"❌ Erreur OCR image (améliorée) : {e}")
-        # Fallback ultime
-        try:
-            return pytesseract.image_to_string(Image.open(fichier_path), lang="fra+eng").strip()
-        except:
-            return ""
+        print(f"❌ Erreur OCR image : {e}")
+        return ""
 
 
 # ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
 def extraire_texte_fichier(fichier_field):
     """
-    - Si PDF    : extraction via pdfminer.
-    - Si image  : OCR (pytesseract) + description (BLIP).
-    - Sinon     : fallback sur OCR + BLIP.
+    - Si PDF    : extraire texte + tableaux (pdfminer + Camelot)
+    - Si image  : OCR Tesseract + Mathpix (via extraire_texte_image)
     """
     if not fichier_field:
         return ""
 
+    # 1) Sauvegarde temporaire du fichier
     temp_dir  = tempfile.gettempdir()
-    temp_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
-
-    # 1) Sauvegarde du fichier
-    with open(temp_path, "wb") as f:
+    local     = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+    with open(local, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
     ext = os.path.splitext(fichier_field.name)[1].lower()
-    resultat = ""
 
     if ext == ".pdf":
-        # extraction textuelle
-        texte = extract_text(temp_path)
-        print(f"📄 DEBUG – PDF extrait : {len(texte)} caractères")
-        resultat = texte.strip() if texte else ""
-    else:
-        # on considère tout le reste comme une image
-        # a) OCR du texte
+        # 2) Extraction texte PDF
         try:
-            ocr = extraire_texte_image(temp_path)
-            print(f"🖨️ DEBUG – OCR image ({ext}) : {len(ocr)} caractères")
+            texte = extract_text(local).strip()
+            print(f"📄 PDF extrait : {len(texte)} caractères")
+        except Exception as e:
+            print(f"❌ Erreur extraction PDF : {e}")
+            texte = ""
+
+        # 3) Extraction des tableaux et description
+        descs = []
+        try:
+            tables = extraire_tables_pdf(local)
+            for idx, table in enumerate(tables, start=1):
+                desc = decrire_table_variation(table)
+                if desc:
+                    descs.append(desc)
+                    print(f"📋 Description table {idx} : {desc}")
+        except Exception as e:
+            print(f"❌ Erreur extraire_tables_pdf : {e}")
+
+        # 4) Concaténation
+        return "\n\n".join([texte] + descs).strip()
+
+    else:
+        # 5) Cas image : OCR Tesseract + Mathpix
+        try:
+            text_img = extraire_texte_image(local)
         except Exception as e:
             print(f"❌ Erreur OCR image : {e}")
-            ocr = ""
+            text_img = ""
 
-        # b) Description visuelle via BLIP
-        try:
-            caption = decrire_image(temp_path)
-            # decrire_image inclut son propre print debug
-        except Exception as e:
-            print(f"❌ Erreur BLIP captioning : {e}")
-            caption = ""
-
-        # c) Assemblage
-        morceaux = []
-        if ocr.strip():
-            morceaux.append("Texte OCR :\n" + ocr.strip())
-        if caption.strip():
-            morceaux.append(caption.strip())
-
-        resultat = "\n\n".join(morceaux)
-
-    # supprime le temporaire
-    try:
-        os.remove(temp_path)
-    except:
-        pass
-
-    if not resultat.strip():
-        resultat = "(Impossible d'extraire l'énoncé du fichier envoyé.)"
-
-    print(f"📁 DEBUG – Extraction fichier ({ext}) terminée :")
-    print(resultat[:500].replace("\n", "\\n"), "...\n")
-    return resultat
+        return text_img.strip()
 
 # ============== TABLEAUX DE VARIATION (Camelot) ==============
 
@@ -970,37 +895,6 @@ def decrire_image(path_image: str) -> str:
         return "(Erreur description image)"
 
 # ============== NETTOYAGE / REFORMULATION AVEC GPT-3.5 ==============
-def nettoyer_pour_deepseek(concat_text: str) -> str:
-    """
-    Reformule le texte brut + descriptions pour qu'il soit clair et complet
-    avant envoi à DeepSeek (GPT-3.5).
-    """
-    print("🧹 DEBUG – DÉBUT nettoyage GPT-3.5")
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-
-    prompt = (
-        "Tu es un assistant chargé de reformuler un énoncé scientifique ou autre type de sujet "
-        "pour qu'il soit clair et complet pour DeepSeek. Corrige les "
-        "imprécisions et structure en paragraphes.\n\n"
-        f"{concat_text}"
-    )
-
-    try:
-        resp = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=3000
-        )
-        cleaned = resp.choices[0].message.content.strip()
-        print("🧹 DEBUG – Texte nettoyé (début) :")
-        print(cleaned[:500].replace("\n", "\\n"), "...\n")
-        return cleaned
-
-    except Exception as e:
-        print(f"❌ Erreur nettoyage GPT-3.5: {e}")
-        # fallback : on renvoie le texte d’origine
-        return concat_text
 
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
@@ -1462,8 +1356,8 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 60
         soumission.save()
 
-        # 3.b) Nettoyage / reformulation avant DeepSeek
-        texte_pret = nettoyer_pour_deepseek(texte_enonce)
+        # 3.b) Texte prêt pour DeepSeek (pas de nettoyage GPT-3.5)
+        texte_pret = texte_enonce
         print("🧹 DEBUG – TEXTE PRÊT pour DeepSeek (premiers 500 chars) :")
         print(texte_pret[:500].replace("\n", "\\n"), "...\n")
 
