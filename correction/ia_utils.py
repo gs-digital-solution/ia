@@ -721,11 +721,12 @@ def extraire_texte_image(fichier_path):
         texte_ocr = pytesseract.image_to_string(img, lang="fra+eng", config=custom_config).strip()
 
         # 3) OCR formules (Mathpix)
+        print("⚙️ Appel à Mathpix OCR…")
         try:
             mp = ocr_mathpix(fichier_path)
+            print("✅ Mathpix renvoie latex_simplified :", repr(mp.get("latex_simplified", "")))
             latex = mp.get("latex_simplified", "").strip()
             if latex:
-                # On encapsule le LaTeX en display math
                 latex = "\n\n\\[" + latex + "\\]\n"
         except Exception as e:
             print("❌ Mathpix OCR échoué :", e)
