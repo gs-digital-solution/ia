@@ -769,14 +769,35 @@ def extraire_texte_image(fichier_path):
 
         os.unlink(tmp.name)
 
-        # 4) Retourne le texte + formules
+        # 4) Fusion texte + formules
         result = text
         if tex:
             result += "\n\nFormules détectées :\n" + tex
 
-        print(f"🖨️ OCR Mathpix image : {len(result)} caractères")
-        return result
+        # 5) Détection et description des schémas (BLIP) — NOUVEAU
+        try:
+            # Charger la même image via OpenCV pour détecter les zones schéma
+            arr = np.fromfile(fichier_path, dtype=np.uint8)
+            cv_img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+            # Détecter contours larges → schémas
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 50))
+            dil = cv2.dilate(cv_img, kernel, iterations=1)
+            contours, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                # heuristique : zone assez grande et carrée
+                if w * h > 100_000 and 0.5 < w / h < 2:
+                    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                    cv2.imwrite(tmp.name, cv_img[y:y + h, x:x + w])
+                    # BLIP décrypte le schéma
+                    caption = decrire_image(tmp.name)
+                    result += "\n\nSchéma détecté : " + caption
+                    os.unlink(tmp.name)
+        except Exception as e:
+            print("⚠️ Erreur détection schéma BLIP :", e)
 
+        print(f"🖨️ OCR final image (texte+formules+schémas): {len(result)} caractères")
+        return result
     except Exception as e:
         print(f"❌ Erreur OCR image (Mathpix) : {e}")
         return ""
@@ -802,7 +823,6 @@ def extraire_texte_fichier(fichier_field):
             f.write(chunk)
 
     ext = os.path.splitext(fichier_field.name)[1].lower()
-
     if ext == ".pdf":
         # 2.1) Texte brut PDF
         try:
