@@ -741,65 +741,36 @@ def extraire_texte_pdf(fichier_path):
         print(f"❌ Erreur extraction PDF: {e}")
         return ""
 
-
+# ============== EXTRACTION DE L'ENONCCE EN IMAGE/ CAPTURE D'ECRAN ==============
 def extraire_texte_image(fichier_path):
     """
-    Extraction **totale** (texte+formules) via Mathpix après pré-traitement OpenCV.
+    Extraction **intégrale** (texte + formules)
+    via Mathpix sur l’image complète.
     """
     try:
-        # 1) Pré-traitement OpenCV + conversion PIL
-        try:
-            cv_img = preprocess_image_cv(fichier_path)
-            img    = Image.fromarray(cv_img)
-        except Exception as e:
-            print("⚠️ OpenCV pré-trait échoué :", e)
-            img = Image.open(fichier_path).convert("L")
-
-        # 2) Sauvegarde temporaire pour Mathpix
+        # 1) Chargement PIL pour garantir un PNG propre
+        img = Image.open(fichier_path).convert("L")
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         img.save(tmp.name, format="PNG")
 
-        # 3) Appel Mathpix (texte + LaTeX)
-        print("⚙️ Appel à Mathpix OCR (image)…")
+        # 2) Appel Mathpix (texte + LaTeX)
+        print("⚙️ Appel à Mathpix OCR (image complète)…")
         mp = ocr_mathpix(tmp.name)
-        text = mp.get("text", "").strip()
-        tex  = mp.get("latex_simplified", "").strip()
-        if tex:
-            tex = f"\n\n\\[{tex}\\]\n"
-
+        # Le JSON renvoie "text" (texte brut) et "latex_simplified" (formules)
+        texte = mp.get("text", "").strip()
+        formule = mp.get("latex_simplified", "").strip()
         os.unlink(tmp.name)
 
-        # 4) Fusion texte + formules
-        result = text
-        if tex:
-            result += "\n\nFormules détectées :\n" + tex
+        # 3) Fusionner : toujours ajouter la section formules
+        result = texte
+        if formule:
+            result += "\n\nFormules détectées :\n\\[" + formule + "\\]\n"
 
-        # 5) Détection et description des schémas (BLIP) — NOUVEAU
-        try:
-            # Charger la même image via OpenCV pour détecter les zones schéma
-            arr = np.fromfile(fichier_path, dtype=np.uint8)
-            cv_img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
-            # Détecter contours larges → schémas
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 50))
-            dil = cv2.dilate(cv_img, kernel, iterations=1)
-            contours, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in contours:
-                x, y, w, h = cv2.boundingRect(c)
-                # heuristique : zone assez grande et carrée
-                if w * h > 100_000 and 0.5 < w / h < 2:
-                    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                    cv2.imwrite(tmp.name, cv_img[y:y + h, x:x + w])
-                    # BLIP décrypte le schéma
-                    caption = decrire_image(tmp.name)
-                    result += "\n\nSchéma détecté : " + caption
-                    os.unlink(tmp.name)
-        except Exception as e:
-            print("⚠️ Erreur détection schéma BLIP :", e)
-
-        print(f"🖨️ OCR final image (texte+formules+schémas): {len(result)} caractères")
+        print(f"🖨️ OCR Mathpix image : {len(result)} caractères")
         return result
+
     except Exception as e:
-        print(f"❌ Erreur OCR image (Mathpix) : {e}")
+        print(f"❌ Erreur Mathpix OCR image : {e}")
         return ""
 
 
