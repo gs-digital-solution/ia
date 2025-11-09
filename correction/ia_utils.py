@@ -812,25 +812,47 @@ def extraire_texte_fichier(fichier_field):
             print(f"❌ Erreur extraction PDF : {e}")
             texte = ""
 
-        # 2.2) Extraction des équations via Mathpix (OpenCV + pdf2image)
+        # 2.2) Extraction ciblée des équations
         latex_blks = extract_equations_from_pdf(local)
         print(f"🔍 {len(latex_blks)} formules détectées dans PDF")
 
-        # 2.3) Détection et description des tableaux
+        # 2.2.b) Si aucune formule détectée, fallback : envoyer la page entière en image
+        if not latex_blks:
+            print("⚠️ Aucune formule isolée → fallback page entière via Mathpix")
+            # Convertir la 1ère page en PNG
+            pages = convert_from_path(local, dpi=200, first_page=1, last_page=1)
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            pages[0].save(tmp.name, "PNG")
+            # extraire via Mathpix
+            try:
+                full = extraire_texte_image(tmp.name)
+                # On garde uniquement les blocs LaTeX
+                # si full contient "text\n\nFormules détectées :\n[...]"
+                parts = full.split("Formules détectées :\n")
+                if len(parts) == 2:
+                    # on récupère tout ce qui suit
+                    form = parts[1].strip()
+                    latex_blks = [form]
+                else:
+                    latex_blks = []  # en cas d'échec de parsage
+            except Exception as e:
+                print("❌ Fallback Mathpix PDF échoué :", e)
+                latex_blks = []
+            finally:
+                os.unlink(tmp.name)
+
+        # 2.3) Tableaux et description
         descs = []
-        try:
-            tables = extraire_tables_pdf(local)
-            for idx, table in enumerate(tables, start=1):
-                desc = decrire_table_variation(table)
-                if desc:
-                    descs.append(desc)
-                    print(f"📋 Description table {idx} : {desc}")
-        except Exception as e:
-            print(f"❌ Erreur extraire_tables_pdf : {e}")
+        tables = extraire_tables_pdf(local)
+        for idx, t in enumerate(tables, 1):
+            desc = decrire_table_variation(t)
+            if desc:
+                descs.append(desc)
+                print(f"📋 Description table {idx} : {desc}")
 
         # 2.4) Concaténation texte + tableaux + formules
         parts = [texte] + descs + latex_blks
-        return "\n\n".join([p for p in parts if p]).strip()
+        return "\n\n".join(p for p in parts if p).strip()
 
     else:
         # 3) Image seule : OCR + Mathpix
