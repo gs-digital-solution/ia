@@ -4,6 +4,8 @@ import tempfile
 import json
 import re
 import numpy as np
+import cv2
+from pdf2image import convert_from_path
 import matplotlib
 import openai
 import logging
@@ -44,6 +46,64 @@ def ocr_mathpix(path_image: str) -> dict:
                          headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     return resp.json()
+
+
+def preprocess_image_cv(path_image: str) -> np.ndarray:
+    """
+    OpenCV deskew + binarisation adaptative + réduction du bruit.
+    """
+    arr = np.fromfile(path_image, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+
+    # Deskew
+    coords = np.column_stack(np.where(img > 0))
+    angle  = cv2.minAreaRect(coords)[-1]
+    angle  = -(90 + angle) if angle < -45 else -angle
+    (h, w)= img.shape
+    M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+    img = cv2.warpAffine(img, M, (w, h),
+                         flags=cv2.INTER_CUBIC,
+                         borderMode=cv2.BORDER_REPLICATE)
+
+    # Binarisation adaptative
+    img = cv2.adaptiveThreshold(
+        img, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        51, 15
+    )
+    # Ouverture morphologique pour réduire le bruit
+    kern = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
+    return cv2.morphologyEx(img, cv2.MORPH_OPEN, kern, iterations=1)
+
+
+def extract_equations_from_pdf(pdf_path: str) -> list[str]:
+    """
+    Pour chaque page du PDF : convertit en image, pré-traite,
+    envoie à Mathpix les formules détectées, renvoie la liste LaTeX.
+    """
+    pages = convert_from_path(pdf_path, dpi=200)
+    latex_blocks = []
+    for idx, page in enumerate(pages, start=1):
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        page.save(tmp.name, "PNG")
+
+        # Pré-trait OpenCV
+        cv_img = preprocess_image_cv(tmp.name)
+        # Sauv. la page binaire pour Mathpix
+        page_file = tmp.name  # on réutilise tmp.name
+
+        try:
+            mp = ocr_mathpix(page_file)
+            tex = mp.get("latex_simplified", "").strip()
+            if tex:
+                latex_blocks.append(f"\\[{tex}\\]")
+                print(f"✅ Mathpix PDF page {idx} formule : {tex}")
+        except Exception as e:
+            print(f"❌ Mathpix PDF page {idx} échoué :", e)
+        finally:
+            os.unlink(page_file)
+    return latex_blocks
 
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
@@ -684,79 +744,59 @@ def extraire_texte_pdf(fichier_path):
 
 def extraire_texte_image(fichier_path):
     """
-    1) Pré-traitement PIL (gris, resize, sharpen, contraste, binarisation)
-    2) OCR Tesseract pour le texte courant
-    3) OCR Mathpix pour les formules (LaTeX)
-    4) Fusion des deux résultats
+    Extraction **totale** (texte+formules) via Mathpix après pré-traitement OpenCV.
     """
     try:
-        # 1) Chargement et pré-traitement
-        img = Image.open(fichier_path).convert("L")
-        # Resize adaptatif
-        scale = 3 if max(img.size) < 1500 else 2
-        img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
-        # Netteté et réduction du bruit
-        img = img.filter(ImageFilter.SHARPEN)
-        img = img.filter(ImageFilter.MedianFilter(size=3))
-        # Contraste
-        img = ImageEnhance.Contrast(img).enhance(2.5)
-        # Luminosité
-        img = ImageEnhance.Brightness(img).enhance(1.2)
-        # Binarisation (seuil adaptatif simplifié)
-        def binarise(im):
-            hist = im.histogram()
-            total = im.width * im.height
-            cum = 0
-            thresh = 128
-            for i, c in enumerate(hist):
-                cum += c
-                if cum > total * 0.1:
-                    thresh = i
-                    break
-            return im.point(lambda x: 0 if x < thresh else 255, '1')
-        img = binarise(img)
-
-        # 2) OCR local (Tesseract)
-        custom_config = r'--oem 3 --psm 6'
-        texte_ocr = pytesseract.image_to_string(img, lang="fra+eng", config=custom_config).strip()
-
-        # 3) OCR formules (Mathpix)
-        print("⚙️ Appel à Mathpix OCR…")
+        # 1) Pré-traitement OpenCV + conversion PIL
         try:
-            mp = ocr_mathpix(fichier_path)
-            print("✅ Mathpix renvoie latex_simplified :", repr(mp.get("latex_simplified", "")))
-            latex = mp.get("latex_simplified", "").strip()
-            if latex:
-                latex = "\n\n\\[" + latex + "\\]\n"
+            cv_img = preprocess_image_cv(fichier_path)
+            img    = Image.fromarray(cv_img)
         except Exception as e:
-            print("❌ Mathpix OCR échoué :", e)
-            latex = ""
+            print("⚠️ OpenCV pré-trait échoué :", e)
+            img = Image.open(fichier_path).convert("L")
 
-        # 4) Fusionner texte + formules
-        result = texte_ocr
-        if latex:
-            result += "\n\nFormules détectées :\n" + latex
+        # 2) Sauvegarde temporaire pour Mathpix
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        img.save(tmp.name, format="PNG")
 
-        print(f"🖨️ OCR final image : {len(result)} caractères")
+        # 3) Appel Mathpix (texte + LaTeX)
+        print("⚙️ Appel à Mathpix OCR (image)…")
+        mp = ocr_mathpix(tmp.name)
+        text = mp.get("text", "").strip()
+        tex  = mp.get("latex_simplified", "").strip()
+        if tex:
+            tex = f"\n\n\\[{tex}\\]\n"
+
+        os.unlink(tmp.name)
+
+        # 4) Retourne le texte + formules
+        result = text
+        if tex:
+            result += "\n\nFormules détectées :\n" + tex
+
+        print(f"🖨️ OCR Mathpix image : {len(result)} caractères")
         return result
 
     except Exception as e:
-        print(f"❌ Erreur OCR image : {e}")
+        print(f"❌ Erreur OCR image (Mathpix) : {e}")
         return ""
 
 
 # ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
 def extraire_texte_fichier(fichier_field):
     """
-    - Si PDF    : extraire texte + tableaux (pdfminer + Camelot)
-    - Si image  : OCR Tesseract + Mathpix (via extraire_texte_image)
+    - Si PDF :
+       1) extract_text (pdfminer)
+       2) extract_equations_from_pdf (OpenCV + Mathpix)
+       3) extraire_tables_pdf + decrire_table_variation (Camelot)
+    - Si image : extraire_texte_image (Mathpix seul)
     """
     if not fichier_field:
         return ""
 
-    # 1) Sauvegarde temporaire du fichier
-    temp_dir  = tempfile.gettempdir()
-    local     = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+    # 1) Sauvegarde temporaire
+    temp_dir = tempfile.gettempdir()
+    local    = os.path.join(temp_dir, os.path.basename(fichier_field.name))
     with open(local, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
@@ -764,7 +804,7 @@ def extraire_texte_fichier(fichier_field):
     ext = os.path.splitext(fichier_field.name)[1].lower()
 
     if ext == ".pdf":
-        # 2) Extraction texte PDF
+        # 2.1) Texte brut PDF
         try:
             texte = extract_text(local).strip()
             print(f"📄 PDF extrait : {len(texte)} caractères")
@@ -772,7 +812,11 @@ def extraire_texte_fichier(fichier_field):
             print(f"❌ Erreur extraction PDF : {e}")
             texte = ""
 
-        # 3) Extraction des tableaux et description
+        # 2.2) Extraction des équations via Mathpix (OpenCV + pdf2image)
+        latex_blks = extract_equations_from_pdf(local)
+        print(f"🔍 {len(latex_blks)} formules détectées dans PDF")
+
+        # 2.3) Détection et description des tableaux
         descs = []
         try:
             tables = extraire_tables_pdf(local)
@@ -784,18 +828,19 @@ def extraire_texte_fichier(fichier_field):
         except Exception as e:
             print(f"❌ Erreur extraire_tables_pdf : {e}")
 
-        # 4) Concaténation
-        return "\n\n".join([texte] + descs).strip()
+        # 2.4) Concaténation texte + tableaux + formules
+        parts = [texte] + descs + latex_blks
+        return "\n\n".join([p for p in parts if p]).strip()
 
     else:
-        # 5) Cas image : OCR Tesseract + Mathpix
+        # 3) Image seule : OCR + Mathpix
         try:
-            text_img = extraire_texte_image(local)
+            result = extraire_texte_image(local)
         except Exception as e:
             print(f"❌ Erreur OCR image : {e}")
-            text_img = ""
+            result = ""
+        return result.strip()
 
-        return text_img.strip()
 
 # ============== TABLEAUX DE VARIATION (Camelot) ==============
 
