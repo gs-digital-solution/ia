@@ -29,48 +29,45 @@ openai.api_base = "https://api.deepseek.com"
 
 
 # ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
-def call_deepseek_multimodal(path_fichier: str) -> dict:
+def call_deepseek_vision(path_fichier: str) -> dict:
     """
-    Envoie un PDF ou une image à DeepSeek-V3 (deepseek-v3)
-    et renvoie un dict Python avec :
-      - text         : texte brut
-      - latex_blocks : liste de formules LaTeX
-      - captions     : liste de légendes de schémas
-      - graphs       : liste de specs JSON pour tracer
+    Envoie un PDF ou une image à deepseek-vision
+    et renvoie un dict avec :
+      - text
+      - latex_blocks
+      - captions
+      - graphs
     """
-    # 1) Prépare le prompt système
     system_prompt = """
-You are a multimodal exam parser.
-Given a PDF or an image of a school exercise,
-output a single valid JSON object containing:
-  "text": plain text of the statement,
-  "latex_blocks": [ list of LaTeX formulas ],
-  "captions": [ descriptions of any diagrams ],
-  "graphs": [ chart specifications ready for plotting ]
+You are a multimodal document analyzer.
+Given an image or PDF of a school exercise,
+return a single valid JSON object with:
+  "text": ...,
+  "latex_blocks": [...],
+  "captions": [...],
+  "graphs": [...]
 Ensure the JSON is strictly valid.
 """
 
-    # 2) Lit le fichier en binaire et l’encode en base64
+    # Encode le fichier en base64
     with open(path_fichier, "rb") as f:
-        file_bytes = f.read()
-    file_b64 = base64.b64encode(file_bytes).decode('utf-8')
+        data_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    # 3) Appel DeepSeek-V3 via openai.ChatCompletion
+    # Appel vision
     response = openai.ChatCompletion.create(
-        model="deepseek-v3",
+        model="deepseek-vision",
         messages=[
-            {"role": "system", "content": system_prompt},
-            # on envoie la chaîne Base64, pas les bytes bruts
-            {"role": "user",   "content": file_b64}
+            {"role": "system",  "content": system_prompt},
+            {"role": "user",    "content": data_b64}
         ],
         response_format={"type": "json_object"},
         temperature=0.0,
-        max_tokens=60000
+        max_tokens=8000
     )
 
-    # 4) Retourne le JSON parsé (l’API renvoie déjà un dict si response_format=json_object)
     content = response.choices[0].message.content
     return content if isinstance(content, dict) else json.loads(content)
+
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
@@ -726,7 +723,7 @@ def extraire_texte_fichier(fichier_field):
 
     try:
         # 2) Appel DeepSeek multimodal
-        data = call_deepseek_multimodal(local)
+        data = call_deepseek_vision(local)
         texte = data.get("text", "")
         latex_blks = data.get("latex_blocks", [])
         captions = data.get("captions", [])
