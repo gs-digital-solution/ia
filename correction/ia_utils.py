@@ -30,44 +30,47 @@ openai.api_base = "https://api.deepseek.com"
 
 # ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
 def call_deepseek_multimodal(path_fichier: str) -> dict:
-       """
-       Envoie un PDF ou une image à DeepSeek-V3 (deepseek-v3)
-       et renvoie un dict Python avec :
-         - text         : texte brut
-         - latex_blocks : liste de formules LaTeX
-         - captions     : liste de légendes de schémas
-         - graphs       : liste de specs JSON pour tracer
-       """
-       # 1) Prépare le prompt système
-       system_prompt = """
+    """
+    Envoie un PDF ou une image à DeepSeek-V3 (deepseek-v3)
+    et renvoie un dict Python avec :
+      - text         : texte brut
+      - latex_blocks : liste de formules LaTeX
+      - captions     : liste de légendes de schémas
+      - graphs       : liste de specs JSON pour tracer
+    """
+    # 1) Prépare le prompt système
+    system_prompt = """
 You are a multimodal exam parser.
 Given a PDF or an image of a school exercise,
 output a single valid JSON object containing:
-  \"text\": plain text of the statement,
-  \"latex_blocks\": [ list of LaTeX formulas ],
-  \"captions\": [ descriptions of any diagrams ],
-  \"graphs\": [ chart specifications ready for plotting ]
+  "text": plain text of the statement,
+  "latex_blocks": [ list of LaTeX formulas ],
+  "captions": [ descriptions of any diagrams ],
+  "graphs": [ chart specifications ready for plotting ]
 Ensure the JSON is strictly valid.
 """
-       # 2) Lit le fichier en binaire
-       with open(path_fichier, "rb") as f:
-           file_bytes = f.read()
 
-       # 3) Appel DeepSeek-V3 via openai.ChatCompletion
-       response = openai.ChatCompletion.create(
-           model="deepseek-v3",                         # modèle multimodal
-           messages=[
-               {"role": "system", "content": system_prompt},
-               {"role": "user",   "content": file_bytes}
-           ],
-           response_format={"type": "json_object"},
-           temperature=0.0,
-           max_tokens=60000
-       )
+    # 2) Lit le fichier en binaire et l’encode en base64
+    with open(path_fichier, "rb") as f:
+        file_bytes = f.read()
+    file_b64 = base64.b64encode(file_bytes).decode('utf-8')
 
-       # 4) Retourne le JSON parsé
-       return response.choices[0].message.content if isinstance(response.choices[0].message.content, dict) \
-           else json.loads(response.choices[0].message.content)
+    # 3) Appel DeepSeek-V3 via openai.ChatCompletion
+    response = openai.ChatCompletion.create(
+        model="deepseek-v3",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            # on envoie la chaîne Base64, pas les bytes bruts
+            {"role": "user",   "content": file_b64}
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+        max_tokens=60000
+    )
+
+    # 4) Retourne le JSON parsé (l’API renvoie déjà un dict si response_format=json_object)
+    content = response.choices[0].message.content
+    return content if isinstance(content, dict) else json.loads(content)
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
