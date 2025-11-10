@@ -23,88 +23,51 @@ from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import base64
 
-# ======= CONFIGURATION MATHPIX OCR =======
-MATHPIX_APP_ID  = os.getenv("MATHPIX_APP_ID")
-MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
-
-def ocr_mathpix(path_image: str) -> dict:
-    """
-    Appelle l'API Mathpix pour extraire texte + LaTeX.
-    """
-    with open(path_image, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode()
-    headers = {
-        "app_id":  MATHPIX_APP_ID,
-        "app_key": MATHPIX_APP_KEY,
-        "Content-type": "application/json"
-    }
-    payload = {
-        "src":    f"data:image/png;base64,{img_b64}",
-        "formats":["text","latex_simplified"]
-    }
-    resp = requests.post("https://api.mathpix.com/v3/text",
-                         headers=headers, json=payload, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+# ── CONFIGURATION DEEPSEEK (solution b) ────────────────────
+openai.api_key = os.getenv("DEEPSEEK_API_KEY")
+openai.api_base = "https://api.deepseek.com"
 
 
-def preprocess_image_cv(path_image: str) -> np.ndarray:
-    """
-    OpenCV deskew + binarisation adaptative + réduction du bruit.
-    """
-    arr = np.fromfile(path_image, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+# ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
+def call_deepseek_multimodal(path_fichier: str) -> dict:
+       """
+       Envoie un PDF ou une image à DeepSeek-V3 (deepseek-v3)
+       et renvoie un dict Python avec :
+         - text         : texte brut
+         - latex_blocks : liste de formules LaTeX
+         - captions     : liste de légendes de schémas
+         - graphs       : liste de specs JSON pour tracer
+       """
+       # 1) Prépare le prompt système
+       system_prompt = """
+You are a multimodal exam parser.
+Given a PDF or an image of a school exercise,
+output a single valid JSON object containing:
+  \"text\": plain text of the statement,
+  \"latex_blocks\": [ list of LaTeX formulas ],
+  \"captions\": [ descriptions of any diagrams ],
+  \"graphs\": [ chart specifications ready for plotting ]
+Ensure the JSON is strictly valid.
+"""
+       # 2) Lit le fichier en binaire
+       with open(path_fichier, "rb") as f:
+           file_bytes = f.read()
 
-    # Deskew
-    coords = np.column_stack(np.where(img > 0))
-    angle  = cv2.minAreaRect(coords)[-1]
-    angle  = -(90 + angle) if angle < -45 else -angle
-    (h, w)= img.shape
-    M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
-    img = cv2.warpAffine(img, M, (w, h),
-                         flags=cv2.INTER_CUBIC,
-                         borderMode=cv2.BORDER_REPLICATE)
+       # 3) Appel DeepSeek-V3 via openai.ChatCompletion
+       response = openai.ChatCompletion.create(
+           model="deepseek-v3",                         # modèle multimodal
+           messages=[
+               {"role": "system", "content": system_prompt},
+               {"role": "user",   "content": file_bytes}
+           ],
+           response_format={"type": "json_object"},
+           temperature=0.0,
+           max_tokens=60000
+       )
 
-    # Binarisation adaptative
-    img = cv2.adaptiveThreshold(
-        img, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        51, 15
-    )
-    # Ouverture morphologique pour réduire le bruit
-    kern = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
-    return cv2.morphologyEx(img, cv2.MORPH_OPEN, kern, iterations=1)
-
-
-def extract_equations_from_pdf(pdf_path: str) -> list[str]:
-    """
-    Pour chaque page du PDF : convertit en image, pré-traite,
-    envoie à Mathpix les formules détectées, renvoie la liste LaTeX.
-    """
-    pages = convert_from_path(pdf_path, dpi=200)
-    latex_blocks = []
-    for idx, page in enumerate(pages, start=1):
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        page.save(tmp.name, "PNG")
-
-        # Pré-trait OpenCV
-        cv_img = preprocess_image_cv(tmp.name)
-        # Sauv. la page binaire pour Mathpix
-        page_file = tmp.name  # on réutilise tmp.name
-
-        try:
-            mp = ocr_mathpix(page_file)
-            tex = mp.get("latex_simplified", "").strip()
-            if tex:
-                latex_blocks.append(f"\\[{tex}\\]")
-                print(f"✅ Mathpix PDF page {idx} formule : {tex}")
-        except Exception as e:
-            print(f"❌ Mathpix PDF page {idx} échoué :", e)
-        finally:
-            os.unlink(page_file)
-    return latex_blocks
-
+       # 4) Retourne le JSON parsé
+       return response.choices[0].message.content if isinstance(response.choices[0].message.content, dict) \
+           else json.loads(response.choices[0].message.content)
 
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
@@ -334,7 +297,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     print("🎯 Génération corrigé pour exercice individuel...")
 
     system_prompt = DEFAULT_SYSTEM_PROMPT
-    consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
+    consignes_finales = "Format de réponse strict : LaTeX pour les exercices scientifiques, explications détaillées mais concises"
 
     if matiere and hasattr(matiere, 'prompt_ia'):
         promptia = matiere.prompt_ia
@@ -741,219 +704,41 @@ def extraire_texte_pdf(fichier_path):
         print(f"❌ Erreur extraction PDF: {e}")
         return ""
 
-# ============== EXTRACTION DE L'ENONCCE EN IMAGE/ CAPTURE D'ECRAN ==============
-def extraire_texte_image(fichier_path):
-    """
-    Extraction **intégrale** (texte + formules)
-    via Mathpix sur l’image complète.
-    """
-    try:
-        # 1) Chargement PIL pour garantir un PNG propre
-        img = Image.open(fichier_path).convert("L")
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        img.save(tmp.name, format="PNG")
-
-        # 2) Appel Mathpix (texte + LaTeX)
-        print("⚙️ Appel à Mathpix OCR (image complète)…")
-        mp = ocr_mathpix(tmp.name)
-        # Le JSON renvoie "text" (texte brut) et "latex_simplified" (formules)
-        texte = mp.get("text", "").strip()
-        formule = mp.get("latex_simplified", "").strip()
-        os.unlink(tmp.name)
-
-        # 3) Fusionner : toujours ajouter la section formules
-        result = texte
-        if formule:
-            result += "\n\nFormules détectées :\n\\[" + formule + "\\]\n"
-
-        print(f"🖨️ OCR Mathpix image : {len(result)} caractères")
-        return result
-
-    except Exception as e:
-        print(f"❌ Erreur Mathpix OCR image : {e}")
-        return ""
-
 
 # ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
 def extraire_texte_fichier(fichier_field):
     """
-    - Si PDF :
-       1) extract_text (pdfminer)
-       2) extract_equations_from_pdf (OpenCV + Mathpix)
-       3) extraire_tables_pdf + decrire_table_variation (Camelot)
-    - Si image : extraire_texte_image (Mathpix seul)
+    Extraction multimodale via DeepSeek-V3 :
+     - PDF ou image → texte, formules, légendes
     """
     if not fichier_field:
         return ""
 
-    # 1) Sauvegarde temporaire
+    # 1) Sauvegarde locale
     temp_dir = tempfile.gettempdir()
-    local    = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+    local = os.path.join(temp_dir, os.path.basename(fichier_field.name))
     with open(local, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    ext = os.path.splitext(fichier_field.name)[1].lower()
-    if ext == ".pdf":
-        # 2.1) Texte brut PDF
-        try:
-            texte = extract_text(local).strip()
-            print(f"📄 PDF extrait : {len(texte)} caractères")
-        except Exception as e:
-            print(f"❌ Erreur extraction PDF : {e}")
-            texte = ""
-
-        # 2.2) Extraction ciblée des équations
-        latex_blks = extract_equations_from_pdf(local)
-        print(f"🔍 {len(latex_blks)} formules détectées dans PDF")
-
-        # 2.2.b) Si aucune formule détectée, fallback : envoyer la page entière en image
-        if not latex_blks:
-            print("⚠️ Aucune formule isolée → fallback page entière via Mathpix")
-            # Convertir la 1ère page en PNG
-            pages = convert_from_path(local, dpi=200, first_page=1, last_page=1)
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            pages[0].save(tmp.name, "PNG")
-            # extraire via Mathpix
-            try:
-                full = extraire_texte_image(tmp.name)
-                # On garde uniquement les blocs LaTeX
-                # si full contient "text\n\nFormules détectées :\n[...]"
-                parts = full.split("Formules détectées :\n")
-                if len(parts) == 2:
-                    # on récupère tout ce qui suit
-                    form = parts[1].strip()
-                    latex_blks = [form]
-                else:
-                    latex_blks = []  # en cas d'échec de parsage
-            except Exception as e:
-                print("❌ Fallback Mathpix PDF échoué :", e)
-                latex_blks = []
-            finally:
-                os.unlink(tmp.name)
-
-        # 2.3) Tableaux et description
-        descs = []
-        tables = extraire_tables_pdf(local)
-        for idx, t in enumerate(tables, 1):
-            desc = decrire_table_variation(t)
-            if desc:
-                descs.append(desc)
-                print(f"📋 Description table {idx} : {desc}")
-
-        # 2.4) Concaténation texte + tableaux + formules
-        parts = [texte] + descs + latex_blks
+    try:
+        # 2) Appel DeepSeek multimodal
+        data = call_deepseek_multimodal(local)
+        texte = data.get("text", "")
+        latex_blks = data.get("latex_blocks", [])
+        captions = data.get("captions", [])
+        # 3) Concaténation
+        parts = [texte] + latex_blks + captions
         return "\n\n".join(p for p in parts if p).strip()
-
-    else:
-        # 3) Image seule : OCR + Mathpix
+    except Exception as e:
+        print(f"❌ Erreur DeepSeek multimodal : {e}")
+        return ""
+    finally:
+        # 4) Nettoyage
         try:
-            result = extraire_texte_image(local)
-        except Exception as e:
-            print(f"❌ Erreur OCR image : {e}")
-            result = ""
-        return result.strip()
-
-
-# ============== TABLEAUX DE VARIATION (Camelot) ==============
-
-def extraire_tables_pdf(path_pdf: str):
-    """
-    Détecte et renvoie la liste des tableaux dans le PDF.
-    """
-    try:
-        tables = camelot.read_pdf(path_pdf, pages='all', flavor='stream')
-        print(f"==== DEBUG Camelot : {len(tables)} table(s) détectée(s) dans {path_pdf} ====")
-        return tables
-    except Exception as e:
-        print(f"❌ Erreur Camelot.read_pdf sur {path_pdf} : {e}")
-        return []
-
-def decrire_table_variation(table):
-    """
-    Si table.df ressemble à un tableau de variation, renvoie
-    une description détaillée (sens de variation, extrema…).
-    Sinon, retourne None sans lever d’exception.
-    """
-    try:
-        df = table.df.replace('', np.nan) \
-                     .dropna(how='all', axis=1) \
-                     .fillna(method='ffill')
-
-        # 1) S’assurer qu’il y a au moins 2 colonnes et 2 lignes (1 en-tête + 1 donnée)
-        if df.shape[1] < 2 or df.shape[0] < 2:
-            return None
-
-        # 2) Extraction des données (on saute la 1ʳᵉ ligne d’en-tête)
-        data = df.iloc[1:].reset_index(drop=True)
-        intervalles = data.iloc[:, 0].astype(str).tolist()
-
-        # 3) Conversion sécurisée des valeurs f(x)
-        valeurs = []
-        for val in data.iloc[:, 1]:
-            try:
-                valeurs.append(float(str(val).replace(',', '.')))
-            except:
-                valeurs.append(None)
-
-        # 4) Construction des descriptions de variation
-        descs = []
-        for i in range(len(valeurs) - 1):
-            v1, v2 = valeurs[i], valeurs[i+1]
-            a, b = intervalles[i], intervalles[i+1]
-            if v1 is None or v2 is None:
-                continue
-            if v2 > v1:
-                descs.append(f"f croissante de {a} à {b}")
-            elif v2 < v1:
-                descs.append(f"f décroissante de {a} à {b}")
-            else:
-                descs.append(f"f constante de {a} à {b}")
-
-        # 5) Recherche d’extrema
-        extrema = []
-        for i in range(1, len(valeurs) - 1):
-            v0, v1, v2 = valeurs[i-1], valeurs[i], valeurs[i+1]
-            x = intervalles[i]
-            if v1 is None or v0 is None or v2 is None:
-                continue
-            if v1 > v0 and v1 > v2:
-                extrema.append(f"maximum en {x} = {v1}")
-            elif v1 < v0 and v1 < v2:
-                extrema.append(f"minimum en {x} = {v1}")
-
-        # 6) Composition du texte final
-        parts = []
-        if descs:
-            parts.append("Tableau de variation : " + "; ".join(descs) + ".")
-        if extrema:
-            parts.append("Extrema : " + "; ".join(extrema) + ".")
-        return " ".join(parts) if parts else None
-
-    except Exception as e:
-        print(f"❌ Erreur decrire_table_variation: {e}")
-        return None
-
-
-def decrire_image(path_image: str) -> str:
-    """
-    Génère une légende / description de l'image via BLIP.
-    """
-    try:
-        print(f"🖼️ DEBUG – Captioning image : {path_image}")
-        img = Image.open(path_image).convert("RGB")
-        inputs = _processor(img, return_tensors="pt").to(device)
-        # Génération en une passe
-        out = _model.generate(**inputs, max_new_tokens=50)
-        caption = _processor.decode(out[0], skip_special_tokens=True)
-        caption = caption.strip()
-        print(f"🖼️ DEBUG – Légende générée : {caption}")
-        return "Description image : " + caption
-    except Exception as e:
-        print(f"❌ Erreur decrire_image pour {path_image} : {e}")
-        return "(Erreur description image)"
-
-# ============== NETTOYAGE / REFORMULATION AVEC GPT-3.5 ==============
+            os.unlink(local)
+        except:
+            pass
 
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
@@ -1366,15 +1151,15 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from resources.models import Matiere
 
     try:
-        demande = DemandeCorrection.objects.get(id=demande_id)
+        # Récupération de la demande et création de la soumission IA
+        demande    = DemandeCorrection.objects.get(id=demande_id)
         soumission = SoumissionIA.objects.get(demande=demande)
 
-        soumission.statut = 'extraction'
+        # Étape 1 : Extraction du texte brut (via DeepSeek multimodal dans extraire_texte_fichier)
+        soumission.statut      = 'extraction'
         soumission.progression = 20
         soumission.save()
 
-        # 1) Extraction initiale
-        texte_brut = ""
         if demande.fichier:
             texte_brut = extraire_texte_fichier(demande.fichier)
         else:
@@ -1383,50 +1168,33 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         print("📥 DEBUG – TEXTE BRUT (premiers 500 chars) :")
         print(texte_brut[:500].replace("\n", "\\n"), "...\n")
 
-        # 2) Extraction & description des tableaux
-        descs_tables = []
-        if demande.fichier:
-            path_pdf = demande.fichier.path
-            tables = extraire_tables_pdf(path_pdf)
-            for idx, table in enumerate(tables, start=1):
-                desc = decrire_table_variation(table)
-                if desc:
-                    descs_tables.append(desc)
-                    print(f"📋 DEBUG – Description table {idx} : {desc}")
-
-        print(f"🔍 DEBUG – Total descriptions tables : {len(descs_tables)}")
-
-        # 3) Assemblage du texte final pour l'IA
+        # Étape 2 : Assemblage du texte final pour l'IA
+        # Tout est déjà enrichi (texte + formules + légendes) par extraire_texte_fichier
         texte_enonce = texte_brut
-        if descs_tables:
-            texte_enonce += "\n\n" + "\n".join(descs_tables)
-
-        print("📥 DEBUG – TEXTE ENRICHI (après tables) :")
+        print("📥 DEBUG – TEXTE ENRICHI (après DeepSeek) :")
         print(texte_enonce[:500].replace("\n", "\\n"), "...\n")
 
-        soumission.statut = 'analyse_ia'
+        # Étape 3 : Lancement du traitement IA
+        soumission.statut      = 'analyse_ia'
         soumission.progression = 40
         soumission.save()
 
         matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
         contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
 
-        soumission.statut = 'generation_graphiques'
+        soumission.statut      = 'generation_graphiques'
         soumission.progression = 60
         soumission.save()
 
-        # 3.b) Texte prêt pour DeepSeek (pas de nettoyage GPT-3.5)
-        texte_pret = texte_enonce
-        print("🧹 DEBUG – TEXTE PRÊT pour DeepSeek (premiers 500 chars) :")
-        print(texte_pret[:500].replace("\n", "\\n"), "...\n")
-
+        # Appel de la génération de corrigé (découpé ou direct selon la taille)
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-            texte_pret,
+            texte_enonce,
             contexte,
             matiere=matiere
         )
 
-        soumission.statut = 'formatage_pdf'
+        # Étape 4 : Génération du PDF final
+        soumission.statut      = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
 
@@ -1434,21 +1202,23 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         pdf_path = generer_pdf_corrige(
             {
                 "titre_corrige": contexte,
-                "corrige_html": corrige_txt,
+                "corrige_html":  corrige_txt,
                 "soumission_id": demande_id
             },
             demande_id
         )
 
-        soumission.statut = 'termine'
+        # Étape 5 : Mise à jour du statut et sauvegarde du résultat
+        soumission.statut      = 'termine'
         soumission.progression = 100
         soumission.resultat_json = {
             'corrige_text': corrige_txt,
-            'pdf_url': pdf_path,
-            'graphiques': graph_list or []
+            'pdf_url':      pdf_path,
+            'graphiques':   graph_list or []
         }
         soumission.save()
 
+        # On stocke également le corrigé dans la demande
         demande.corrigé = corrige_txt
         demande.save()
 
