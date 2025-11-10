@@ -78,136 +78,122 @@ def call_deepseek_vision(path_fichier: str) -> dict:
         return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
+
 def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Analyse complète des documents scientifiques avec capacité vision.
-    Version corrigée pour l'API DeepSeek.
+    Analyse simple et efficace : OCR + prompt intelligent
     """
-    print("🔍 Début analyse scientifique multimodale...")
+    print("🔍 Analyse scientifique simplifiée...")
 
-    system_prompt = """
-    TU ES UN EXPERT EN SCIENCES (maths, physique, chimie, SVT).
-
-    🔬 MISSIONS :
-    1. EXTRAIRE le texte intégral
-    2. ANALYSER les schémas scientifiques (plans inclinés, circuits, molécules...)
-    3. IDENTIFIER les formules mathématiques et chimiques
-    4. REPÉRER les données numériques (angles, masses, distances, forces)
-    5. STRUCTURER les exercices et questions
-
-    📋 FORMAT DE RÉPONSE STRICTE (JSON) :
-    {
-        "texte_complet": "texte intégral du document",
-        "elements_visuels": [
-            {
-                "type": "plan_incline|circuit|molécule|graphique...",
-                "description": "description détaillée du schéma",
-                "donnees_extraites": {"angle": 30, "masse": "2kg", "distance": "5m"},
-                "contexte_scientifique": "explication du concept physique"
-            }
-        ],
-        "formules_latex": ["E=mc^2", "F=ma", "V=RI"],
-        "structure_exercices": ["Exercice 1", "Question 1", "Partie A"],
-        "donnees_numeriques": {"valeurs": [10, 20, 30], "unites": ["m", "kg", "N"]}
-    }
-    """
-
+    # 1. OCR de base
+    texte_ocr = ""
     try:
-        # Encoder le fichier en base64
-        with open(fichier_path, "rb") as f:
-            data_b64 = base64.b64encode(f.read()).decode("utf-8")
+        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            image = Image.open(fichier_path)
+            custom_config = r'--oem 3 --psm 6 -l fra+eng'
+            texte_ocr = pytesseract.image_to_string(image, config=custom_config)
+            print(f"✅ OCR extrait: {len(texte_ocr)} caractères")
 
-        # ✅ CORRECTION : Format DeepSeek compatible
-        # DeepSeek attend les images dans un format texte spécial avec balise [image]
-        message_content = f"""
-        [image]{data_b64}[/image]
+        elif fichier_path.lower().endswith('.pdf'):
+            texte_ocr = extraire_texte_pdf(fichier_path)
+            print(f"✅ PDF extrait: {len(texte_ocr)} caractères")
 
-        Analyse complète de ce document scientifique. Identifie tous les schémas, formules et données.
+    except Exception as e:
+        print(f"❌ Extraction échouée: {e}")
+        texte_ocr = ""
+
+    # 2. Analyse contextuelle simple
+    try:
+        prompt = f"""
+        ANALYSE CE DOCUMENT SCIENTIFIQUE :
+
+        TEXTE EXTRAIT :
+        {texte_ocr}
+
+        TÂCHES :
+        1. Corrige les erreurs d'OCR si nécessaire
+        2. Identifie le type d'exercice (physique, maths, etc.)
+        3. Extrait les données numériques
+        4. Structure l'exercice
+
+        RÉPONDS en JSON :
+        {{
+            "texte_complet": "texte corrigé et complété",
+            "elements_visuels": [{{"type": "auto-détecté", "description": "basé sur le contexte"}}],
+            "formules_latex": ["formules détectées"],
+            "structure_exercices": ["structure identifiée"],
+            "donnees_numeriques": {{}}
+        }}
         """
 
-        # Appel API corrigé
         response = openai.ChatCompletion.create(
-            model=DEEPSEEK_VISION_MODEL,
+            model="deepseek-chat",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_content}
+                {"role": "system", "content": "Tu es un expert en sciences."},
+                {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=8000
+            max_tokens=3000
         )
 
-        content = response.choices[0].message.content
-        resultat = json.loads(content) if isinstance(content, str) else content
+        resultat = json.loads(response.choices[0].message.content)
 
-        print(f"✅ Analyse scientifique terminée:")
-        print(f"   - Texte: {len(resultat.get('texte_complet', ''))} caractères")
-        print(f"   - Éléments visuels: {len(resultat.get('elements_visuels', []))}")
-        print(f"   - Formules: {len(resultat.get('formules_latex', []))}")
+        # S'assurer qu'on a au moins le texte OCR de base
+        if not resultat.get("texte_complet") and texte_ocr:
+            resultat["texte_complet"] = texte_ocr
 
+        print(f"✅ Analyse terminée: {len(resultat.get('texte_complet', ''))} caractères")
         return resultat
 
     except Exception as e:
-        print(f"❌ Erreur analyse scientifique: {e}")
-        # Fallback : utiliser l'extraction texte simple
-        try:
-            texte_simple = extraire_texte_pdf(fichier_path) if fichier_path.endswith('.pdf') else ""
-            return {
-                "texte_complet": texte_simple,
-                "elements_visuels": [],
-                "formules_latex": [],
-                "structure_exercices": [],
-                "donnees_numeriques": {}
-            }
-        except:
-            return {
-                "texte_complet": "",
-                "elements_visuels": [],
-                "formules_latex": [],
-                "structure_exercices": [],
-                "donnees_numeriques": {}
-            }
+        print(f"❌ Erreur analyse: {e}")
+        return {
+            "texte_complet": texte_ocr,
+            "elements_visuels": [],
+            "formules_latex": [],
+            "structure_exercices": [],
+            "donnees_numeriques": {}
+        }
 
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
-    Extraction robuste avec fallback multiple pour les images/PDF
+    Extraction simple : OCR direct → Analyse IA
     """
-    print("🔄 Extraction robuste avec fallback...")
+    print("🔄 Extraction simple...")
 
-    # Essayer d'abord l'analyse scientifique
+    # Juste utiliser l'analyse scientifique directe
     try:
         analyse = analyser_document_scientifique(fichier_path)
         texte = analyse.get("texte_complet", "")
-        if texte and len(texte) > 100:  # Si analyse réussie
-            print("✅ Analyse scientifique réussie")
+        if texte and len(texte) > 50:
+            print("✅ Extraction réussie")
+            return texte
+        else:
+            print("❌ Texte trop court, utilisation fallback OCR")
             return texte
     except Exception as e:
-        print(f"❌ Analyse scientifique échouée: {e}")
+        print(f"❌ Extraction échouée: {e}")
+        return ""
 
-    # Fallback 1: OCR avec pytesseract pour les images
+
+def debug_ocr(fichier_path: str):
+    """
+    Debug simple de l'OCR
+    """
     try:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             image = Image.open(fichier_path)
-            texte = pytesseract.image_to_string(image, lang='fra')
-            if texte and len(texte) > 50:
-                print("✅ OCR réussi")
-                return texte
+            custom_config = r'--oem 3 --psm 6 -l fra+eng'
+            texte = pytesseract.image_to_string(image, config=custom_config)
+            print("🔍 DEBUG OCR - Texte brut:")
+            print(texte[:500])
+            print(f"Longueur: {len(texte)} caractères")
+            return texte
     except Exception as e:
-        print(f"❌ OCR échoué: {e}")
-
-    # Fallback 2: Extraction PDF standard
-    try:
-        if fichier_path.lower().endswith('.pdf'):
-            texte = extraire_texte_pdf(fichier_path)
-            if texte:
-                print("✅ Extraction PDF standard réussie")
-                return texte
-    except Exception as e:
-        print(f"❌ Extraction PDF échouée: {e}")
-
+        print(f"❌ DEBUG OCR échoué: {e}")
     return ""
-
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
     """Extrait les blocs JSON pour les graphiques"""
@@ -904,6 +890,11 @@ def extraire_texte_fichier(fichier_field):
             f.write(chunk)
 
     try:
+        # ✅ AJOUT ICI : DEBUG OCR DIRECT
+        print("🔍 DEBUG - Test OCR direct:")
+        texte_ocr_brut = debug_ocr(local_path)
+        # ✅ FIN AJOUT
+
         # 2) EXTRACTION ROBUSTE avec fallback
         print("🔍 Lancement extraction robuste...")
         texte_principal = extraire_texte_robuste(local_path)
@@ -921,7 +912,7 @@ def extraire_texte_fichier(fichier_field):
         print("🔍 Analyse scientifique des schémas...")
         analyse_complete = analyser_document_scientifique(local_path)
 
-        # [Le reste du code reste identique pour la construction du texte enrichi]
+        # 4) CONSTRUCTION DU TEXTE ENRICHI avec toutes les informations
         texte_enrichi = []
 
         # Texte principal
@@ -948,9 +939,21 @@ def extraire_texte_fichier(fichier_field):
                 if contexte:
                     texte_enrichi.append(f"**Contexte scientifique:** {contexte}")
 
-        # [Le reste du code reste identique...]
-        # Formules LaTeX, structure, etc.
+        # Formules LaTeX
+        formules = analyse_complete.get("formules_latex", [])
+        if formules:
+            texte_enrichi.append("\n## 📐 FORMULES MATHÉMATIQUES")
+            for formule in formules:
+                texte_enrichi.append(f"- {formule}")
 
+        # Structure des exercices
+        structure = analyse_complete.get("structure_exercices", [])
+        if structure:
+            texte_enrichi.append("\n## 📚 STRUCTURE DES EXERCICES")
+            for element in structure:
+                texte_enrichi.append(f"- {element}")
+
+        # 5) Retourner le texte enrichi
         texte_final = "\n".join(texte_enrichi)
         print(f"✅ Extraction terminée: {len(texte_final)} caractères")
         return texte_final.strip()
@@ -964,7 +967,6 @@ def extraire_texte_fichier(fichier_field):
             os.unlink(local_path)
         except:
             pass
-
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
     """
