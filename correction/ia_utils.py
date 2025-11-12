@@ -22,6 +22,41 @@ import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import base64
+import functools
+from typing import Dict, Any
+
+# Cache mémoire pour réduire les appels API
+_analyse_cache: Dict[str, Any] = {}
+
+def cached_analyser_document_scientifique(fichier_path: str) -> Dict[str, Any]:
+    """
+    Version avec cache de l'analyse scientifique
+    """
+    import hashlib
+
+    # Créer une clé de cache basée sur le contenu du fichier
+    with open(fichier_path, "rb") as f:
+        file_hash = hashlib.md5(f.read()).hexdigest()
+
+    cache_key = f"{file_hash}_{os.path.getsize(fichier_path)}"
+
+    # Vérifier le cache
+    if cache_key in _analyse_cache:
+        print("✅ Utilisation du cache pour l'analyse scientifique")
+        return _analyse_cache[cache_key]
+
+    # Sinon, faire l'analyse et mettre en cache
+    print("🔍 Analyse nouvelle (non cachée)")
+    resultat = analyser_document_scientifique(fichier_path)
+    _analyse_cache[cache_key] = resultat
+
+    # Limiter la taille du cache (éviter memory leak)
+    if len(_analyse_cache) > 50:  # Garder seulement 50 analyses
+        oldest_key = next(iter(_analyse_cache))
+        del _analyse_cache[oldest_key]
+        print("🧹 Cache nettoyé (limite atteinte)")
+
+    return resultat
 
 # ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
 openai.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -81,18 +116,64 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Analyse simple et efficace : OCR + prompt intelligent
+    Analyse scientifique avec OCR OPTIMISÉ pour les formules mathématiques
     """
-    print("🔍 Analyse scientifique simplifiée...")
+    print("🔍 Analyse scientifique avec OCR optimisé...")
 
-    # 1. OCR de base
+    # 1. OCR AMÉLIORÉ avec configuration scientifique
     texte_ocr = ""
+    caracteres_speciaux_detectes = []
+
     try:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             image = Image.open(fichier_path)
-            custom_config = r'--oem 3 --psm 6 -l fra+eng'
+
+            # ✅ CONFIGURATION OCR AMÉLIORÉE POUR LES SCIENCES
+            custom_config = r'--oem 3 --psm 6 -l fra+eng+equ'
+            # oem 3 = moteur OCR LSTM le plus avancé
+            # psm 6 = bloc de texte uniforme (idéal pour les documents structurés)
+            # fra+eng+equ = français + anglais + langage équations mathématiques
+
             texte_ocr = pytesseract.image_to_string(image, config=custom_config)
-            print(f"✅ OCR extrait: {len(texte_ocr)} caractères")
+            print(f"✅ OCR scientifique extrait: {len(texte_ocr)} caractères")
+
+            # ✅ DÉTECTION DES CARACTÈRES SPÉCIAUX SCIENTIFIQUES
+            # Symboles grecs
+            symboles_grecs = re.findall(r'[αβγδεζηθικλμνξπρσςτυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ]', texte_ocr)
+            # Opérateurs mathématiques
+            operateurs_math = re.findall(r'[∑∫∏√∞∠∆∇∂]', texte_ocr)
+            # Indices et exposants
+            indices_exposants = re.findall(r'[₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹]', texte_ocr)
+
+            if symboles_grecs:
+                caracteres_speciaux_detectes.extend(symboles_grecs)
+                print(f"   Symboles grecs détectés: {set(symboles_grecs)}")
+            if operateurs_math:
+                caracteres_speciaux_detectes.extend(operateurs_math)
+                print(f"   Opérateurs mathématiques: {set(operateurs_math)}")
+            if indices_exposants:
+                caracteres_speciaux_detectes.extend(indices_exposants)
+                print(f"   Indices/exposants: {set(indices_exposants)}")
+
+            # ✅ PRÉTRAITEMENT D'IMAGE POUR AMÉLIORER L'OCR
+            try:
+                # Conversion en niveaux de gris
+                image_gris = image.convert('L')
+                # Amélioration du contraste
+                enhancer = ImageEnhance.Contrast(image_gris)
+                image_contrast = enhancer.enhance(2.0)  # Contraste x2
+                # Amélioration de la netteté
+                enhancer = ImageEnhance.Sharpness(image_contrast)
+                image_sharp = enhancer.enhance(2.0)  # Netteté x2
+
+                # OCR sur l'image prétraitée
+                texte_ocr_ameliore = pytesseract.image_to_string(image_sharp, config=custom_config)
+                if len(texte_ocr_ameliore) > len(texte_ocr):
+                    texte_ocr = texte_ocr_ameliore
+                    print("✅ OCR amélioré par prétraitement d'image")
+
+            except Exception as e_pretraitement:
+                print(f"⚠️ Prétraitement image échoué: {e_pretraitement}")
 
         elif fichier_path.lower().endswith('.pdf'):
             texte_ocr = extraire_texte_pdf(fichier_path)
@@ -102,48 +183,86 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
         print(f"❌ Extraction échouée: {e}")
         texte_ocr = ""
 
-    # 2. Analyse contextuelle simple
+    # 2. ANALYSE CONTEXTUELLE AVEC INFORMATION OCR AMÉLIORÉE
     try:
+        # ✅ CONSTRUCTION DU PROMPT ENRICHIE AVEC INFO OCR
+        info_ocr_ameliore = ""
+        if caracteres_speciaux_detectes:
+            info_ocr_ameliore = f"""
+            INFORMATIONS OCR DÉTECTÉES :
+            - Caractères spéciaux scientifiques: {', '.join(set(caracteres_speciaux_detectes))}
+            """
+
         prompt = f"""
         ANALYSE CE DOCUMENT SCIENTIFIQUE :
 
-        TEXTE EXTRAIT :
+        TEXTE EXTRAIT PAR OCR :
         {texte_ocr}
 
-        TÂCHES :
-        1. Corrige les erreurs d'OCR si nécessaire
-        2. Identifie le type d'exercice (physique, maths, etc.)
-        3. Extrait les données numériques
-        4. Structure l'exercice
+        {info_ocr_ameliore}
+
+        TÂCHES IMPORTANTES :
+        1. CORRIGE les erreurs d'OCR en priorité (symboles grecs, notations scientifiques)
+        2. IDENTIFIE précisément le type d'exercice (physique, maths, chimie, etc.)
+        3. EXTRAIT toutes les données numériques avec leurs unités
+        4. DÉTECTE les formules mathématiques et notations scientifiques
+        5. STRUCTURE l'exercice (parties, questions)
+
+        ATTENTION PARTICULIÈRE :
+        - Les symboles grecs doivent être correctement interprétés
+        - Les notations scientifiques (exposants, indices) doivent être préservées
+        - Les unités de mesure doivent être exactes
 
         RÉPONDS en JSON :
         {{
-            "texte_complet": "texte corrigé et complété",
-            "elements_visuels": [{{"type": "auto-détecté", "description": "basé sur le contexte"}}],
-            "formules_latex": ["formules détectées"],
-            "structure_exercices": ["structure identifiée"],
-            "donnees_numeriques": {{}}
+            "texte_complet": "texte corrigé et complété avec notations scientifiques exactes",
+            "elements_visuels": [
+                {{
+                    "type": "circuit|pendule|graphique|plan_incline|etc",
+                    "description": "description détaillée basée sur le contexte scientifique",
+                    "donnees_extraites": {{}},
+                    "contexte_scientifique": "explication du concept physique/mathématique"
+                }}
+            ],
+            "formules_latex": ["liste des formules mathématiques détectées"],
+            "structure_exercices": ["Exercice X", "Question Y", "Partie Z"],
+            "donnees_numeriques": {{
+                "valeurs": [liste des valeurs numériques],
+                "unites": [liste des unités correspondantes]
+            }}
         }}
         """
 
         response = openai.ChatCompletion.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "Tu es un expert en sciences."},
+                {"role": "system",
+                 "content": "Tu es un expert en sciences avec une expertise particulière en reconnaissance de notations mathématiques et scientifiques."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=3000
+            max_tokens=3500  # Légèrement augmenté pour les notations complexes
         )
 
         resultat = json.loads(response.choices[0].message.content)
 
+        # ✅ VALIDATION ET AMÉLIORATION DU RÉSULTAT
         # S'assurer qu'on a au moins le texte OCR de base
         if not resultat.get("texte_complet") and texte_ocr:
             resultat["texte_complet"] = texte_ocr
 
+        # Ajouter les informations OCR détectées aux métadonnées
+        if caracteres_speciaux_detectes and "metadonnees" not in resultat:
+            resultat["metadonnees"] = {
+                "caracteres_speciaux_detectes": list(set(caracteres_speciaux_detectes)),
+                "qualite_ocr": "amelioree" if caracteres_speciaux_detectes else "standard"
+            }
+
         print(f"✅ Analyse terminée: {len(resultat.get('texte_complet', ''))} caractères")
+        if caracteres_speciaux_detectes:
+            print(f"   Symboles scientifiques traités: {len(set(caracteres_speciaux_detectes))}")
+
         return resultat
 
     except Exception as e:
@@ -153,19 +272,23 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             "elements_visuels": [],
             "formules_latex": [],
             "structure_exercices": [],
-            "donnees_numeriques": {}
+            "donnees_numeriques": {},
+            "metadonnees": {
+                "caracteres_speciaux_detectes": list(set(caracteres_speciaux_detectes)),
+                "qualite_ocr": "erreur"
+            }
         }
 
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
-    Extraction simple : OCR direct → Analyse IA
+    Extraction simple : OCR direct → Analyse IA AVEC CACHE
     """
-    print("🔄 Extraction simple...")
+    print("🔄 Extraction simple avec cache...")
 
-    # Juste utiliser l'analyse scientifique directe
+    # Utiliser l'analyse scientifique AVEC CACHE
     try:
-        analyse = analyser_document_scientifique(fichier_path)
+        analyse = cached_analyser_document_scientifique(fichier_path)  # ← AVEC CACHE
         texte = analyse.get("texte_complet", "")
         if texte and len(texte) > 50:
             print("✅ Extraction réussie")
@@ -176,7 +299,6 @@ def extraire_texte_robuste(fichier_path: str) -> str:
     except Exception as e:
         print(f"❌ Extraction échouée: {e}")
         return ""
-
 
 def debug_ocr(fichier_path: str):
     """
@@ -875,8 +997,7 @@ def extraire_texte_pdf(fichier_path):
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
 def extraire_texte_fichier(fichier_field):
     """
-    EXTRACTION MULTIMODALE AVEC VISION SCIENTIFIQUE
-    Version robuste avec fallback
+    EXTRACTION MULTIMODALE AVEC CACHE OPTIMISÉ
     """
     if not fichier_field:
         return ""
@@ -890,29 +1011,27 @@ def extraire_texte_fichier(fichier_field):
             f.write(chunk)
 
     try:
-        # ✅ AJOUT ICI : DEBUG OCR DIRECT
+        # ✅ DEBUG OCR DIRECT
         print("🔍 DEBUG - Test OCR direct:")
         texte_ocr_brut = debug_ocr(local_path)
-        # ✅ FIN AJOUT
 
-        # 2) EXTRACTION ROBUSTE avec fallback
-        print("🔍 Lancement extraction robuste...")
+        # 2) EXTRACTION ROBUSTE AVEC CACHE
+        print("🔍 Lancement extraction robuste avec cache...")
         texte_principal = extraire_texte_robuste(local_path)
 
         if not texte_principal:
             print("❌ Aucun texte extrait, utilisation fallback OCR basique")
-            # Dernier recours : appel direct à l'API
             try:
                 resultat_simple = call_deepseek_vision(local_path)
                 texte_principal = resultat_simple.get("text", "")
             except:
                 texte_principal = ""
 
-        # 3) ANALYSE SCIENTIFIQUE pour les schémas (même si texte vide)
-        print("🔍 Analyse scientifique des schémas...")
-        analyse_complete = analyser_document_scientifique(local_path)
+        # 3) ANALYSE SCIENTIFIQUE POUR LES SCHÉMAS AVEC CACHE
+        print("🔍 Analyse scientifique des schémas (avec cache)...")
+        analyse_complete = cached_analyser_document_scientifique(local_path)  # ← AVEC CACHE
 
-        # 4) CONSTRUCTION DU TEXTE ENRICHI avec toutes les informations
+        # 4) CONSTRUCTION DU TEXTE ENRICHI
         texte_enrichi = []
 
         # Texte principal
@@ -928,7 +1047,6 @@ def extraire_texte_fichier(fichier_field):
                 texte_enrichi.append(f"\n### Schéma {i}: {element.get('type', 'Non spécifié')}")
                 texte_enrichi.append(f"**Description:** {element.get('description', '')}")
 
-                # Données extraites (angles, masses, etc.)
                 donnees = element.get('donnees_extraites', {})
                 if donnees:
                     texte_enrichi.append("**Données extraites:**")
