@@ -14,7 +14,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pdfminer.high_level import extract_text
 from PIL import Image, ImageEnhance, ImageFilter
-# import pytesseract
+import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
