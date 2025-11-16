@@ -1512,6 +1512,29 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
+    print(f"🔍 [DEBUG ÉTAPE 1] Début tâche - Worker PID: {os.getpid()}, Demande: {demande_id}")
+
+    # TEST 1: Vérifier l'import BLIP
+    try:
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        print(f"✅ [DEBUG] BLIP importé dans PID {os.getpid()}")
+    except Exception as e:
+        print(f"❌ [DEBUG] Erreur import BLIP: {e}")
+
+    # TEST 2: Vérifier l'initialisation BLIP
+    try:
+        print(f"🖼️ [DEBUG] Test device BLIP: {device}")
+        print(f"🖼️ [DEBUG] Test processor BLIP: {_processor is not None}")
+        print(f"🖼️ [DEBUG] Test model BLIP: {_model is not None}")
+    except Exception as e:
+        print(f"❌ [DEBUG] Erreur initialisation BLIP: {e}")
+
+    # TEST 3: Vérifier Tesseract
+    try:
+        import pytesseract
+        print(f"✅ [DEBUG] Tesseract importé dans PID {os.getpid()}")
+    except Exception as e:
+        print(f"❌ [DEBUG] Erreur import Tesseract: {e}")
     from correction.models import DemandeCorrection, SoumissionIA
     from resources.models import Matiere
 
