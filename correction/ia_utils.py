@@ -642,7 +642,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             {"role": "user", "content": prompt_ia}
         ],
         "temperature": 0.1,
-        "max_tokens": 6000,
+        "max_tokens": 12000,
         "top_p": 0.9,
         "frequency_penalty": 0.1
     }
