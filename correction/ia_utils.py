@@ -244,7 +244,7 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             response_format={"type": "json_object"},
             temperature=0.1,
             max_tokens=3500,
-            #timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour analyse scientifique
+            #timeout=30   ✅ AJOUTER CETTE LIGNE - 30s max pour analyse scientifique
         )
 
         resultat = json.loads(response.choices[0].message.content)
@@ -707,7 +707,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         print("📡 Appel API DeepSeek OPTIMISÉ (appel unique)...")
 
         # UN SEUL APPEL avec timeout réduit
-        response = requests.post(api_url, headers=headers, json=data, timeout=45)  # 45s max
+        response = requests.post(api_url, headers=headers, json=data, timeout=90)  # 45s max
 
         if response.status_code != 200:
             error_msg = f"Erreur API: {response.json().get('message', 'Pas de détail')}"
