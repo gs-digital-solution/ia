@@ -102,7 +102,8 @@ def call_deepseek_vision(path_fichier: str) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
-            max_tokens=8000
+            max_tokens=8000,
+            timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour vision
         )
 
         content = response.choices[0].message.content
@@ -242,7 +243,8 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=3500  # Légèrement augmenté pour les notations complexes
+            max_tokens=3500,
+            timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour analyse scientifique
         )
 
         resultat = json.loads(response.choices[0].message.content)
@@ -493,12 +495,30 @@ def separer_exercices(texte_epreuve):
 
 def estimer_tokens(texte):
     """
-    Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
+    Estimation OPTIMISÉE des tokens pour contenu scientifique
+    Prend en compte LaTeX, formules mathématiques et texte dense
     """
+    if not texte:
+        return 0
+
+    # Compter les mots de base
     mots = len(texte.split())
-    tokens = int(mots / 0.75)
-    print(f"📊 Estimation tokens: {mots} mots → {tokens} tokens")
-    return tokens
+
+    # Détection contenu scientifique (consomme plus de tokens)
+    formules_latex = len(re.findall(r'\$[^$]+\$|\\[\[\(].*?\\[\]\)]', texte))
+    symboles_scientifiques = len(
+        re.findall(r'[αβγδεζηθικλμνξπρσςτυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ∑∫∏√∞∠∆∇∂₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹]', texte))
+
+    # Pénalité pour contenu scientifique dense
+    penalite_scientifique = (formules_latex * 8) + (symboles_scientifiques * 2)
+
+    # Estimation optimisée (français scientifique = plus dense)
+    tokens_base = int(mots / 0.65)  # 0.65 au lieu de 0.75 pour contenu dense
+    tokens_totaux = tokens_base + penalite_scientifique
+
+    print(
+        f"📊 Estimation OPTIMISÉE: {mots} mots + {formules_latex} formules + {symboles_scientifiques} symboles → {tokens_totaux} tokens")
+    return tokens_totaux
 
 
 def verifier_qualite_corrige(corrige_text, exercice_original):
@@ -536,6 +556,42 @@ def verifier_qualite_corrige(corrige_text, exercice_original):
         return False
 
     return True
+
+
+def verifier_qualite_corrige_legere(corrige_text, exercice_original):
+    """
+    Vérification qualité ALLÉGÉE - moins stricte pour éviter les doubles appels
+    Seulement les problèmes CRITIQUES déclenchent un rejet
+    """
+    if not corrige_text:
+        print("❌ Corrigé vide")
+        return False
+
+    # Seulement les indicateurs CRITIQUES (qui rendent le corrigé inutilisable)
+    indicateurs_critiques = [
+        "je vais arrêter ici",
+        "arrêter ici cette question",
+        "impossible de répondre",
+        "donnée manquante essentielle",
+        "je ne peux pas continuer",
+        "exercice incompréhensible"
+    ]
+
+    # Vérifier les indicateurs critiques seulement
+    problemes_critiques = sum(1 for indicateur in indicateurs_critiques
+                              if indicateur.lower() in corrige_text.lower())
+
+    # Si indicateur critique OU corrigé vraiment trop court (10% de l'original)
+    if problemes_critiques > 0:
+        print(f"❌ Qualité insuffisante: {problemes_critiques} problème(s) critique(s)")
+        return False
+
+    if len(corrige_text) < len(exercice_original) * 0.1:
+        print(f"❌ Corrigé trop court: {len(corrige_text)} vs {len(exercice_original)}")
+        return False
+
+    print("✅ Qualité acceptable (vérification légère)")
+    return True  # On accepte la plupart des corrections
 
 
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None):
@@ -648,39 +704,32 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     }
 
     try:
-        print("📡 Appel API DeepSeek avec analyse vision...")
+        print("📡 Appel API DeepSeek OPTIMISÉ (appel unique)...")
 
-        # Tentative avec vérification de qualité
-        output = None
-        for tentative in range(2):  # Maximum 2 tentatives
-            response = requests.post(api_url, headers=headers, json=data, timeout=90)
-            response_data = response.json()
+        # UN SEUL APPEL avec timeout réduit
+        response = requests.post(api_url, headers=headers, json=data, timeout=45)  # 45s max
 
-            if response.status_code != 200:
-                error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
-                print(f"❌ {error_msg}")
-                return error_msg, None
+        if response.status_code != 200:
+            error_msg = f"Erreur API: {response.json().get('message', 'Pas de détail')}"
+            print(f"❌ {error_msg}")
+            return f"⚠️ Correction partielle - {error_msg}", None
 
-            # Récupération de la réponse
-            output = response_data['choices'][0]['message']['content']
-            print(f"✅ Réponse IA brute (tentative {tentative + 1}): {len(output)} caractères")
+        # Récupération de la réponse
+        response_data = response.json()
+        output = response_data['choices'][0]['message']['content']
+        print(f"✅ Réponse IA unique: {len(output)} caractères")
 
-            # Vérification de la qualité
-            if verifier_qualite_corrige(output, texte_exercice):
-                print("✅ Qualité du corrigé validée")
-                break
-            else:
-                print(f"🔄 Tentative {tentative + 1} - Qualité insuffisante, régénération...")
-                # Ajouter une consigne de rigueur pour la prochaine tentative
-                data["messages"][1][
-                    "content"] += "\n\n⚠️ ATTENTION : Sois plus rigoureux ! Exploite mieux les schémas identifiés. Vérifie tous tes calculs."
+        # Vérification qualité ALLÉGÉE (sans bloquer)
+        if not verifier_qualite_corrige_legere(output, texte_exercice):
+            print("⚠️ Qualité sous-optimale mais on conserve pour éviter le double appel")
+            # On continue avec ce qu'on a plutôt que de refaire un appel
 
-                if tentative == 0:  # Attendre un peu avant la 2ème tentative
-                    import time
-                    time.sleep(2)
-        else:
-            print("❌ Échec après 2 tentatives - qualité insuffisante")
-            return "Erreur: Qualité du corrigé insuffisante après plusieurs tentatives", None
+    except requests.exceptions.Timeout:
+        print("❌ Timeout API après 45s")
+        return "⚠️ Correction partielle - Timeout de l'API", None
+    except Exception as e:
+        print(f"❌ Erreur API: {e}")
+        return f"⚠️ Correction partielle - Erreur technique: {str(e)}", None
 
         # Traitement de la réponse (identique à avant)
         output = response_data['choices'][0]['message']['content']
@@ -1499,15 +1548,14 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     tokens_estimes = estimer_tokens(texte_enonce)
 
     # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
-    if tokens_estimes < 1500:  # Épreuve courte
+    if tokens_estimes < 4000:  # ✅ SEUIL AUGMENTÉ À 4000 tokens
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
                                       donnees_vision)
-    else:  # Épreuve longue
-        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
+    else:
+        # Épreuve TRÈS longue seulement
+        print("🎯 Décision: DÉCOUPAGE (épreuve vraiment longue)")
         return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision)
-
-
 # ============== TÂCHE ASYNCHRONE ==============
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
