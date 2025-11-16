@@ -4,7 +4,7 @@ import tempfile
 import json
 import re
 import numpy as np
-#import cv2
+import cv2
 from pdf2image import convert_from_path
 import matplotlib
 import openai
@@ -18,9 +18,9 @@ import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
-# import torch
-# from transformers import BlipProcessor, BlipForConditionalGeneration
-# from PIL import Image
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
+from PIL import Image
 import base64
 import functools
 from typing import Dict, Any
@@ -413,6 +413,16 @@ def format_corrige_pdf_structure(texte_corrige_raw):
     if in_bloc: html_output.append("</div>")
     return "".join(html_output)
 
+# ============== BLIP IMAGE CAPTIONING ==============
+# On détecte si CUDA est dispo, sinon on reste sur CPU.
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"🖼️ BLIP device utilisé : {device}")
+
+# Charger le processor et le modèle BLIP (tailles modestes pour la rapidité)
+_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+_model     = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")\
+                 .to(device).eval()
+print("🖼️ Modèle BLIP chargé avec succès")
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
 
@@ -1337,7 +1347,7 @@ EXEMPLES D'ANALYSE DE SCHÉMAS SCIENTIFIQUES :
 "Schéma identifié: plan incliné à 30° avec bloc de 2kg
 - Forces: poids (vertical ↓), réaction normale (⟂ plan), frottement (∥ plan)
 - Données: angle=30°, masse=2kg, g=10m/s²
-- Équations: P = mg = 20N, P∥ = P·sin(30°)=10N, P⟂ = P·cos(30°)=17.32N"
+- Équations: P = mg = 20N, P∥ = P•sin(30°)=10N, P⟂ = P•cos(30°)=17.32N"
 
 --- CIRCUIT ÉLECTRIQUE ---  
 "Circuit série: R1=10Ω, R2=20Ω, source E=12V
@@ -1604,3 +1614,4 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         except:
             pass
         return False
+
