@@ -24,6 +24,7 @@ from PIL import Image
 import base64
 import functools
 from typing import Dict, Any
+import threading
 
 # Cache mémoire pour réduire les appels API
 _analyse_cache: Dict[str, Any] = {}
@@ -413,16 +414,45 @@ def format_corrige_pdf_structure(texte_corrige_raw):
     if in_bloc: html_output.append("</div>")
     return "".join(html_output)
 
-# ============== BLIP IMAGE CAPTIONING ==============
-# On détecte si CUDA est dispo, sinon on reste sur CPU.
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🖼️ BLIP device utilisé : {device}")
 
-# Charger le processor et le modèle BLIP (tailles modestes pour la rapidité)
-_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-_model     = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")\
-                 .to(device).eval()
-print("🖼️ Modèle BLIP chargé avec succès")
+# ============== BLIP IMAGE CAPTIONING - VERSION SÉCURISÉE ==============
+_blip_components = None
+_blip_lock = threading.Lock()
+
+
+def get_blip_components():
+    """
+    Charge BLIP une seule fois par processus - Évite les conflits entre workers
+    """
+    global _blip_components
+
+    if _blip_components is None:
+        with _blip_lock:
+            # Double vérification thread-safe
+            if _blip_components is None:
+                print(f"🖼️ [BLIP INIT] Initialisation dans le processus {os.getpid()}")
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+                model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(
+                    device).eval()
+                _blip_components = (processor, model, device)
+                print(f"✅ [BLIP INIT] Chargé avec succès dans PID {os.getpid()}")
+
+    return _blip_components
+
+
+# Fonction utilitaire pour tests (optionnelle)
+def test_blip_functionality():
+    """
+    Teste que BLIP fonctionne dans le processus courant
+    """
+    try:
+        processor, model, device = get_blip_components()
+        print(f"✅ [BLIP TEST] Fonctionnel dans PID {os.getpid()}")
+        return True
+    except Exception as e:
+        print(f"❌ [BLIP TEST] Erreur dans PID {os.getpid()}: {e}")
+        return False
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
 
@@ -1512,29 +1542,21 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
-    print(f"🔍 [DEBUG ÉTAPE 1] Début tâche - Worker PID: {os.getpid()}, Demande: {demande_id}")
+    # ========== DIAGNOSTIC BLIP ==========
+    print(f"\n" + "=" * 60)
+    print(f"🔍 [TÂCHE DÉBUT] PID: {os.getpid()}, Demande: {demande_id}")
 
-    # TEST 1: Vérifier l'import BLIP
+    # Test BLIP
     try:
-        from transformers import BlipProcessor, BlipForConditionalGeneration
-        print(f"✅ [DEBUG] BLIP importé dans PID {os.getpid()}")
+        processor, model, device = get_blip_components()
+        print(f"✅ [BLIP STATUS] Fonctionnel dans PID {os.getpid()}")
+        print(f"🖼️ [BLIP INFO] Device: {device}, Processor: {processor is not None}, Model: {model is not None}")
     except Exception as e:
-        print(f"❌ [DEBUG] Erreur import BLIP: {e}")
+        print(f"❌ [BLIP STATUS] ERREUR dans PID {os.getpid()}: {e}")
 
-    # TEST 2: Vérifier l'initialisation BLIP
-    try:
-        print(f"🖼️ [DEBUG] Test device BLIP: {device}")
-        print(f"🖼️ [DEBUG] Test processor BLIP: {_processor is not None}")
-        print(f"🖼️ [DEBUG] Test model BLIP: {_model is not None}")
-    except Exception as e:
-        print(f"❌ [DEBUG] Erreur initialisation BLIP: {e}")
-
-    # TEST 3: Vérifier Tesseract
-    try:
-        import pytesseract
-        print(f"✅ [DEBUG] Tesseract importé dans PID {os.getpid()}")
-    except Exception as e:
-        print(f"❌ [DEBUG] Erreur import Tesseract: {e}")
+    print(f"🔍 [TÂCHE SUITE] Exécution normale...")
+    print("=" * 60)
+    # ========== FIN DIAGNOSTIC ==========
     from correction.models import DemandeCorrection, SoumissionIA
     from resources.models import Matiere
 
