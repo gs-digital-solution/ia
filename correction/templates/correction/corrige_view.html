@@ -26,274 +26,276 @@
      </script>
 
   <style>
-    /* RESET ET BASE */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+  /* RESET ET BASE */
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-    html, body {
-      width: 100%;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      font-size: 44px !important;
-      line-height: 1.65 !important;
-      background: #f8f9fa;
-      color: #333;
-      padding-bottom: 60px;
-    }
-* { font-size: inherit !important; }
+  html, body {
+    width: 100%;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 14px !important;
+    line-height: 1.6 !important;
+    background: #f8f9fa;
+    color: #333;
+    padding-bottom: 60px;
+  }
 
-    /* HEADER PROFESSIONNEL */
-    .header {
-      background: linear(135deg, #208060, #2b8074);
-      color: white;
-      padding: 20px 30px;
-      text-align: center;
-      font-size: 80px;
-      font-weight: 600;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
+  /* HEADER PROFESSIONNEL */
+  .header {
+    background: linear-gradient(135deg, #208060, #2b8074);
+    color: white;
+    padding: 15px 30px;
+    text-align: center;
+    font-size: 20px;
+    font-weight: 600;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
 
-    /* CONTENEUR PRINCIPAL */
+  /* CONTENEUR PRINCIPAL */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* CARTE DE CONTENU */
+  .card {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    margin: 20px 0;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border: 1px solid #e9ecef;
+  }
+
+  /* TYPOGRAPHIE HIÉRARCHISÉE */
+  .card h1 {
+    font-size: 18px;
+    color: #208060;
+    margin: 25px 0 15px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #e9ecef;
+    font-weight: 700;
+  }
+
+  .card h2 {
+    font-size: 16px;
+    color: #2b8074;
+    margin: 20px 0 12px 0;
+    font-weight: 600;
+  }
+
+  .card h3 {
+    font-size: 14px;
+    color: #355e7d;
+    margin: 15px 0 10px 0;
+    font-weight: 600;
+  }
+
+  .card p {
+    font-size: 13px;
+    margin: 12px 0;
+    line-height: 1.6;
+    text-align: justify;
+  }
+
+  /* MATHJAX OPTIMISÉ */
+  .mathjax-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 10px 0;
+    margin: 15px 0;
+  }
+
+  .math-display {
+    text-align: center;
+    margin: 15px 0;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid #208060;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  .math-inline {
+    display: inline;
+    color: #d63384;
+  }
+
+  mjx-container[jax="SVG"] {
+    display: inline-block;
+    vertical-align: middle;
+    max-width: 100% !important;
+  }
+
+  /* TABLEAUX AMÉLIORÉS */
+  .table-container {
+    margin: 20px 0;
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+
+  th {
+    background: #208060;
+    color: white;
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+  }
+
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e9ecef;
+  }
+
+  tr:nth-child(even) {
+    background: #f8f9fa;
+  }
+
+  /* GRAPHIQUES */
+  .graphique-container {
+    text-align: center;
+    margin: 25px 0;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+  }
+
+  .graphique-container img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+
+  /* LISTES */
+  ul, ol {
+    margin: 12px 0 12px 25px;
+  }
+
+  li {
+    margin: 6px 0;
+    line-height: 1.5;
+  }
+
+  /* BLOCS DE CODE */
+  .code-block {
+    background: #2d3748;
+    color: #e2e8f0;
+    padding: 15px;
+    border-radius: 6px;
+    margin: 15px 0;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    overflow-x: auto;
+  }
+
+  /* CIS MESSAGE */
+  .cis-message {
+    color: #208060;
+    font-weight: 700;
+    font-size: 16px;
+    text-align: center;
+    margin-bottom: 25px;
+  }
+
+  /* BLOCS EXERCICES */
+  .bloc-exercice {
+    padding: 20px 15px;
+    margin-bottom: 30px;
+  }
+
+  .titre-exercice {
+    font-size: 18px;
+    color: #208060;
+    font-weight: 700;
+    margin-bottom: 12px;
+    margin-top: 5px;
+  }
+
+  .titre-question {
+    font-size: 16px;
+    color: #319980;
+    font-weight: 600;
+    margin-top: 8px;
+    margin-bottom: 8px;
+  }
+
+  .reponse-question {
+    font-size: 13px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+    line-height: 1.6;
+  }
+
+  /* FOOTER */
+  .pdf-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #208060;
+    padding: 12px;
+    text-align: center;
+    z-index: 100;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+  }
+
+  .pdf-footer a {
+    background: #ffa500;
+    color: white;
+    padding: 8px 20px;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14px;
+    transition: all 0.3s ease;
+    display: inline-block;
+  }
+
+  .pdf-footer a:hover {
+    background: #ff8c00;
+    transform: translateY(-2px);
+  }
+
+  /* RESPONSIVE */
+  @media (max-width: 768px) {
     .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 20px;
+      padding: 15px;
     }
 
-    /* CARTE DE CONTENU */
     .card {
-      background: white;
-      border-radius: 12px;
-      padding: 40px;
-      margin: 20px 0;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-      border: 1px solid #e9ecef;
-    }
-
-    /* TYPOGRAPHIE HIÉRARCHISÉE */
-    .card h1 {
-      font-size: 24px;
-      color: #208060;
-      margin: 30px 0 20px 0;
-      padding-bottom: 10px;
-      border-bottom: 2px solid #e9ecef;
-      font-weight: 700;
-    }
-
-    .card h2 {
-      font-size: 20px;
-      color: #2b8074;
-      margin: 25px 0 15px 0;
-      font-weight: 600;
-    }
-
-    .card h3 {
-      font-size: 17px;
-      color: #355e7d;
-      margin: 20px 0 12px 0;
-      font-weight: 600;
-    }
-
-    .card p {
-      font-size: 15px;
+      padding: 20px;
       margin: 15px 0;
-      line-height: 1.7;
-      text-align: justify;
     }
 
-    /* MATHJAX OPTIMISÉ */
-    .math-display {
-      text-align: center;
-      margin: 25px 0;
-      padding: 15px;
-      background: #f8f9fa;
-      border-radius: 8px;
-      border-left: 4px solid #208060;
+    .header {
+      font-size: 18px;
+      padding: 12px 20px;
     }
 
-    .math-inline {
-      display: inline;
-      color: #d63384;
-    }
-
-    mjx-container[jax="SVG"] {
-      display: inline-block;
-      vertical-align: middle;
-    }
-
-    /* TABLEAUX AMÉLIORÉS */
-    .table-container {
-      margin: 25px 0;
-      overflow-x: auto;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 80px;
-      background: white;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-
-    th {
-      background: #208060;
-      color: white;
-      padding: 12px 15px;
-      text-align: left;
-      font-weight: 600;
-    }
-
-    td {
-      padding: 10px 15px;
-      border-bottom: 1px solid #e9ecef;
-    }
-
-    tr:nth-child(even) {
-      background: #f8f9fa;
-    }
-
-    /* GRAPHIQUES */
-    .graphique-container {
-      text-align: center;
-      margin: 30px 0;
-      padding: 20px;
-      background: #f8f9fa;
-      border-radius: 8px;
-      border: 1px solid #e9ecef;
-    }
-
-    .graphique-container img {
-      max-width: 100%;
-      height: auto;
-      border-radius: 6px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-
-    /* LISTES */
-    ul, ol {
-      margin: 15px 0 15px 30px;
-    }
-
-    li {
-      margin: 8px 0;
-      line-height: 1.6;
-    }
-
-    /* BLOCS DE CODE */
-    .code-block {
-      background: #2d3748;
-      color: #e2e8f0;
-      padding: 20px;
-      border-radius: 8px;
-      margin: 20px 0;
-      font-family: 'Consolas', 'Monaco', monospace;
-      font-size: 80px;
-      overflow-x: auto;
-    }
-
-    /* FOOTER */
-    .pdf-footer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: #208060;
-      padding: 15px;
-      text-align: center;
-      z-index: 100;
-      box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
-    }
-
-    .pdf-footer a {
-      background: #ffa500;
-      color: white;
-      padding: 12px 30px;
-      border-radius: 6px;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 80px;
-      transition: all 0.3s ease;
-      display: inline-block;
-    }
-
-    .pdf-footer a:hover {
-      background: #ff8c00;
-      transform: translateY(-2px);
-    }
-
-    /* RESPONSIVE */
-    @media (max-width: 768px) {
-      .container {
-        padding: 15px;
-      }
-
-      .card {
-        padding: 25px;
-        margin: 15px 0;
-      }
-
-      .header {
-        font-size: 16px;
-        padding: 15px 20px;
-      }
-
-      .card h1 { font-size: 20px; }
-      .card h2 { font-size: 18px; }
-      .card h3 { font-size: 16px; }
-      .card p { font-size: 14px; }
-
-      .cis-message {
-  color: #208060;
-  font-weight: 900;
-  font-size: 2.3em;
-  text-align: center;
-  margin-bottom: 35px;
-}
-
-.bloc-exercice { padding: 40px 25px; margin-bottom: 60px; font-size: 80px; }
-.titre-exercice { font-size: 38px; }
-.titre-question { font-size: 33px; }
-.reponse-question { font-size: 30px; }
-.code-block { font-size: 27px; }
-
-.titre-exercice {
-  font-size: 80px;
-  color: #208060;
-  font-weight: 800;
-  margin-bottom: 15px;
-  margin-top: 8px;
-  letter-spacing: 1px;
-}
-
-.titre-question {
-  font-size: 80px;
-  color: #319980;
-  font-weight: 700;
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.reponse-question {
-  font-size: 80px;
-  margin-top: 10px;
-  margin-bottom: 10px;
-  line-height: 1.8;
-}
-
-@media (max-width: 768px) {
-  .cis-message { font-size: 90px; }
-  .bloc-exercice { padding: 10px 4px; }
-  .titre-exercice { font-size: 1.2em; }
-  .titre-question { font-size: 1em; }
-  .reponse-question { font-size: 1em; }
-}
-    }
-  </style>
+    .cis-message { font-size: 14px; }
+    .bloc-exercice { padding: 15px 10px; }
+    .titre-exercice { font-size: 16px; }
+    .titre-question { font-size: 14px; }
+    .reponse-question { font-size: 12px; }
+  }
+</style>
 </head>
 <body>
 
