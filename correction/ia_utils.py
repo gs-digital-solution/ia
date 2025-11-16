@@ -103,7 +103,7 @@ def call_deepseek_vision(path_fichier: str) -> dict:
             response_format={"type": "json_object"},
             temperature=0.0,
             max_tokens=8000,
-            timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour vision
+            #timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour vision
         )
 
         content = response.choices[0].message.content
@@ -244,7 +244,7 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             response_format={"type": "json_object"},
             temperature=0.1,
             max_tokens=3500,
-            timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour analyse scientifique
+            #timeout=30  # ✅ AJOUTER CETTE LIGNE - 30s max pour analyse scientifique
         )
 
         resultat = json.loads(response.choices[0].message.content)
