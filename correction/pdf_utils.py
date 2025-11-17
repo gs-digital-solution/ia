@@ -30,16 +30,15 @@ def prerender_mathjax(html: str) -> str:
     with open(tf_out.name, encoding="utf-8") as f:
         rendered = f.read()
 
-    # Nettoyage
-    os.unlink(tf_in.name)
-    os.unlink(tf_out.name)
-
     return rendered
 
 
 def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     """
-    Version corrigée avec gestion optimisée des polices et débordements
+    1) Render du template
+    2) Prérendu MathJax
+    3) Génération PDF via pdfkit/wkhtmltopdf
+    4) Sauvegarde et URL
     """
     # 1) HTML initial
     html = render_to_string("correction/corrige_view.html", context)
@@ -47,47 +46,28 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     # 2) Prérendu MathJax
     html_prerender = prerender_mathjax(html)
 
-    # DEBUG : Sauvegarde du HTML intermédiaire
+    # DEBUG : Sauvegarde du HTML intermédiaire dans un fichier temporaire à examiner
     debug_html_path = f"/tmp/dernier_corrige_{soumission_id}.html"
     with open(debug_html_path, "w", encoding="utf-8") as f:
         f.write(html_prerender)
     print(f"DEBUG : HTML intermédiaire sauvegardé à {debug_html_path}")
 
-    # 3) OPTIONS PDF CORRIGÉES - PLUS DE ZOOM !
+    # 3) Conversion en PDF
     options = {
-        "enable-local-file-access": "",
-        "print-media-type": "",
-        "no-stop-slow-scripts": "",
-        "javascript-delay": "8000",
-        "zoom": "2",  # Zoom pour agrandir le contenu
-        "disable-smart-shrinking": "",  # IMPORTANT : Évite le rétrécissement
-        "dpi": 300,  # Meilleure résolution
-        "page-size": "A4",
-        "margin-top": "15mm",
-        "margin-bottom": "15mm",
-        "margin-left": "10mm",
-        "margin-right": "10mm",
-        "encoding": "UTF-8",
-        "quiet": "",
+        "enable-local-file-access": None,
+        "print-media-type": None,
+        "no-stop-slow-scripts": None,
+        "javascript-delay": "8000",  # le temps
+        "zoom": "3",  # Zoom pour agrandir le contenu
+        "margin-top": "2mm",
+        "margin-bottom": "2mm",
+        "margin-left": "1mm",
+        "margin-right": "1mm",
     }
 
-    try:
-        pdf_bytes = pdfkit.from_string(html_prerender, False, options=options)
-    except Exception as e:
-        print(f"❌ Erreur pdfkit: {e}")
-        # Fallback sans options problématiques
-        options_fallback = {
-            "enable-local-file-access": "",
-            "print-media-type": "",
-            "encoding": "UTF-8",
-            "margin-top": "15mm",
-            "margin-bottom": "15mm",
-            "margin-left": "10mm",
-            "margin-right": "10mm",
-        }
-        pdf_bytes = pdfkit.from_string(html_prerender, False, options=options_fallback)
+    pdf_bytes = pdfkit.from_string(html_prerender, False, options=options)
 
-    # 4) Sauvegarde
+    # 4) Sauvegarde et URL
     pdf_dir = os.path.join(settings.MEDIA_ROOT, "pdfs")
     os.makedirs(pdf_dir, exist_ok=True)
 
@@ -97,5 +77,5 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     with open(path, "wb") as f:
         f.write(pdf_bytes)
 
-    print(f"✅ PDF généré avec succès: {path}")
     return settings.MEDIA_URL + "pdfs/" + fname
+
