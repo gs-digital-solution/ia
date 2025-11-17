@@ -242,7 +242,7 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=8000  # Légèrement augmenté pour les notations complexes
+            max_tokens=3500  # Légèrement augmenté pour les notations complexes
         )
 
         resultat = json.loads(response.choices[0].message.content)
@@ -1514,6 +1514,7 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
     from resources.models import Matiere
+    from abonnement.services import debiter_credit_abonnement
 
     try:
         # Récupération de la demande et création de la soumission IA
@@ -1525,10 +1526,10 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 20
         soumission.save()
 
-        donnees_vision_complete = None  # ✅ NOUVEAU : Stockage des données vision
+        donnees_vision_complete = None
 
         if demande.fichier:
-            # ✅ EXTRACTION AVEC VISION SCIENTIFIQUE
+            # EXTRACTION AVEC VISION SCIENTIFIQUE
             temp_dir = tempfile.gettempdir()
             local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
 
@@ -1538,7 +1539,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 
             # Analyse scientifique complète
             donnees_vision_complete = analyser_document_scientifique(local_path)
-            texte_brut = extraire_texte_fichier(demande.fichier)  # Utilise la nouvelle fonction
+            texte_brut = extraire_texte_fichier(demande.fichier)
 
             # Nettoyage
             try:
@@ -1566,15 +1567,15 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 60
         soumission.save()
 
-        # ✅ APPEL AVEC DONNÉES VISION
+        # APPEL AVEC DONNÉES VISION
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
             texte_enonce,
             contexte,
             matiere=matiere,
-            donnees_vision=donnees_vision_complete  # ✅ NOUVEAU
+            donnees_vision=donnees_vision_complete
         )
 
-        # [Le reste du code reste identique...]
+        # Étape 4 : Formatage PDF (AVANT le débit du crédit)
         soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
@@ -1589,21 +1590,31 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             demande_id
         )
 
-        # Étape 5 : Mise à jour du statut et sauvegarde
+        # ✅ MAINTENANT ON DÉBITE LE CRÉDIT - SEULEMENT APRÈS SUCCÈS PDF
+        try:
+            debited = debiter_credit_abonnement(demande.user)
+            if debited:
+                print(f"✅ Crédit débité pour l'utilisateur {demande.user.id} après génération PDF")
+            else:
+                print(f"❌ Échec du débit de crédit pour l'utilisateur {demande.user.id}")
+        except Exception as e:
+            print(f"❌ Erreur lors du débit de crédit: {e}")
+
+        # Étape 5 : Mise à jour finale
         soumission.statut = 'termine'
         soumission.progression = 100
         soumission.resultat_json = {
             'corrige_text': corrige_txt,
             'pdf_url': pdf_path,
             'graphiques': graph_list or [],
-            'analyse_vision': donnees_vision_complete  # ✅ NOUVEAU : Stocker l'analyse
+            'analyse_vision': donnees_vision_complete
         }
         soumission.save()
 
         demande.corrigé = corrige_txt
         demande.save()
 
-        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        print("🎉 TRAITEMENT TERMINÉ AVEC SUCCÈS! Crédit débité après génération PDF.")
         return True
 
     except Exception as e:
@@ -1611,6 +1622,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         try:
             soumission.statut = 'erreur'
             soumission.save()
+            # ❌ PAS de débit de crédit en cas d'erreur !
         except:
             pass
         return False

@@ -58,7 +58,8 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         "enable-local-file-access": "",
         "print-media-type": "",
         "no-stop-slow-scripts": "",
-        "javascript-delay": "5000",
+        "javascript-delay": "8000",
+        "zoom": "2",  # Zoom pour agrandir le contenu
         "disable-smart-shrinking": "",  # IMPORTANT : Évite le rétrécissement
         "dpi": 300,  # Meilleure résolution
         "page-size": "A4",
