@@ -172,19 +172,19 @@ class SoumissionExerciceAPIView(APIView):
 
     def post(self, request):
         try:
-            # 1) Vérifier l'abonnement actif MAIS NE PAS DÉBITER IMMÉDIATEMENT
+            # 1) Vérifier l'abonnement actif / crédits restants
             if not user_abonnement_actif(request.user):
                 return Response(
                     {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
                     status=status.HTTP_402_PAYMENT_REQUIRED
                 )
 
-            # 2) VÉRIFIER seulement qu'il y a assez de crédits (sans débiter)
-            abonnement = request.user.abonnement_actif()
-            if not abonnement or abonnement.credits_restants <= 0:
+            # 2) Débite 1 crédit
+            debited = debiter_credit_abonnement(request.user)
+            if not debited:
                 return Response(
-                    {"error": "Crédits insuffisants. Veuillez recharger votre abonnement."},
-                    status=status.HTTP_402_PAYMENT_REQUIRED
+                    {"error": "Impossible de débiter un crédit. Réessayez plus tard."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
             # Récupérer les données
@@ -237,14 +237,14 @@ class SoumissionExerciceAPIView(APIView):
                 lecons = Lecon.objects.filter(id__in=lecons_ids)
                 demande.lecons.set(lecons)
 
-            # Créer le suivi IA SANS DÉBITER LE CRÉDIT
+            # Créer le suivi IA
             soumission = SoumissionIA.objects.create(
                 user=request.user,
                 demande=demande,
                 statut='en_attente'
             )
 
-            # Lancer le traitement async
+            # Lancer le traitement async AVEC DÉCOUPAGE
             from .ia_utils import generer_corrige_ia_et_graphique_async
             generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
 
@@ -252,7 +252,7 @@ class SoumissionExerciceAPIView(APIView):
                 "success": True,
                 "soumission_id": soumission.id,
                 "message": "Exercice soumis avec succès. Traitement en cours...",
-                "info": "Le crédit sera débité uniquement après la génération du PDF"
+                "info": "Le système détectera automatiquement si un découpage est nécessaire"
             })
 
         except Exception as e:
@@ -261,7 +261,6 @@ class SoumissionExerciceAPIView(APIView):
                 {"error": f"Erreur serveur: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
