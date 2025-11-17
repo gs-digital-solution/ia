@@ -242,7 +242,7 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=3500  # Légèrement augmenté pour les notations complexes
+            max_tokens=8000  # Légèrement augmenté pour les notations complexes
         )
 
         resultat = json.loads(response.choices[0].message.content)

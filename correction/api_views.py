@@ -493,7 +493,7 @@ class CorrigePDFView(APIView):
         html_body      = generate_corrige_html(corrige_graphs)
 
         context = {
-            "titre_corrige": f"Corrigé CIS – Exercice {soum.demande.id}",
+            "titre_corrige": f"Corrigé CIS – SUJET {soum.demande.id} corrigé par CIS IA sur playstore",
             "corrige_html": html_body,
             "soumission_id": soum.id
         }
