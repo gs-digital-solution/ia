@@ -25,6 +25,9 @@ import base64
 import functools
 from typing import Dict, Any
 
+# === BUDGET MAXIMUM DE TOKENS POUR LES RÉPONSES IA ===
+# (à ajuster si besoin)
+MAX_RESPONSE_TOKENS = 4000
 # Cache mémoire pour réduire les appels API
 _analyse_cache: Dict[str, Any] = {}
 
@@ -642,7 +645,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             {"role": "user", "content": prompt_ia}
         ],
         "temperature": 0.1,
-        "max_tokens": 6000,
+        "max_tokens": MAX_RESPONSE_TOKENS,
         "top_p": 0.9,
         "frequency_penalty": 0.1
     }
@@ -733,6 +736,17 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             except Exception as e:
                 print(f"❌ Erreur génération graphique {idx}: {e}")
                 continue
+
+        # ─── Troncature du corrigé si dépassement de MAX_RESPONSE_TOKENS ───
+        # Approximation : 1 mot ≃ 1 token
+        tokens_estimes = len(corrige_txt.split())
+
+        if tokens_estimes > MAX_RESPONSE_TOKENS:
+            mots = corrige_txt.split()
+            corrige_txt = " ".join(mots[:MAX_RESPONSE_TOKENS])
+            corrige_txt += "\n\n[Épreuve trop longue, veuillez soumettre l’autre partie séparément.]"
+            print(f"⚠️ Corrigé tronqué à {MAX_RESPONSE_TOKENS} mots (était {tokens_estimes}).")
+        # ────────────────────────────────────────────────────────────────
 
         print("📝 Corrigé final (début) :")
         print(corrige_txt[:1000].replace("\n", "\\n"))
