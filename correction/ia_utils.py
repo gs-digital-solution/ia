@@ -1471,6 +1471,14 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             demande_id
         )
 
+        # → Maintenant que le PDF existe, on peut débiter 1 crédit
+        from abonnement.services import debiter_credit_abonnement
+        if not debiter_credit_abonnement(demande.user):
+            # en cas d’échec, on signale un statut spécifique et on stoppe
+            soumission.statut = 'erreur_credit'
+            soumission.save()
+            return False
+
         # Étape 5 : Mise à jour du statut et sauvegarde
         soumission.statut = 'termine'
         soumission.progression = 100

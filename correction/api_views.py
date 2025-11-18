@@ -180,12 +180,7 @@ class SoumissionExerciceAPIView(APIView):
                 )
 
             # 2) Débite 1 crédit
-            debited = debiter_credit_abonnement(request.user)
-            if not debited:
-                return Response(
-                    {"error": "Impossible de débiter un crédit. Réessayez plus tard."},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            # → Le débit est différé : il interviendra plus tard, une fois le PDF généré.
 
             # Récupérer les données
             pays_id = request.data.get('pays')
