@@ -1355,14 +1355,14 @@ Rappels :
 
 
 # ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
-def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere, donnees_vision=None):
+def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere, donnees_vision=None,demande=None):
     """
     Traitement direct pour les épreuves courtes avec données vision.
     """
     print("🎯 Traitement DIRECT avec analyse vision")
 
     # ✅ PASSER les données vision à la fonction de génération
-    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=None)
+    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
 
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None,demande=None):
