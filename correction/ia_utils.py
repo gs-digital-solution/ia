@@ -22,6 +22,45 @@ import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import base64
+from resources.models import PromptIA
+
+# ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
+def get_best_promptia(demande):
+    """
+    Retourne le PromptIA le plus spécifique pour la demande.
+    Ordre de priorité maximal : tous les champs, et fallback au fur et à mesure si besoin.
+    """
+    filtra = dict(
+        pays=demande.pays,
+        sous_systeme=demande.sous_systeme,
+        classe=demande.classe,
+        matiere=demande.matiere,
+        departement=demande.departement,
+        type_exercice=demande.type_exercice,
+    )
+
+    # Retire les valeurs nulles
+    filtra = {k: v for k, v in filtra.items() if v is not None}
+
+    # Essaie direct le plus précis
+    qs = PromptIA.objects.filter(**filtra)
+    if qs.exists():
+        return qs.first()
+
+    # Fallback si jamais il manque un champ
+    champs_tris = ['type_exercice', 'departement', 'classe', 'sous_systeme', 'pays']
+    for champ in champs_tris:
+        if filtra.get(champ):
+            filtra2 = dict(filtra)
+            filtra2.pop(champ)
+            qs = PromptIA.objects.filter(**filtra2)
+            if qs.exists():
+                return qs.first()
+    # Dernier recours, par matière seule
+    qs = PromptIA.objects.filter(matiere=demande.matiere)
+    if qs.exists():
+        return qs.first()
+    return None
 
 # ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
 openai.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -416,7 +455,7 @@ def verifier_qualite_corrige(corrige_text, exercice_original):
     return True
 
 
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None):
+def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None,demande=None):
     """
     Génère le corrigé pour un seul exercice en exploitant les données vision.
 
@@ -434,10 +473,12 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     system_prompt = DEFAULT_SYSTEM_PROMPT
     consignes_finales = "Format de réponse strict : LaTeX pour les exercices scientifiques, explications détaillées mais concises"
 
-    if matiere and hasattr(matiere, 'prompt_ia'):
-        promptia = matiere.prompt_ia
+    promptia = get_best_promptia(demande)
+    if promptia:
         system_prompt = promptia.system_prompt or system_prompt
         consignes_finales = promptia.consignes_finales or consignes_finales
+        exemple_prompt = promptia.exemple_prompt or ""
+        prompt_json = promptia.prompt_json or {}
 
     # ✅ NOUVEAU : Construction du prompt enrichi avec données vision
     prompt_vision = ""
@@ -467,6 +508,8 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     prompt_ia = f"""
     {system_prompt}
 
+    {exemple_prompt.strip() if exemple_prompt else ""}
+
     ### CONTEXTE
     {contexte}
 
@@ -474,25 +517,28 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     {texte_exercice.strip()}
 
     {prompt_vision}
+
     {formules_vision}
+
+    {(f"### PARAMETRES STRUCTURES\n{json.dumps(prompt_json, ensure_ascii=False, indent=2)}\n" if prompt_json else "")}
 
     ### CONSIGNES STRICTES - À RESPECTER IMPÉRATIVEMENT
     {consignes_finales}
 
-    **EXIGENCES ABSOLUES :**
+    *EXIGENCES ABSOLUES :*
     1. Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
-    2. Vérifie systématiquement chaque résultat intermédiaire  
+    2. Vérifie systématiquement chaque résultat intermédiaire
     3. Donne TOUTES les étapes de calcul détaillées
     4. Les réponses doivent être NUMÉRIQUEMENT EXACTES
     5. Ne laisse AUCUNE question sans réponse complète
-    6. **EXPLOITE LES SCHÉMAS IDENTIFIÉS** dans tes explications
+    6. *EXPLOITE LES SCHÉMAS IDENTIFIÉS* dans tes explications
 
-    **POUR LES SCHÉMAS :**
+    *POUR LES SCHÉMAS :*
     - Réfère-toi aux données extraites (angles, masses, distances)
     - Utilise les descriptions des schémas dans tes explications
     - Mentionne explicitement "D'après le schéma..." ou "Le schéma montre que..."
 
-    **FORMAT DE RÉPONSE :**
+    *FORMAT DE RÉPONSE :*
     - Réponses complètes avec justification
     - Calculs intermédiaires détaillés
     - Solutions numériques exactes
@@ -500,7 +546,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     - Ne jamais dire "je pense" ou "c'est ambigu"
 
     Réponds UNIQUEMENT à cet exercice avec une rigueur absolue.
-    """
+    """.strip()
 
     api_key = os.getenv('DEEPSEEK_API_KEY')
     if not api_key:
