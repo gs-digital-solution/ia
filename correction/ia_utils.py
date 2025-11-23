@@ -483,6 +483,8 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     print("[DEBUG] Appel get_best_promptia(demande)")
 
     promptia = get_best_promptia(demande)
+    exemple_prompt = ""
+    prompt_json = {}
     if promptia:
         system_prompt = promptia.system_prompt or system_prompt
         consignes_finales = promptia.consignes_finales or consignes_finales
