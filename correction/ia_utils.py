@@ -1362,10 +1362,10 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     print("🎯 Traitement DIRECT avec analyse vision")
 
     # ✅ PASSER les données vision à la fonction de génération
-    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision)
+    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=None)
 
 
-def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None):
+def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None,demande=None):
     """
     Traitement par découpage pour les épreuves longues avec données vision.
     """
@@ -1379,7 +1379,7 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
         print(f"📝 Traitement exercice {i}/{len(exercices)}...")
 
         # ✅ PASSER les données vision à chaque exercice
-        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere, donnees_vision)
+        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere, donnees_vision,demande=demande)
 
         if corrige and not corrige.startswith("Erreur") and not corrige.startswith("Erreur API"):
             titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
@@ -1430,10 +1430,10 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     if tokens_estimes < 1500:  # Épreuve courte
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
-                                      donnees_vision)
+                                      donnees_vision,demande=demande)
     else:  # Épreuve longue
         print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision)
+        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
 
 # ============== TÂCHE ASYNCHRONE ==============
@@ -1499,7 +1499,8 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             texte_enonce,
             contexte,
             matiere=matiere,
-            donnees_vision=donnees_vision_complete  # ✅ NOUVEAU
+            donnees_vision=donnees_vision_complete,
+            demande = demande
         )
 
         # [Le reste du code reste identique...]
