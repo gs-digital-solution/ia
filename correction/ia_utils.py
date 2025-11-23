@@ -30,6 +30,8 @@ def get_best_promptia(demande):
     Retourne le PromptIA le plus spécifique pour la demande.
     Ordre de priorité maximal : tous les champs, et fallback au fur et à mesure si besoin.
     """
+    print("[DEBUG] -> get_best_promptia called with demande:", demande, "type:", type(demande))
+
     filtra = dict(
         pays=demande.pays,
         sous_systeme=demande.sous_systeme,
@@ -61,6 +63,7 @@ def get_best_promptia(demande):
     if qs.exists():
         return qs.first()
     return None
+
 
 # ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
 openai.api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -263,7 +266,8 @@ PATTERNS_BLOCS = [
     r'RECEPCIÓN DE TEXTOS', r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
     r'TEIL[1I]? *LESEVERSTEHEN', r'MEDIATION', r'SCHRIFTLICHE PRODUKTION',
     r'STRUKTUREN UND KOMMUNIKATION', r'SCHRIFTLICHER AUSDRUCK',
-    r'GRAMMAR', r'VOCABULARY', r'COMPREHENSION', r'ESSAY',
+    r'SECTION A: GRAMMAR', r'SECTION B: VOCABULARY',
+    r'SECTION C: READING COMPREHENSION', r'SECTION D: COMPOSITION',
     r'PARTIE[- ]?[AIB]{0,2}\s*:?.*EVALUATION DES RESOURCES',
     r'PARTIE[- ]?[AIB]{0,2}\s*:?.*EVALUATION DES COMPETENCES',
     r'PARTIE[- ]?[AIB]{0,2}', r'EXERCICE[- ]?\d+', r'EXERICE[- ]?\d+',
@@ -469,9 +473,14 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         Tuple (corrige_text, graph_list)
     """
     print("🎯 Génération corrigé avec analyse vision...")
+    print("\n[DEBUG] ==> generer_corrige_par_exercice avec demande:",
+          getattr(demande, 'id', None), "/", type(demande))
 
     system_prompt = DEFAULT_SYSTEM_PROMPT
-    consignes_finales = "Format de réponse strict : LaTeX pour les exercices scientifiques, explications détaillées mais concises"
+    consignes_finales = ("Format de réponse strict : LaTeX pour les exercices "
+                         "scientifiques, explications détaillées mais concises")
+
+    print("[DEBUG] Appel get_best_promptia(demande)")
 
     promptia = get_best_promptia(demande)
     if promptia:
@@ -547,6 +556,12 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
     Réponds UNIQUEMENT à cet exercice avec une rigueur absolue.
     """.strip()
+
+
+    print("\n==== [DEBUG] PROMPT FINAL ENVOYÉ À L'IA ====")
+    print(prompt_ia)
+    print("==== FIN DEBUG PROMPT IA ====")
+
 
     api_key = os.getenv('DEEPSEEK_API_KEY')
     if not api_key:
@@ -1360,6 +1375,8 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     Traitement direct pour les épreuves courtes avec données vision.
     """
     print("🎯 Traitement DIRECT avec analyse vision")
+    print("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
+          "/", type(demande))
 
     # ✅ PASSER les données vision à la fonction de génération
     return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
@@ -1370,6 +1387,10 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
     Traitement par découpage pour les épreuves longues avec données vision.
     """
     print("🎯 Traitement AVEC DÉCOUPAGE et analyse vision")
+    print("\n[DEBUG] --> generer_corrige_decoupe called avec demande:",
+          getattr(demande, 'id', None), "/",
+          type(demande))
+
 
     exercices = separer_exercices(texte_epreuve)
     tous_corriges = []
@@ -1407,6 +1428,10 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     """
     Nouvelle version avec support des données vision
     """
+    print("\n[DEBUG] --> generer_corrige_ia_et_graphique called avec demande:",
+          getattr(demande, 'id', None), "/",
+          type(demande))
+
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
