@@ -22,7 +22,19 @@ import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import base64
-from resources.models import PromptIA
+from resources.models import PromptIA,Matiere
+
+DEPARTEMENTS_SCIENTIFIQUES = [
+    'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
+]
+def is_departement_scientifique(departement):
+    """
+    Renvoie True si le département fait partie des filières scientifiques définies globalement.
+    """
+    if departement and departement.nom:
+        dep_name = departement.nom.lower()
+        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
+    return False
 
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
 def get_best_promptia(demande):
@@ -1517,9 +1529,18 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
         contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
 
-        soumission.statut = 'generation_graphiques'
-        soumission.progression = 60
-        soumission.save()
+        # ETAPE GENERATION GRAPHIQUE
+        # 1️⃣ Récupération du département (direct via la FK de la demande)
+        departement = demande.departement
+
+        if is_departement_scientifique(departement):
+            print(f"⚗️ [DEBUG] Département scientifique : {departement.nom}")
+            soumission.statut = 'generation_graphiques'
+            soumission.progression = 60
+            soumission.save()
+        else:
+            print(
+                f"⚡ [DEBUG] Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
 
         # ✅ APPEL AVEC DONNÉES VISION
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
@@ -1530,7 +1551,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             demande = demande
         )
 
-        # [Le reste du code reste identique...]
+        # ETAPE GENERATION PDF
         soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
