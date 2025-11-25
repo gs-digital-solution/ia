@@ -1338,14 +1338,9 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
 
 
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
-    """
-    Traitement par découpage pour les épreuves longues avec données vision,
-    en parallèle via Celery group.
-    """
-    # 1) on sépare le texte en exercices
     exercices = separer_exercices(texte_epreuve)
 
-    # 2) on crée un groupe de sous-tâches, une par exercice
+    # Création du groupe de tâches (une par exercice)
     jobs = group(
         generer_un_exercice.s(
             demande.id if demande else None,
@@ -1357,28 +1352,23 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
         for ex in exercices
     )
 
-    # 3) on lance toutes les tâches en parallèle
+    # Lancement parallèle et collecte
     result = jobs.apply_async()
-
-    # 4) on récupère les résultats (liste de dicts)
     outputs = result.get()
 
-    # 5) on reconstruit le corrigé complet et la liste des graphiques
-    tous_corriges = []
-    tous_graphiques = []
+    # Reconstruction du corrigé et des graphiques
+    tous_corriges, tous_graphiques = [], []
     for idx, out in enumerate(outputs, 1):
-        corrige = out.get('corrige', '')
-        graphs = out.get('graphs', [])
+        corrige = out.get('corrige','')
+        graphs  = out.get('graphs',[])
         if corrige:
-            titre = f"\n\n## 📝 Exercice {idx}\n\n"
-            tous_corriges.append(titre + corrige)
+            tous_corriges.append(f"\n\n## 📝 Exercice {idx}\n\n{corrige}")
         if graphs:
             tous_graphiques.extend(graphs)
 
     if tous_corriges:
         return "".join(tous_corriges), tous_graphiques
-    else:
-        return "Erreur: Aucun corrigé n'a pu être généré", []
+    return "Erreur: Aucun corrigé n'a pu être généré", []
 
 
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
