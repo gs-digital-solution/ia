@@ -18,16 +18,38 @@ import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
-import torch
-from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import base64
 from resources.models import PromptIA,Matiere
+from .tasks import generer_un_exercice
+from celery import group
 import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
 # Cache en mémoire des PromptIA pour éviter les hits répétés en BDD
 _PROMPTIA_CACHE = {}
+
+# ========== BLIP LAZY-LOADER ==========
+_blip_model = None
+_blip_processor = None
+def get_blip_model():
+    """
+    Charge le modèle BLIP au premier appel (lazy load).
+    """
+    global _blip_model, _blip_processor
+    if _blip_model is None:
+        import torch
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _blip_processor = BlipProcessor.from_pretrained(
+            "Salesforce/blip-image-captioning-base"
+        )
+        _blip_model = BlipForConditionalGeneration.from_pretrained(
+            "Salesforce/blip-image-captioning-base"
+        ).to(device).eval()
+        logger.info("🖼️ BLIP chargé sur %s", device)
+    return _blip_processor, _blip_model
+
 
 DEPARTEMENTS_SCIENTIFIQUES = [
     'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
@@ -152,81 +174,102 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Analyse simple et efficace : OCR + prompt intelligent
+    Analyse simple et efficace : OCR + captioning BLIP + prompt IA.
     """
-    print("🔍 Analyse scientifique simplifiée...")
-
-    # 1. OCR de base
+    logger.info("🔍 Analyse scientifique simplifiée...")
     texte_ocr = ""
+    elements_visuels = []
+
+    # 1. OCR de base + caption BLIP
     try:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            # OCR
             image = Image.open(fichier_path)
             custom_config = r'--oem 3 --psm 6 -l fra+eng'
             texte_ocr = pytesseract.image_to_string(image, config=custom_config)
-            print(f"✅ OCR extrait: {len(texte_ocr)} caractères")
+            logger.info("✅ OCR extrait: %d caractères", len(texte_ocr))
+
+            # Captioning via BLIP
+            processor, model = get_blip_model()
+            inputs  = processor(images=image, return_tensors="pt").to(model.device)
+            outputs = model.generate(**inputs)
+            caption = processor.decode(outputs[0], skip_special_tokens=True)
+            logger.info("🖼️ Légende BLIP générée: %s", caption)
+            elements_visuels.append({"type": "image", "description": caption})
 
         elif fichier_path.lower().endswith('.pdf'):
+            # Extraction texte PDF
             texte_ocr = extraire_texte_pdf(fichier_path)
-            print(f"✅ PDF extrait: {len(texte_ocr)} caractères")
+            logger.info("✅ PDF extrait: %d caractères", len(texte_ocr))
+            # (Optionnel) Captioning page à page si besoin :
+            # pages = convert_from_path(fichier_path, dpi=300)
+            # for page in pages:
+            #     processor, model = get_blip_model()
+            #     inputs  = processor(images=page, return_tensors="pt").to(model.device)
+            #     outputs = model.generate(**inputs)
+            #     cap = processor.decode(outputs[0], skip_special_tokens=True)
+            #     elements_visuels.append({"type": "page_pdf", "description": cap})
 
     except Exception as e:
-        print(f"❌ Extraction échouée: {e}")
+        logger.error("❌ Extraction échouée: %s", e)
         texte_ocr = ""
 
-    # 2. Analyse contextuelle simple
+    # 2. Analyse contextuelle par IA
     try:
         prompt = f"""
-        ANALYSE CE DOCUMENT SCIENTIFIQUE :
+ANALYSE CE DOCUMENT SCIENTIFIQUE :
 
-        TEXTE EXTRAIT :
-        {texte_ocr}
+TEXTE EXTRAIT :
+{texte_ocr}
 
-        TÂCHES :
-        1. Corrige les erreurs d'OCR si nécessaire
-        2. Identifie le type d'exercice (physique, maths, anglais...etc.)
-        3. Extrait les données numériques
-        4. Structure l'exercice
+TÂCHES :
+1. Corrige les erreurs d'OCR si nécessaire
+2. Identifie le type d'exercice
+3. Extrait les données numériques
+4. Structure l'exercice
 
-        RÉPONDS en JSON :
-        {{
-            "texte_complet": "texte corrigé et complété",
-            "elements_visuels": [{{"type": "auto-détecté", "description": "basé sur le contexte"}}],
-            "formules_latex": ["formules détectées"],
-            "structure_exercices": ["structure identifiée"],
-            "donnees_numeriques": {{}}
-        }}
-        """
-
+RÉPONDS en JSON :
+{{
+  "texte_complet": "", 
+  "elements_visuels": [], 
+  "formules_latex": [], 
+  "structure_exercices": [], 
+  "donnees_numeriques": {{}}
+}}
+"""
         response = openai.ChatCompletion.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "Tu es un expert en sciences."},
-                {"role": "user", "content": prompt}
+                {"role": "user",   "content": prompt}
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
             max_tokens=3000
         )
-
         resultat = json.loads(response.choices[0].message.content)
 
-        # S'assurer qu'on a au moins le texte OCR de base
+        # S’assurer qu’on a au moins le texte OCR de base
         if not resultat.get("texte_complet") and texte_ocr:
             resultat["texte_complet"] = texte_ocr
 
-        print(f"✅ Analyse terminée: {len(resultat.get('texte_complet', ''))} caractères")
+        # Injecter nos légendes BLIP
+        if elements_visuels:
+            resultat["elements_visuels"] = elements_visuels
+
+        logger.info("✅ Analyse terminée: %d caractères",
+                    len(resultat.get("texte_complet", "")))
         return resultat
 
     except Exception as e:
-        print(f"❌ Erreur analyse: {e}")
+        logger.error("❌ Erreur analyse: %s", e)
         return {
-            "texte_complet": texte_ocr,
-            "elements_visuels": [],
-            "formules_latex": [],
+            "texte_complet":       texte_ocr,
+            "elements_visuels":    elements_visuels,
+            "formules_latex":      [],
             "structure_exercices": [],
-            "donnees_numeriques": {}
+            "donnees_numeriques":  {}
         }
-
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
@@ -363,16 +406,8 @@ def format_corrige_pdf_structure(texte_corrige_raw):
     if in_bloc: html_output.append("</div>")
     return "".join(html_output)
 
-# ============== BLIP IMAGE CAPTIONING ==============
-# On détecte si CUDA est dispo, sinon on reste sur CPU.
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🖼️ BLIP device utilisé : {device}")
 
-# Charger le processor et le modèle BLIP (tailles modestes pour la rapidité)
-_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-_model     = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")\
-                 .to(device).eval()
-print("🖼️ Modèle BLIP chargé avec succès")
+
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
 
@@ -1303,45 +1338,47 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
 
-def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None,demande=None):
+def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
     """
-    Traitement par découpage pour les épreuves longues avec données vision.
+    Traitement par découpage pour les épreuves longues avec données vision,
+    désormais en parallèle via Celery group.
     """
-    print("🎯 Traitement AVEC DÉCOUPAGE et analyse vision")
-    print("\n[DEBUG] --> generer_corrige_decoupe called avec demande:",
-          getattr(demande, 'id', None), "/",
-          type(demande))
-
-
+    # 1) Sépare le texte en exercices
     exercices = separer_exercices(texte_epreuve)
+
+    # 2) Création des sous-tâches : une tâche Celery par exercice
+    jobs = group(
+        generer_un_exercice.s(
+            demande.id if demande else None,
+            ex,
+            contexte,
+            matiere.id,
+            donnees_vision or {}
+        )
+        for ex in exercices
+    )
+
+    # 3) Envoi et collecte (blocant jusqu'à ce que tous soient finis)
+    results = jobs.apply_async()
+    outputs = results.get()  # liste de dicts {'corrige':…, 'graphs': […]}
+
+    # 4) Reconstruction du corrigé et liste de graphiques
     tous_corriges = []
     tous_graphiques = []
+    for idx, out in enumerate(outputs, 1):
+        corrige = out.get('corrige', '')
+        graphs  = out.get('graphs', [])
+        if corrige:
+            titre = f"\n\n## 📝 Exercice {idx}\n\n"
+            tous_corriges.append(titre + corrige)
+        if graphs:
+            tous_graphiques.extend(graphs)
 
-    for i, exercice in enumerate(exercices, 1):
-        print(f"📝 Traitement exercice {i}/{len(exercices)}...")
-
-        # ✅ PASSER les données vision à chaque exercice
-        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere, donnees_vision,demande=demande)
-
-        if corrige and not corrige.startswith("Erreur") and not corrige.startswith("Erreur API"):
-            titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
-            tous_corriges.append(titre_exercice + corrige)
-            if graphiques:
-                tous_graphiques.extend(graphiques)
-            print(f"✅ Exercice {i} traité avec succès")
-        else:
-            print(f"❌ Exercice {i} en erreur: {corrige}")
-        import time
-        time.sleep(1)
-
+    # 5) Retour
     if tous_corriges:
-        corrige_final = "".join(tous_corriges)
-        print(f"🎉 Découpage terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
-        return corrige_final, tous_graphiques
+        return "".join(tous_corriges), tous_graphiques
     else:
-        print("❌ Aucun corrigé généré")
         return "Erreur: Aucun corrigé n'a pu être généré", []
-
 
 
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
