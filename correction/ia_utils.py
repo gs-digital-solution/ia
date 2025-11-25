@@ -69,7 +69,7 @@ def get_best_promptia(demande):
     Retourne le PromptIA le plus spécifique pour la demande.
     Ordre de priorité maximal : tous les champs, et fallback au fur et à mesure si besoin.
     """
-    print("[DEBUG] -> get_best_promptia called with demande:", demande, "type:", type(demande))
+    logger.debug("get_best_promptia called with demande=%s type=%s", demande, type(demande))
 
     filtra = dict(
         pays=demande.pays,
@@ -167,7 +167,7 @@ def call_deepseek_vision(path_fichier: str) -> dict:
         return content if isinstance(content, dict) else json.loads(content)
 
     except Exception as e:
-        print(f"❌ Erreur call_deepseek_vision: {e}")
+        logger.error("Erreur call_deepseek_vision: %s", e)
         return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
@@ -275,17 +275,17 @@ def extraire_texte_robuste(fichier_path: str) -> str:
     """
     Extraction simple : OCR direct → Analyse IA
     """
-    print("🔄 Extraction simple...")
+    logger.info("Extraction simple du fichier %s", fichier_path)
 
     # Juste utiliser l'analyse scientifique directe
     try:
         analyse = analyser_document_scientifique(fichier_path)
         texte = analyse.get("texte_complet", "")
         if texte and len(texte) > 50:
-            print("✅ Extraction réussie")
+            logger.info("Extraction réussie, longueur=%d", len(texte))
             return texte
         else:
-            print("❌ Texte trop court, utilisation fallback OCR")
+            logger.warning("Texte trop court (%d chars), fallback OCR", len(texte))
             return texte
     except Exception as e:
         print(f"❌ Extraction échouée: {e}")
@@ -301,9 +301,8 @@ def debug_ocr(fichier_path: str):
             image = Image.open(fichier_path)
             custom_config = r'--oem 3 --psm 6 -l fra+eng'
             texte = pytesseract.image_to_string(image, config=custom_config)
-            print("🔍 DEBUG OCR - Texte brut:")
-            print(texte[:500])
-            print(f"Longueur: {len(texte)} caractères")
+            logger.debug("DEBUG OCR - Texte brut (500 premiers chars):\n%s", texte[:500])
+            logger.debug("DEBUG OCR - Longueur: %d caractères", len(texte))
             return texte
     except Exception as e:
         print(f"❌ DEBUG OCR échoué: {e}")
@@ -432,8 +431,8 @@ def separer_exercices(texte_epreuve):
         r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
         r'TEIL ?1\s+LESEVERSTEHEN', r'MEDIATION',
         r'SCHRIFTLICHE PRODUKTION', r'STRUKTUREN UND KOMMUNIKATION',
-        r'SCHRIFTLICHER AUSDRUCK', r'Grammar', r'Vocabulary',
-        r'Comprehension', r'Essay'
+        r'SCHRIFTLICHER AUSDRUCK', r'SECTION A:GRAMMAR', r'SECTION B:VOCABULARY',
+        r'SECTION C:READING COMPREHENSION', r'SECTION D: ESSAY WRITING'
     ]
 
     exercices = []
@@ -469,9 +468,9 @@ def separer_exercices(texte_epreuve):
     if not exercices:
         exercices = [texte_epreuve]
 
-    print(f"✅ {len(exercices)} exercice(s) détecté(s)")
-    for i, ex in enumerate(exercices):
-        print(f"   Exercice {i + 1}: {len(ex)} caractères")
+    logger.info("Détection des exercices: %d blocs trouvés", len(exercices))
+    for i, ex in enumerate(exercices, 1):
+        logger.debug("   Exercice %d: %d caractères", i, len(ex))
 
     return exercices
 
@@ -482,7 +481,7 @@ def estimer_tokens(texte):
     """
     mots = len(texte.split())
     tokens = int(mots / 0.75)
-    print(f"📊 Estimation tokens: {mots} mots → {tokens} tokens")
+    logger.info("Estimation tokens: %d mots → %d tokens", mots, tokens)
     return tokens
 
 
@@ -564,9 +563,10 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     Returns:
         Tuple (corrige_text, graph_list)
     """
-    print("🎯 Génération corrigé avec analyse vision...")
-    print("\n[DEBUG] ==> generer_corrige_par_exercice avec demande:",
-          getattr(demande, 'id', None), "/", type(demande))
+    logger.info("Génération corrigé (vision) pour demande=%s", getattr(demande, 'id', None))
+    logger.debug("generer_corrige_par_exercice scope: demande=%s type=%s",
+                 getattr(demande, 'id', None),
+                 type(demande))
 
     # 1) Récupère le prompt métier (ou None)
     promptia = get_best_promptia(demande)
@@ -611,7 +611,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         "Content-Type": "application/json"
     }
     try:
-        print("📡 Appel API DeepSeek avec analyse vision...")
+        logger.info("Appel API DeepSeek…")
 
         # Tentative avec vérification de qualité
         output = None
@@ -626,7 +626,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
             # Récupération de la réponse
             output = response_data['choices'][0]['message']['content']
-            print(f"✅ Réponse IA brute (tentative {tentative + 1}): {len(output)} caractères")
+            logger.debug("Réponse brute (tentative %d) length=%d", tentative+1, len(output))
 
             # Vérification de la qualité
             if verifier_qualite_corrige(output, texte_exercice):
@@ -1330,9 +1330,8 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     """
     Traitement direct pour les épreuves courtes avec données vision.
     """
-    print("🎯 Traitement DIRECT avec analyse vision")
-    print("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
-          "/", type(demande))
+    logger.info("📌 Traitement DIRECT (courte épreuve), demande=%s", getattr(demande, 'id', None))
+    logger.debug("generer_corrige_direct called avec demande=%s type=%s", getattr(demande, 'id', None), type(demande))
 
     # ✅ PASSER les données vision à la fonction de génération
     return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
@@ -1341,12 +1340,12 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
     """
     Traitement par découpage pour les épreuves longues avec données vision,
-    désormais en parallèle via Celery group.
+    en parallèle via Celery group.
     """
-    # 1) Sépare le texte en exercices
+    # 1) on sépare le texte en exercices
     exercices = separer_exercices(texte_epreuve)
 
-    # 2) Création des sous-tâches : une tâche Celery par exercice
+    # 2) on crée un groupe de sous-tâches, une par exercice
     jobs = group(
         generer_un_exercice.s(
             demande.id if demande else None,
@@ -1358,23 +1357,24 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
         for ex in exercices
     )
 
-    # 3) Envoi et collecte (blocant jusqu'à ce que tous soient finis)
-    results = jobs.apply_async()
-    outputs = results.get()  # liste de dicts {'corrige':…, 'graphs': […]}
+    # 3) on lance toutes les tâches en parallèle
+    result = jobs.apply_async()
 
-    # 4) Reconstruction du corrigé et liste de graphiques
+    # 4) on récupère les résultats (liste de dicts)
+    outputs = result.get()
+
+    # 5) on reconstruit le corrigé complet et la liste des graphiques
     tous_corriges = []
     tous_graphiques = []
     for idx, out in enumerate(outputs, 1):
         corrige = out.get('corrige', '')
-        graphs  = out.get('graphs', [])
+        graphs = out.get('graphs', [])
         if corrige:
             titre = f"\n\n## 📝 Exercice {idx}\n\n"
             tous_corriges.append(titre + corrige)
         if graphs:
             tous_graphiques.extend(graphs)
 
-    # 5) Retour
     if tous_corriges:
         return "".join(tous_corriges), tous_graphiques
     else:
@@ -1395,10 +1395,8 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     if exemples_corriges is None:
         exemples_corriges = []
 
-    print("\n" + "=" * 60)
-    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION")
-    print("=" * 60)
-    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+    logger.info("Début traitement IA + graphiques, demande=%s", getattr(demande, 'id', None))
+    logger.info("Longueur de l'énoncé: %d caractères", len(texte_enonce))
 
     # ✅ NOUVEAU : Log des données vision
     if donnees_vision:
@@ -1463,7 +1461,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         else:
             texte_brut = demande.enonce_texte or ""
 
-        print("📥 DEBUG – TEXTE BRUT AVEC VISION (premiers 500 chars) :")
+        logger.debug("TEXTE BRUT AVEC VISION (500 premiers chars): %s", texte_brut[:500])
         print(texte_brut[:500].replace("\n", "\\n"), "...\n")
 
         # Étape 2 : Texte final pour l'IA
@@ -1482,7 +1480,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         departement = demande.departement
 
         if is_departement_scientifique(departement):
-            print(f"⚗️ [DEBUG] Département scientifique : {departement.nom}")
+            logger.info("Département scientifique : %s", departement.nom)
             soumission.statut = 'generation_graphiques'
             soumission.progression = 60
             soumission.save()
@@ -1536,11 +1534,11 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         demande.corrigé = corrige_txt
         demande.save()
 
-        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        logger.info("🎉 Traitement avec vision terminé avec succès !")
         return True
 
     except Exception as e:
-        print(f"❌ ERREUR dans la tâche IA: {e}")
+        logger.error("ERREUR dans la tâche IA: %s", e)
         try:
             soumission.statut = 'erreur'
             soumission.save()
