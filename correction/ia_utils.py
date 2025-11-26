@@ -21,8 +21,8 @@ from celery import shared_task
 from PIL import Image
 import base64
 from resources.models import PromptIA,Matiere
-from .tasks import generer_un_exercice
-from celery import group
+#from .tasks import generer_un_exercice
+#from celery import group
 import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
@@ -1338,6 +1338,11 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
 
 
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
+    # Import dynamique pour éviter le circular import
+    from .tasks import generer_un_exercice
+    from celery import group
+
+    # 1) on sépare le texte en exercices
     exercices = separer_exercices(texte_epreuve)
 
     # Création du groupe de tâches (une par exercice)
