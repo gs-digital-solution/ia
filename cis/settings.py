@@ -32,7 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')  # ← Stocké dans .env
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG =True
+DEBUG =False
 #pour passer en production et travailler en local aussi
 #ALLOWED_HOSTS = ['185.215.167.178','cis.groupesiewe.com','127.0.0.1','localhost']
 ALLOWED_HOSTS = [
@@ -215,6 +215,9 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED   = True
+CELERY_TASK_TIME_LIMIT      = 600  # ou 600 selon la longueur max
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
