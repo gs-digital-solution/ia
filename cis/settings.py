@@ -209,15 +209,38 @@ LOGOUT_REDIRECT_URL = reverse_lazy('correction:login')
 LOGIN_URL=reverse_lazy('correction:login')
 
 
+
+#PARAMETRAGE DE CELERY
+
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED   = True
+
+from kombu import Queue
+
+# Broker & backend
 CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
+
+# Sérialisation JSON
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
-CELERY_TASK_TRACK_STARTED   = True
-CELERY_TASK_TIME_LIMIT      = 600  # ou 600 selon la longueur max
+
+# TIME LIMITS (optionnel mais conseillé)
+CELERY_TASK_TIME_LIMIT      = 600  # max 10 min par tâche
+CELERY_TASK_SOFT_TIME_LIMIT = 540  # avertissement à 9 min
+
+# Pré‐fetch pour meilleure répartition
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# Définition des queues
+CELERY_TASK_QUEUES = (
+    Queue('root'),   # pour la tâche maître
+    Queue('child'),  # pour les sous-tâches
+)
+
+# Queue par défaut
+CELERY_TASK_DEFAULT_QUEUE = 'root'
 
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

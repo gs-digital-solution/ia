@@ -1338,51 +1338,6 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
 
-def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
-    """
-    Traitement par découpage pour les épreuves longues avec données vision,
-    désormais en parallèle via Celery group.
-    """
-    from celery import group
-    from .tasks import generer_un_exercice
-    # 1) Sépare le texte en exercices
-    exercices = separer_exercices(texte_epreuve)
-
-    # 2) Création des sous-tâches : une tâche Celery par exercice
-    jobs = group(
-        generer_un_exercice.s(
-            demande.id if demande else None,
-            ex,
-            contexte,
-            matiere.id,
-            donnees_vision or {}
-        )
-        for ex in exercices
-    )
-
-    # 3) Envoi et collecte (blocant jusqu'à ce que tous soient finis)
-    results = jobs.apply_async()
-    outputs = results.get()  # liste de dicts {'corrige':…, 'graphs': […]}
-
-    # 4) Reconstruction du corrigé et liste de graphiques
-    tous_corriges = []
-    tous_graphiques = []
-    for idx, out in enumerate(outputs, 1):
-        corrige = out.get('corrige', '')
-        graphs  = out.get('graphs', [])
-        if corrige:
-            titre = f"\n\n## 📝 Exercice {idx}\n\n"
-            tous_corriges.append(titre + corrige)
-        if graphs:
-            tous_graphiques.extend(graphs)
-
-    # 5) Retour
-    if tous_corriges:
-        return "".join(tous_corriges), tous_graphiques
-    else:
-        return "Erreur: Aucun corrigé n'a pu être généré", []
-
-
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
                                     demande=None, donnees_vision=None):  # ✅ NOUVEAU PARAMÈTRE
     """
@@ -1423,131 +1378,162 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 
 # ============== TÂCHE ASYNCHRONE ==============
 
-@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
+#@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
+from celery import shared_task
+@shared_task(
+    queue='root',
+    name='correction.ia_utils.generer_corrige_ia_et_graphique_async'
+)
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
+    """
+    Tâche principale (root queue):
+    - Extraction texte + vision
+    - Estimation tokens
+    - Si court → traitement direct synchrone
+    - Si long  → découpage via group.get() sur child queue
+    """
+
+    # 1) Imports locaux (pas de circular import)
+    from celery import group
+    from .tasks import generer_un_exercice
     from correction.models import DemandeCorrection, SoumissionIA
-    from resources.models import Matiere
-    from celery import chord
-    from .tasks import generer_un_exercice, callback_final_decoupe
+    from resources.models  import Matiere
+    from .pdf_utils        import generer_pdf_corrige
+    from abonnement.services import debiter_credit_abonnement
 
-    try:
-        # Récupération de la demande et création de la soumission IA
-        demande = DemandeCorrection.objects.get(id=demande_id)
-        soumission = SoumissionIA.objects.get(demande=demande)
+    # 2) Récupération de la demande et création de la soumission
+    demande    = DemandeCorrection.objects.get(id=demande_id)
+    soumission = SoumissionIA.objects.get(demande=demande)
 
-        # Étape 1 : Extraction du texte brut AVEC VISION
-        soumission.statut = 'extraction'
-        soumission.progression = 20
-        soumission.save()
+    # 3) Extraction texte brut + vision (OCR + BLIP + IA basique)
+    soumission.statut     = 'extraction'
+    soumission.progression = 20
+    soumission.save()
 
-        donnees_vision_complete = None  # ✅ NOUVEAU : Stockage des données vision
+    texte_brut     = ""
+    donnees_vision = {}
+    if demande.fichier:
+        temp_dir   = tempfile.gettempdir()
+        local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
+        # sauvegarde locale
+        with open(local_path, "wb") as f:
+            for chunk in demande.fichier.chunks():
+                f.write(chunk)
+        # analyse scientifique complète
+        analyse = analyser_document_scientifique(local_path)
+        texte_brut     = analyse.get("texte_complet", "")
+        donnees_vision = {
+            "elements_visuels":    analyse.get("elements_visuels", []),
+            "formules_latex":      analyse.get("formules_latex", []),
+            "structure_exercices": analyse.get("structure_exercices", [])
+        }
+        try: os.unlink(local_path)
+        except: pass
+    else:
+        texte_brut = demande.enonce_texte or ""
 
-        if demande.fichier:
-            # 1) Sauvegarde locale
-            temp_dir = tempfile.gettempdir()
-            local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
-            with open(local_path, "wb") as f:
-                for chunk in demande.fichier.chunks():
-                    f.write(chunk)
+    logger.debug("Texte brut (500 premiers chars): %s", texte_brut[:500])
 
-            # 2) Appel unique d’analyse scientifique
-            analyse_complete = analyser_document_scientifique(local_path)
-            donnees_vision_complete = {
-                "elements_visuels": analyse_complete.get("elements_visuels", []),
-                "formules_latex":   analyse_complete.get("formules_latex", []),
-                "structure_exercices": analyse_complete.get("structure_exercices", [])
-            }
-            texte_brut = analyse_complete.get("texte_complet", "")
+    # 4) Passage à l'IA
+    soumission.statut     = 'analyse_ia'
+    soumission.progression = 40
+    soumission.save()
 
-            # 3) Nettoyage
-            try:
-                os.unlink(local_path)
-            except:
-                pass
-        else:
-            texte_brut = demande.enonce_texte or ""
+    # 5) Contexte + estimation
+    matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
+    contexte = f"Exercice de {matiere.nom} - {getattr(demande.classe,'nom','')}"
+    tokens_estimes = estimer_tokens(texte_brut)
 
-        print("📥 DEBUG – TEXTE BRUT AVEC VISION (premiers 500 chars) :")
-        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
-
-        # Étape 2 : Texte final pour l'IA
-        texte_enonce = texte_brut
-
-        # Étape 3 : Lancement du traitement IA AVEC DONNÉES VISION
-        soumission.statut = 'analyse_ia'
-        soumission.progression = 40
-        soumission.save()
-
-        matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
-        contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
-
-        # ETAPE GENERATION GRAPHIQUE
-        # 1️⃣ Récupération du département (direct via la FK de la demande)
-        departement = demande.departement
-
-        if is_departement_scientifique(departement):
-            print(f"⚗️ [DEBUG] Département scientifique : {departement.nom}")
-            soumission.statut = 'generation_graphiques'
-            soumission.progression = 60
-            soumission.save()
-        else:
-            print(
-                f"⚡ [DEBUG] Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
-
-        # ✅ APPEL AVEC DONNÉES VISION
-        corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-            texte_enonce,
-            contexte,
-            matiere=matiere,
-            donnees_vision=donnees_vision_complete,
-            demande = demande
+    # 6A) Court → synchrone
+    if tokens_estimes < 1500:
+        corrige_txt, graph_list = generer_corrige_par_exercice(
+            texte_brut, contexte, matiere, donnees_vision, demande
         )
-
-        # ETAPE GENERATION PDF
-        soumission.statut = 'formatage_pdf'
+        # Génération PDF + débit crédit
+        soumission.statut     = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
 
-        from .pdf_utils import generer_pdf_corrige
-        pdf_path = generer_pdf_corrige(
-            {
-                "titre_corrige": contexte,
-                "corrige_html": corrige_txt,
-                "soumission_id": demande_id
-            },
-            demande_id
-        )
+        # créer le PDF
+        pdf_path = generer_pdf_corrige({
+            "titre_corrige": contexte,
+            "corrige_html":  corrige_txt,
+            "soumission_id": demande_id
+        }, demande_id)
 
-        # → Maintenant que le PDF existe, on peut débiter 1 crédit
-        from abonnement.services import debiter_credit_abonnement
         if not debiter_credit_abonnement(demande.user):
-            # en cas d’échec, on signale un statut spécifique et on stoppe
             soumission.statut = 'erreur_credit'
             soumission.save()
             return False
 
-        # Étape 5 : Mise à jour du statut et sauvegarde
-        soumission.statut = 'termine'
-        soumission.progression = 100
+        # finaliser
+        soumission.statut       = 'termine'
+        soumission.progression  = 100
         soumission.resultat_json = {
-            'corrige_text': corrige_txt,
-            'pdf_url': pdf_path,
-            'graphiques': graph_list or [],
-            'analyse_vision': donnees_vision_complete  # ✅ NOUVEAU : Stocker l'analyse
+            'corrige_text':   corrige_txt,
+            'pdf_url':        pdf_path,
+            'graphiques':     graph_list or [],
+            'analyse_vision': donnees_vision
         }
         soumission.save()
 
         demande.corrigé = corrige_txt
         demande.save()
-
-        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        logger.info("Traitement direct terminé pour demande %s", demande_id)
         return True
 
-    except Exception as e:
-        print(f"❌ ERREUR dans la tâche IA: {e}")
-        try:
-            soumission.statut = 'erreur'
-            soumission.save()
-        except:
-            pass
+    # 6B) Long → découpage parallèle sur child queue
+    soumission.statut     = 'generation_graphiques'
+    soumission.progression = 60
+    soumission.save()
+
+    # split en exercices
+    exercices = separer_exercices(texte_brut)
+
+    # création du group (child queue)
+    jobs = group(
+        generer_un_exercice.s(demande_id, ex, contexte, matiere.id, donnees_vision)
+        for ex in exercices
+    )
+    # exécution et collecte synchrone mais hors slot child
+    outputs = jobs.apply_async().get()  # ne bloque QUE le slot root
+
+    # reconstituer le corrigé global et les graphiques
+    corrige_final = "".join(
+        f"\n\n## 📝 Exercice {i+1}\n\n{out['corrige']}"
+        for i, out in enumerate(outputs) if out.get('corrige')
+    )
+    graph_list = [g for out in outputs for g in out.get('graphs', [])]
+
+    # génération du PDF final
+    soumission.statut     = 'formatage_pdf'
+    soumission.progression = 80
+    soumission.save()
+
+    pdf_path = generer_pdf_corrige({
+        "titre_corrige": contexte,
+        "corrige_html":  corrige_final,
+        "soumission_id": demande_id
+    }, demande_id)
+
+    # débit du crédit
+    if not debiter_credit_abonnement(demande.user):
+        soumission.statut = 'erreur_credit'
+        soumission.save()
         return False
+
+    # finalisation
+    soumission.statut       = 'termine'
+    soumission.progression  = 100
+    soumission.resultat_json = {
+        'corrige_text':   corrige_final,
+        'pdf_url':        pdf_path,
+        'graphiques':     graph_list
+    }
+    soumission.save()
+
+    demande.corrigé = corrige_final
+    demande.save()
+
+    logger.info("Traitement long terminé pour demande %s", demande_id)
+    return True
