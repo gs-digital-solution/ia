@@ -636,7 +636,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     }
 
     data = {
-        "model": "deepseek-chat",
+        "model": "deepseek-reasoner",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt_ia}
