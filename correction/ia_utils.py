@@ -4,8 +4,6 @@ import tempfile
 import json
 import re
 import numpy as np
-import cv2
-from pdf2image import convert_from_path
 import matplotlib
 import openai
 import logging
@@ -18,301 +16,36 @@ import pytesseract
 from django.conf import settings
 from django.utils.safestring import mark_safe
 from celery import shared_task
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import base64
-from resources.models import PromptIA,Matiere
-#from .tasks import generer_un_exercice
-#from celery import group
-import logging
-# Logger dédié
-logger = logging.getLogger(__name__)
-# Cache en mémoire des PromptIA pour éviter les hits répétés en BDD
-_PROMPTIA_CACHE = {}
 
-from celery import group, chord
-from .tasks import generer_un_exercice
-from .tasks import finalize_corrige
+# ======= CONFIGURATION MATHPIX OCR =======
+MATHPIX_APP_ID  = os.getenv("MATHPIX_APP_ID")
+MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
 
-
-# ========== BLIP LAZY-LOADER ==========
-_blip_model = None
-_blip_processor = None
-def get_blip_model():
+def ocr_mathpix(path_image: str) -> dict:
     """
-    Charge le modèle BLIP au premier appel (lazy load).
+    Appelle l'API Mathpix pour extraire texte + LaTeX.
     """
-    global _blip_model, _blip_processor
-    if _blip_model is None:
-        import torch
-        from transformers import BlipProcessor, BlipForConditionalGeneration
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        _blip_processor = BlipProcessor.from_pretrained(
-            "Salesforce/blip-image-captioning-base"
-        )
-        _blip_model = BlipForConditionalGeneration.from_pretrained(
-            "Salesforce/blip-image-captioning-base"
-        ).to(device).eval()
-        logger.info("🖼️ BLIP chargé sur %s", device)
-    return _blip_processor, _blip_model
+    with open(path_image, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+    headers = {
+        "app_id":  MATHPIX_APP_ID,
+        "app_key": MATHPIX_APP_KEY,
+        "Content-type": "application/json"
+    }
+    payload = {
+        "src":    f"data:image/png;base64,{img_b64}",
+        "formats":["text","latex_simplified"]
+    }
+    resp = requests.post("https://api.mathpix.com/v3/text",
+                         headers=headers, json=payload, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
 
 
-DEPARTEMENTS_SCIENTIFIQUES = [
-    'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
-]
-def is_departement_scientifique(departement):
-    """
-    Renvoie True si le département fait partie des filières scientifiques définies globalement.
-    """
-    if departement and departement.nom:
-        dep_name = departement.nom.lower()
-        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
-    return False
-
-# ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
-def get_best_promptia(demande):
-    """
-    Retourne le PromptIA le plus spécifique pour la demande.
-    Ordre de priorité maximal : tous les champs, et fallback au fur et à mesure si besoin.
-    """
-    print("[DEBUG] -> get_best_promptia called with demande:", demande, "type:", type(demande))
-
-    filtra = dict(
-        pays=demande.pays,
-        sous_systeme=demande.sous_systeme,
-        classe=demande.classe,
-        matiere=demande.matiere,
-        departement=demande.departement,
-        type_exercice=demande.type_exercice,
-    )
-
-    # Retire les valeurs nulles
-    filtra = {k: v for k, v in filtra.items() if v is not None}
-
-    # Clé de cache basée sur les filtres utilisés
-    key = tuple(sorted(filtra.items()))
-    # Si déjà traité en mémoire, on renvoie directement
-    if key in _PROMPTIA_CACHE:
-        return _PROMPTIA_CACHE[key]
-
-    # Recherche de la correspondance la plus précise
-    qs = PromptIA.objects.filter(**filtra)
-    if qs.exists():
-        promptia = qs.first()
-    else:
-        # Fallback progressif sur les champs
-        promptia = None
-        champs_tris = ['type_exercice', 'departement', 'classe', 'sous_systeme', 'pays']
-        for champ in champs_tris:
-            if filtra.get(champ):
-                filtra2 = dict(filtra)
-                filtra2.pop(champ)
-                qs2 = PromptIA.objects.filter(**filtra2)
-                if qs2.exists():
-                    promptia = qs2.first()
-                    break
-        # En dernier recours, par matière seule
-        if promptia is None:
-            qs3 = PromptIA.objects.filter(matiere=demande.matiere)
-            if qs3.exists():
-                promptia = qs3.first()
-
-    # On met en cache le résultat (même None)
-    _PROMPTIA_CACHE[key] = promptia
-    return promptia
-
-
-# ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
-openai.api_key = os.getenv("DEEPSEEK_API_KEY")
-openai.api_base = "https://api.deepseek.com"
-
-# ── MODÈLE POUR LA VISION ────────────────────────────────
-# deepseek-chat a les capacités vision quand on envoie des images
-DEEPSEEK_VISION_MODEL = "deepseek-chat"
-
-
-# ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
-# ── CORRIGÉ : Appel multimodal à DeepSeek pour PDF/images ────
-def call_deepseek_vision(path_fichier: str) -> dict:
-    """
-    Envoie un PDF ou une image à DeepSeek - Version corrigée pour l'API DeepSeek.
-    """
-    system_prompt = """
-    Tu es un analyseur de documents éducatifs.
-    Analyse ce document et retourne un JSON valide avec :
-    - Le texte intégral
-    - Les blocs LaTeX des formules mathématiques  
-    - Les légendes des images
-    - Les descriptions des graphiques
-    """
-
-    try:
-        # Encoder le fichier en base64
-        with open(path_fichier, "rb") as f:
-            data_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-        # ✅ CORRECTION : Format DeepSeek compatible
-        message_content = f"""
-        [image]{data_b64}[/image]
-
-        Extrait le texte, les formules LaTeX et les légendes de ce document.
-        """
-
-        response = openai.ChatCompletion.create(
-            model=DEEPSEEK_VISION_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_content}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-            max_tokens=8000
-        )
-
-        content = response.choices[0].message.content
-        return content if isinstance(content, dict) else json.loads(content)
-
-    except Exception as e:
-        print(f"❌ Erreur call_deepseek_vision: {e}")
-        return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
-
-# ── NOUVELLE FONCTION : Analyse scientifique avancée ────
-
-def analyser_document_scientifique(fichier_path: str) -> dict:
-    """
-    Analyse simple et efficace : OCR + captioning BLIP + prompt IA.
-    """
-    logger.info("🔍 Analyse scientifique simplifiée...")
-    texte_ocr = ""
-    elements_visuels = []
-
-    # 1. OCR de base + caption BLIP
-    try:
-        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            # OCR
-            image = Image.open(fichier_path)
-            custom_config = r'--oem 3 --psm 6 -l fra+eng'
-            texte_ocr = pytesseract.image_to_string(image, config=custom_config)
-            logger.info("✅ OCR extrait: %d caractères", len(texte_ocr))
-
-            # Captioning via BLIP
-            processor, model = get_blip_model()
-            inputs  = processor(images=image, return_tensors="pt").to(model.device)
-            outputs = model.generate(**inputs)
-            caption = processor.decode(outputs[0], skip_special_tokens=True)
-            logger.info("🖼️ Légende BLIP générée: %s", caption)
-            elements_visuels.append({"type": "image", "description": caption})
-
-        elif fichier_path.lower().endswith('.pdf'):
-            # Extraction texte PDF
-            texte_ocr = extraire_texte_pdf(fichier_path)
-            logger.info("✅ PDF extrait: %d caractères", len(texte_ocr))
-            # (Optionnel) Captioning page à page si besoin :
-            # pages = convert_from_path(fichier_path, dpi=300)
-            # for page in pages:
-            #     processor, model = get_blip_model()
-            #     inputs  = processor(images=page, return_tensors="pt").to(model.device)
-            #     outputs = model.generate(**inputs)
-            #     cap = processor.decode(outputs[0], skip_special_tokens=True)
-            #     elements_visuels.append({"type": "page_pdf", "description": cap})
-
-    except Exception as e:
-        logger.error("❌ Extraction échouée: %s", e)
-        texte_ocr = ""
-
-    # 2. Analyse contextuelle par IA
-    try:
-        prompt = f"""
-ANALYSE CE DOCUMENT SCIENTIFIQUE :
-
-TEXTE EXTRAIT :
-{texte_ocr}
-
-TÂCHES :
-1. Corrige les erreurs d'OCR si nécessaire
-2. Identifie le type d'exercice
-3. Extrait les données numériques
-4. Structure l'exercice
-
-RÉPONDS en JSON :
-{{
-  "texte_complet": "", 
-  "elements_visuels": [], 
-  "formules_latex": [], 
-  "structure_exercices": [], 
-  "donnees_numeriques": {{}}
-}}
-"""
-        response = openai.ChatCompletion.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "Tu es un expert en sciences."},
-                {"role": "user",   "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_tokens=3000
-        )
-        resultat = json.loads(response.choices[0].message.content)
-
-        # S’assurer qu’on a au moins le texte OCR de base
-        if not resultat.get("texte_complet") and texte_ocr:
-            resultat["texte_complet"] = texte_ocr
-
-        # Injecter nos légendes BLIP
-        if elements_visuels:
-            resultat["elements_visuels"] = elements_visuels
-
-        logger.info("✅ Analyse terminée: %d caractères",
-                    len(resultat.get("texte_complet", "")))
-        return resultat
-
-    except Exception as e:
-        logger.error("❌ Erreur analyse: %s", e)
-        return {
-            "texte_complet":       texte_ocr,
-            "elements_visuels":    elements_visuels,
-            "formules_latex":      [],
-            "structure_exercices": [],
-            "donnees_numeriques":  {}
-        }
-
-def extraire_texte_robuste(fichier_path: str) -> str:
-    """
-    Extraction simple : OCR direct → Analyse IA
-    """
-    print("🔄 Extraction simple...")
-
-    # Juste utiliser l'analyse scientifique directe
-    try:
-        analyse = analyser_document_scientifique(fichier_path)
-        texte = analyse.get("texte_complet", "")
-        if texte and len(texte) > 50:
-            print("✅ Extraction réussie")
-            return texte
-        else:
-            print("❌ Texte trop court, utilisation fallback OCR")
-            return texte
-    except Exception as e:
-        print(f"❌ Extraction échouée: {e}")
-        return ""
-
-
-def debug_ocr(fichier_path: str):
-    """
-    Debug simple de l'OCR
-    """
-    try:
-        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            image = Image.open(fichier_path)
-            custom_config = r'--oem 3 --psm 6 -l fra+eng'
-            texte = pytesseract.image_to_string(image, config=custom_config)
-            print("🔍 DEBUG OCR - Texte brut:")
-            print(texte[:500])
-            print(f"Longueur: {len(texte)} caractères")
-            return texte
-    except Exception as e:
-        print(f"❌ DEBUG OCR échoué: {e}")
-    return ""
 # ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
     """Extrait les blocs JSON pour les graphiques"""
@@ -343,8 +76,7 @@ PATTERNS_BLOCS = [
     r'RECEPCIÓN DE TEXTOS', r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
     r'TEIL[1I]? *LESEVERSTEHEN', r'MEDIATION', r'SCHRIFTLICHE PRODUKTION',
     r'STRUKTUREN UND KOMMUNIKATION', r'SCHRIFTLICHER AUSDRUCK',
-    r'SECTION A: GRAMMAR', r'SECTION B: VOCABULARY',
-    r'SECTION C: READING COMPREHENSION', r'SECTION D: COMPOSITION',
+    r'GRAMMAR', r'VOCABULARY', r'COMPREHENSION', r'ESSAY',
     r'PARTIE[- ]?[AIB]{0,2}\s*:?.*EVALUATION DES RESOURCES',
     r'PARTIE[- ]?[AIB]{0,2}\s*:?.*EVALUATION DES COMPETENCES',
     r'PARTIE[- ]?[AIB]{0,2}', r'EXERCICE[- ]?\d+', r'EXERICE[- ]?\d+',
@@ -411,8 +143,16 @@ def format_corrige_pdf_structure(texte_corrige_raw):
     if in_bloc: html_output.append("</div>")
     return "".join(html_output)
 
+# ============== BLIP IMAGE CAPTIONING ==============
+# On détecte si CUDA est dispo, sinon on reste sur CPU.
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"🖼️ BLIP device utilisé : {device}")
 
-
+# Charger le processor et le modèle BLIP (tailles modestes pour la rapidité)
+_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+_model     = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")\
+                 .to(device).eval()
+print("🖼️ Modèle BLIP chargé avec succès")
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
 
@@ -527,96 +267,74 @@ def verifier_qualite_corrige(corrige_text, exercice_original):
 
     return True
 
-def build_promptia_messages(promptia, contexte):
+def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None):
     """
-    Retourne deux dicts {role, content} :
-    - system_message = system_prompt + exemple + consignes finales
-    - user_message   = contexte (on y ajoutera l'exercice + vision)
+    Génère le corrigé pour un seul exercice et extrait graphiques éventuels.
     """
-    # 1) system
-    parts = []
-    if promptia and promptia.system_prompt:
-        parts.append(promptia.system_prompt)
-    else:
-        parts.append(DEFAULT_SYSTEM_PROMPT)
+    print("🎯 Génération corrigé pour exercice individuel...")
 
-    if promptia and promptia.exemple_prompt:
-        parts.append("----- EXEMPLE D'UTILISATION -----")
-        parts.append(promptia.exemple_prompt)
+    system_prompt = DEFAULT_SYSTEM_PROMPT
+    consignes_finales = "Format de réponse strict : LaTeX pour les maths, explications détaillées mais concises"
 
-    if promptia and promptia.consignes_finales:
-        parts.append("----- CONSIGNES FINALES -----")
-        parts.append(promptia.consignes_finales)
+    if matiere and hasattr(matiere, 'prompt_ia'):
+        promptia = matiere.prompt_ia
+        system_prompt = promptia.system_prompt or system_prompt
+        consignes_finales = promptia.consignes_finales or consignes_finales
 
-    system_content = "\n\n".join(parts)
+    prompt_ia = f"""
+    {system_prompt}
 
-    # 2) user (contenu de base = contexte)
-    user_content = contexte.strip()
+    ### CONTEXTE
+    {contexte}
 
-    return {"role": "system", "content": system_content}, \
-           {"role": "user",   "content": user_content}
+    ### EXERCICE À CORRIGER (UNIQUEMENT CELUI-CI)
+    {texte_exercice.strip()}
 
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None,demande=None):
+    ### CONSIGNES STRICTES - À RESPECTER IMPÉRATIVEMENT
+    {consignes_finales}
+
+    **EXIGENCES ABSOLUES :**
+    1. Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
+    2. Vérifie systématiquement chaque résultat intermédiaire  
+    3. Donne TOUTES les étapes de calcul détaillées
+    4. Les réponses doivent être NUMÉRIQUEMENT EXACTES
+    5. Ne laisse AUCUNE question sans réponse complète
+    6. Si l'énoncé semble ambigu, prends l'interprétation mathématique standard
+
+    **FORMAT DE RÉPONSE :**
+    - Réponses complètes avec justification
+    - Calculs intermédiaires détaillés
+    - Solutions numériques exactes
+    - Ne jamais dire "je pense" ou "c'est ambigu"
+
+    Réponds UNIQUEMENT à cet exercice avec une rigueur absolue.
     """
-    Génère le corrigé pour un seul exercice en exploitant les données vision.
 
-    Args:
-        texte_exercice: Texte de l'exercice
-        contexte: Contexte de l'exercice
-        matiere: Matière concernée
-        donnees_vision: Données d'analyse vision (schémas, formules, etc.)
+    api_key = os.getenv('DEEPSEEK_API_KEY')
+    if not api_key:
+        print("❌ Erreur: Clé API non configurée")
+        return "Erreur: Clé API non configurée", None
 
-    Returns:
-        Tuple (corrige_text, graph_list)
-    """
-    print("🎯 Génération corrigé avec analyse vision...")
-    print("\n[DEBUG] ==> generer_corrige_par_exercice avec demande:",
-          getattr(demande, 'id', None), "/", type(demande))
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-    # 1) Récupère le prompt métier (ou None)
-    promptia = get_best_promptia(demande)
-
-    # 2) Construit les deux messages
-    contexte = f"Contexte : Exercice de {matiere.nom} – {getattr(demande.classe, 'nom', '')}"
-    msg_system, msg_user = build_promptia_messages(promptia, contexte)
-
-    # 3) Enrichir le user_message avec l'exercice et la vision
-    user_blocks = [
-        msg_user["content"],
-        "----- EXERCICE À CORRIGER -----",
-        texte_exercice.strip()
-    ]
-    if donnees_vision:
-        if donnees_vision.get("elements_visuels"):
-            user_blocks.append("----- SCHÉMAS IDENTIFIÉS -----")
-            for element in donnees_vision["elements_visuels"]:
-                desc = element.get("description", "")
-                user_blocks.append(f"- {desc}")
-
-        if donnees_vision.get("formules_latex"):
-            user_blocks.append("----- FORMULES DÉTECTÉES -----")
-            for formule in donnees_vision["formules_latex"]:
-                user_blocks.append(f"- {formule}")
-
-    msg_user["content"] = "\n\n".join(user_blocks)
-
-    # 4) Préparation de l’appel API avec deux messages
     data = {
         "model": "deepseek-chat",
-        "messages": [msg_system, msg_user],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt_ia}
+        ],
         "temperature": 0.1,
         "max_tokens": 6000,
         "top_p": 0.9,
         "frequency_penalty": 0.1
     }
-    # URL et en-têtes pour l'appel DeepSeek
-    api_url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",  # Assurez-vous que DEEPSEEK_API_KEY est dans vos env vars
-        "Content-Type": "application/json"
-    }
+
     try:
-        print("📡 Appel API DeepSeek avec analyse vision...")
+        print("📡 Appel API DeepSeek pour exercice...")
 
         # Tentative avec vérification de qualité
         output = None
@@ -641,7 +359,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 print(f"🔄 Tentative {tentative + 1} - Qualité insuffisante, régénération...")
                 # Ajouter une consigne de rigueur pour la prochaine tentative
                 data["messages"][1][
-                    "content"] += "\n\n⚠️ ATTENTION : Sois plus rigoureux ! Exploite mieux les schémas identifiés. Vérifie tous tes calculs."
+                    "content"] += "\n\n⚠️ ATTENTION : Sois plus rigoureux ! Vérifie tous tes calculs. Donne des réponses complètes et exactes. Ne laisse aucune question sans réponse."
 
                 if tentative == 0:  # Attendre un peu avant la 2ème tentative
                     import time
@@ -650,17 +368,17 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             print("❌ Échec après 2 tentatives - qualité insuffisante")
             return "Erreur: Qualité du corrigé insuffisante après plusieurs tentatives", None
 
-        # Traitement de la réponse (identique à avant)
+        # 1) On récupère et loggue la réponse brute de l'IA
         output = response_data['choices'][0]['message']['content']
         print("✅ Réponse IA brute (début):")
         print(output[:500].replace("\n", "\\n"))
         print("… (total", len(output), "caractères)\n")
-
+        # 2) Fusion des blocs LaTeX multi-lignes (\[ … \]) en une seule ligne
         output = flatten_multiline_latex_blocks(output)
         print("🛠️ Après flatten_multiline_latex_blocks (début):")
         print(output[:500].replace("\n", "\\n"))
         print("… (total", len(output), "caractères)\n")
-
+        # Nettoyage/structuration dès la réception IA
         output_structured = format_corrige_pdf_structure(output)
         print("🧩 output_structured après format_corrige_pdf_structure:")
         print(output_structured[:500].replace("\n", "\\n"), "\n…\n")
@@ -669,18 +387,18 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         corrige_txt = output_structured
         graph_list = []
 
-        # Extraction graphique
+        # Extraction graphique: regex robuste !
         json_blocks = extract_json_blocks(output_structured)
         print(f"🔍 JSON blocks détectés : {len(json_blocks)}")
 
-        # Afficher chaque JSON brut
+        # 2) Afficher chaque JSON brut et son dict Python
         for i, (graph_dict, start, end) in enumerate(json_blocks, start=1):
             raw_json = output_structured[start:end]
             print(f"   ▶️ Bloc JSON {i} brut:")
             print(raw_json.replace("\n", "\\n"))
             print("   ▶️ Parsed Python dict :", graph_dict)
 
-        # Traitement des graphiques (identique à avant)
+        # 3) Pour éviter tout décalage, on traite du plus loin au plus près
         json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
 
         for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
@@ -695,6 +413,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                     f'<img src="file://{abs_path}" alt="Graphique {idx}" '
                     f'style="max-width:100%;margin:10px 0;" />'
                 )
+                # remplacement sans offset, indices toujours valables
                 corrige_txt = corrige_txt[:start] + img_tag + corrige_txt[end:]
                 graph_list.append(graph_dict)
                 print(f"✅ Graphique {idx} inséré")
@@ -702,6 +421,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 print(f"❌ Erreur génération graphique {idx}: {e}")
                 continue
 
+        # 4) Afficher un extrait du corrigé HTML final
         print("📝 Corrigé final (début) :")
         print(corrige_txt[:1000].replace("\n", "\\n"))
         print("… fin extrait Corrigé\n")
@@ -962,32 +682,220 @@ def extraire_texte_pdf(fichier_path):
         return ""
 
 
-# ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
+def extraire_texte_image(fichier_path):
+    """
+    1) Pré-traitement PIL (gris, resize, sharpen, contraste, binarisation)
+    2) OCR Tesseract pour le texte courant
+    3) OCR Mathpix pour les formules (LaTeX)
+    4) Fusion des deux résultats
+    """
+    try:
+        # 1) Chargement et pré-traitement
+        img = Image.open(fichier_path).convert("L")
+        # Resize adaptatif
+        scale = 3 if max(img.size) < 1500 else 2
+        img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+        # Netteté et réduction du bruit
+        img = img.filter(ImageFilter.SHARPEN)
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        # Contraste
+        img = ImageEnhance.Contrast(img).enhance(2.5)
+        # Luminosité
+        img = ImageEnhance.Brightness(img).enhance(1.2)
+        # Binarisation (seuil adaptatif simplifié)
+        def binarise(im):
+            hist = im.histogram()
+            total = im.width * im.height
+            cum = 0
+            thresh = 128
+            for i, c in enumerate(hist):
+                cum += c
+                if cum > total * 0.1:
+                    thresh = i
+                    break
+            return im.point(lambda x: 0 if x < thresh else 255, '1')
+        img = binarise(img)
+
+        # 2) OCR local (Tesseract)
+        custom_config = r'--oem 3 --psm 6'
+        texte_ocr = pytesseract.image_to_string(img, lang="fra+eng", config=custom_config).strip()
+
+        # 3) OCR formules (Mathpix)
+        print("⚙️ Appel à Mathpix OCR…")
+        try:
+            mp = ocr_mathpix(fichier_path)
+            print("✅ Mathpix renvoie latex_simplified :", repr(mp.get("latex_simplified", "")))
+            latex = mp.get("latex_simplified", "").strip()
+            if latex:
+                latex = "\n\n\\[" + latex + "\\]\n"
+        except Exception as e:
+            print("❌ Mathpix OCR échoué :", e)
+            latex = ""
+
+        # 4) Fusionner texte + formules
+        result = texte_ocr
+        if latex:
+            result += "\n\nFormules détectées :\n" + latex
+
+        print(f"🖨️ OCR final image : {len(result)} caractères")
+        return result
+
+    except Exception as e:
+        print(f"❌ Erreur OCR image : {e}")
+        return ""
+
+
+# ============== EXTRACTION TEXTE/FICHIER (PDF & IMAGE) ==============
 def extraire_texte_fichier(fichier_field):
     """
-    Extraction unique via l’analyse scientifique (OCR + IA).
+    - Si PDF    : extraire texte + tableaux (pdfminer + Camelot)
+    - Si image  : OCR Tesseract + Mathpix (via extraire_texte_image)
     """
     if not fichier_field:
         return ""
 
-    # 1) Sauvegarde locale
-    temp_dir = tempfile.gettempdir()
-    local_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
-    with open(local_path, "wb") as f:
+    # 1) Sauvegarde temporaire du fichier
+    temp_dir  = tempfile.gettempdir()
+    local     = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+    with open(local, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    # 2) Appel unique à l'analyse scientifique
-    analyse = analyser_document_scientifique(local_path)
+    ext = os.path.splitext(fichier_field.name)[1].lower()
 
-    # 3) Nettoyage du fichier temporaire
+    if ext == ".pdf":
+        # 2) Extraction texte PDF
+        try:
+            texte = extract_text(local).strip()
+            print(f"📄 PDF extrait : {len(texte)} caractères")
+        except Exception as e:
+            print(f"❌ Erreur extraction PDF : {e}")
+            texte = ""
+
+        # 3) Extraction des tableaux et description
+        descs = []
+        try:
+            tables = extraire_tables_pdf(local)
+            for idx, table in enumerate(tables, start=1):
+                desc = decrire_table_variation(table)
+                if desc:
+                    descs.append(desc)
+                    print(f"📋 Description table {idx} : {desc}")
+        except Exception as e:
+            print(f"❌ Erreur extraire_tables_pdf : {e}")
+
+        # 4) Concaténation
+        return "\n\n".join([texte] + descs).strip()
+
+    else:
+        # 5) Cas image : OCR Tesseract + Mathpix
+        try:
+            text_img = extraire_texte_image(local)
+        except Exception as e:
+            print(f"❌ Erreur OCR image : {e}")
+            text_img = ""
+
+        return text_img.strip()
+
+# ============== TABLEAUX DE VARIATION (Camelot) ==============
+
+def extraire_tables_pdf(path_pdf: str):
+    """
+    Détecte et renvoie la liste des tableaux dans le PDF.
+    """
     try:
-        os.unlink(local_path)
-    except:
-        pass
+        tables = camelot.read_pdf(path_pdf, pages='all', flavor='stream')
+        print(f"==== DEBUG Camelot : {len(tables)} table(s) détectée(s) dans {path_pdf} ====")
+        return tables
+    except Exception as e:
+        print(f"❌ Erreur Camelot.read_pdf sur {path_pdf} : {e}")
+        return []
 
-    # 4) Retourne le texte extrait
-    return analyse.get("texte_complet", "")
+def decrire_table_variation(table):
+    """
+    Si table.df ressemble à un tableau de variation, renvoie
+    une description détaillée (sens de variation, extrema…).
+    Sinon, retourne None sans lever d’exception.
+    """
+    try:
+        df = table.df.replace('', np.nan) \
+                     .dropna(how='all', axis=1) \
+                     .fillna(method='ffill')
+
+        # 1) S’assurer qu’il y a au moins 2 colonnes et 2 lignes (1 en-tête + 1 donnée)
+        if df.shape[1] < 2 or df.shape[0] < 2:
+            return None
+
+        # 2) Extraction des données (on saute la 1ʳᵉ ligne d’en-tête)
+        data = df.iloc[1:].reset_index(drop=True)
+        intervalles = data.iloc[:, 0].astype(str).tolist()
+
+        # 3) Conversion sécurisée des valeurs f(x)
+        valeurs = []
+        for val in data.iloc[:, 1]:
+            try:
+                valeurs.append(float(str(val).replace(',', '.')))
+            except:
+                valeurs.append(None)
+
+        # 4) Construction des descriptions de variation
+        descs = []
+        for i in range(len(valeurs) - 1):
+            v1, v2 = valeurs[i], valeurs[i+1]
+            a, b = intervalles[i], intervalles[i+1]
+            if v1 is None or v2 is None:
+                continue
+            if v2 > v1:
+                descs.append(f"f croissante de {a} à {b}")
+            elif v2 < v1:
+                descs.append(f"f décroissante de {a} à {b}")
+            else:
+                descs.append(f"f constante de {a} à {b}")
+
+        # 5) Recherche d’extrema
+        extrema = []
+        for i in range(1, len(valeurs) - 1):
+            v0, v1, v2 = valeurs[i-1], valeurs[i], valeurs[i+1]
+            x = intervalles[i]
+            if v1 is None or v0 is None or v2 is None:
+                continue
+            if v1 > v0 and v1 > v2:
+                extrema.append(f"maximum en {x} = {v1}")
+            elif v1 < v0 and v1 < v2:
+                extrema.append(f"minimum en {x} = {v1}")
+
+        # 6) Composition du texte final
+        parts = []
+        if descs:
+            parts.append("Tableau de variation : " + "; ".join(descs) + ".")
+        if extrema:
+            parts.append("Extrema : " + "; ".join(extrema) + ".")
+        return " ".join(parts) if parts else None
+
+    except Exception as e:
+        print(f"❌ Erreur decrire_table_variation: {e}")
+        return None
+
+
+def decrire_image(path_image: str) -> str:
+    """
+    Génère une légende / description de l'image via BLIP.
+    """
+    try:
+        print(f"🖼️ DEBUG – Captioning image : {path_image}")
+        img = Image.open(path_image).convert("RGB")
+        inputs = _processor(img, return_tensors="pt").to(device)
+        # Génération en une passe
+        out = _model.generate(**inputs, max_new_tokens=50)
+        caption = _processor.decode(out[0], skip_special_tokens=True)
+        caption = caption.strip()
+        print(f"🖼️ DEBUG – Légende générée : {caption}")
+        return "Description image : " + caption
+    except Exception as e:
+        print(f"❌ Erreur decrire_image pour {path_image} : {e}")
+        return "(Erreur description image)"
+
+# ============== NETTOYAGE / REFORMULATION AVEC GPT-3.5 ==============
 
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
@@ -1234,53 +1142,42 @@ def tracer_graphique(graphique_dict, output_name):
 
 
 # ===========================
-# PROMPT SYSTÈME AMÉLIORÉ AVEC VISION SCIENTIFIQUE
-DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie.
+# PROMPT PAR DEFAUT TRES DIRECTIF + EXEMPLES
+DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie , biologie, anglais, espagnole, allemand.
 
-🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
-
-RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
-1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
-2. ✅ Extrait les DONNÉES NUMÉRIQUES (angles, masses, distances, forces, tensions)
-3. ✅ Décris les RELATIONS SPATIALES entre les éléments
-4. ✅ Explique le CONCEPT SCIENTIFIQUE illustré
-
-EXEMPLES D'ANALYSE DE SCHÉMAS SCIENTIFIQUES :
-
---- PLAN INCLINÉ ---
-"Schéma identifié: plan incliné à 30° avec bloc de 2kg
-- Forces: poids (vertical ↓), réaction normale (⟂ plan), frottement (∥ plan)
-- Données: angle=30°, masse=2kg, g=10m/s²
-- Équations: P = mg = 20N, P∥ = P•sin(30°)=10N, P⟂ = P•cos(30°)=17.32N"
-
---- CIRCUIT ÉLECTRIQUE ---  
-"Circuit série: R1=10Ω, R2=20Ω, source E=12V
-- Lois: U = RI, loi des mailles ΣU=0
-- Calcul: Req = R1 + R2 = 30Ω, I = E/Req = 0.4A"
-
---- MOLÉCULE CHIMIQUE ---
-"Formule développée: CH3-CH2-OH (éthanol)
-- Groupes: OH (fonction alcool), CH3 (méthyle), CH2 (méthylène)
-- Liaisons: C-C simples, C-O simple, O-H simple"
-
-RÈGLES GÉNÉRALES DE CORRECTION :
+Règles ABSOLUES :
 - Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
-- Vérifie systématiquement tes résultats intermédiaires  
+- Vérifie systématiquement tes résultats intermédiaires
 - Ne laisse JAMAIS une question sans réponse complète
+- Si l'énoncé semble ambigu, prends l'interprétation mathématique standard
 - Donne TOUTES les étapes de calcul détaillées
 - Les réponses doivent être NUMÉRIQUEMENT EXACTES
 
+EXEMPLES DE RIGUEUR OBLIGATOIRE :
+
+--- DIVISIBILITÉ PAR 11 ---
+N = 26x95y → positions: (1:2, 2:6, 3:x, 4:9, 5:5, 6:y)
+Rang impair: positions 1,3,5 → 2 + x + 5 = 7 + x
+Rang pair: positions 2,4,6 → 6 + 9 + y = 15 + y
+Divisible par 11 ⇒ (7+x) - (15+y) = x - y - 8 ≡ 0 [11]
+⇒ x - y ≡ 8 [11] ⇒ x - y = 8 ou -3
+
+--- TRIPLETS PYTHAGORICIENS ---
+2015 = 5 × 13 × 31
+TP connu : (33,56,65) → multiplier par 31 → (1023,1736,2015)
+Formule : (2n+1)² + (2n²+2n)² = (2n²+2n+1)²
+
+--- COMPLEXES ---
+z = 1 - e^(iα) = e^(iα/2)(e^(-iα/2)-e^(iα/2)) = -2i e^(iα/2) sin(α/2)
+Module = 2|sin(α/2)|, Argument = α/2 - π/2 (mod π)
+
 FORMAT DE RÉPONSE :
 - Réponses complètes avec tous les calculs
-- Références aux schémas quand ils existent ("D'après le schéma...")
 - Justifications détaillées pour chaque étape
-- Ne jamais dire "je pense" ou "c'est ambigu"
+- Ne jamais dire "je pense" ou "c'est ambigu" - prends une décision claire
+- Dès qu'un exercice demande un graphique, tu termines la réponse concernée par la balise ---corrigé--- sur une ligne, puis sur la ligne suivante, le JSON du graphique : {"graphique": {...}}
 
-POUR LES GRAPHIQUES :
-- Dès qu'un exercice demande un graphique, utilise la balise ---corrigé--- suivie du JSON
-- Types supportés: "fonction", "histogramme", "diagramme à bandes", "nuage de points", etc.
-
-"Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python."
+Types supportés : "fonction", "histogramme", "diagramme à bandes", "nuage de points", "effectifs cumulés", "diagramme circulaire"/"camembert", "polygone", "cercle trigo".
 
 EXEMPLES :
 
@@ -1331,46 +1228,65 @@ Rappels :
 
 
 # ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
-def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere, donnees_vision=None,demande=None):
+
+def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere):
     """
-    Traitement direct pour les épreuves courtes avec données vision.
+    Traitement direct pour les épreuves courtes (un seul exercice).
+    Appelle la fonction par exercice pour centraliser l'extraction graphique.
     """
-    print("🎯 Traitement DIRECT avec analyse vision")
-    print("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
-          "/", type(demande))
-
-    # ✅ PASSER les données vision à la fonction de génération
-    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
+    print("🎯 Traitement DIRECT (épreuve courte)")
+    return generer_corrige_par_exercice(texte_enonce, contexte, matiere)
 
 
-def generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande):
-    pass
+def generer_corrige_decoupe(texte_epreuve, contexte, matiere):
+    """
+    Traitement par découpage pour les épreuves longues
+    """
+    print("🎯 Traitement AVEC DÉCOUPAGE (épreuve longue)")
+
+    exercices = separer_exercices(texte_epreuve)
+    tous_corriges = []
+    tous_graphiques = []
+
+    for i, exercice in enumerate(exercices, 1):
+        print(f"📝 Traitement exercice {i}/{len(exercices)}...")
+
+        corrige, graphiques = generer_corrige_par_exercice(exercice, contexte, matiere)
+
+        if corrige and not corrige.startswith("Erreur") and not corrige.startswith("Erreur API"):
+            titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
+            tous_corriges.append(titre_exercice + corrige)
+            if graphiques:
+                tous_graphiques.extend(graphiques)
+            print(f"✅ Exercice {i} traité avec succès")
+        else:
+            print(f"❌ Exercice {i} en erreur: {corrige}")
+        import time
+        time.sleep(1)
+
+    if tous_corriges:
+        corrige_final = "".join(tous_corriges)
+        print(f"🎉 Découpage terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
+        return corrige_final, tous_graphiques
+    else:
+        print("❌ Aucun corrigé généré")
+        return "Erreur: Aucun corrigé n'a pu être généré", []
 
 
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
-                                    demande=None, donnees_vision=None):  # ✅ NOUVEAU PARAMÈTRE
+                                    demande=None):
     """
-    Nouvelle version avec support des données vision
+    Nouvelle version avec découpage intelligent des épreuves longues
     """
-    print("\n[DEBUG] --> generer_corrige_ia_et_graphique called avec demande:",
-          getattr(demande, 'id', None), "/",
-          type(demande))
-
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
         exemples_corriges = []
 
     print("\n" + "=" * 60)
-    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION")
+    print("🚀 DÉBUT TRAITEMENT INTELLIGENT")
     print("=" * 60)
     print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
-
-    # ✅ NOUVEAU : Log des données vision
-    if donnees_vision:
-        print(f"🔬 Données vision disponibles:")
-        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
-        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
 
     # 1. ESTIMER LA COMPLEXITÉ
     tokens_estimes = estimer_tokens(texte_enonce)
@@ -1378,130 +1294,115 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
     if tokens_estimes < 1500:  # Épreuve courte
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
-        return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
-                                      donnees_vision,demande=demande)
-        # else:  # Épreuve longue
-        # print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        # return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
+        return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere)
+    else:  # Épreuve longue
+        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
+        return generer_corrige_decoupe(texte_enonce, contexte, matiere)
 
 
 # ============== TÂCHE ASYNCHRONE ==============
 
-#@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
-
-from celery import shared_task, group, chord
-from .tasks import generer_un_exercice        # vos sous-tâches sur child
-from correction.tasks import finalize_corrige  # le callback sur root
-from correction.models import DemandeCorrection, SoumissionIA
-from resources.models   import Matiere
-from .pdf_utils         import generer_pdf_corrige
-from abonnement.services import debiter_credit_abonnement
-
-@shared_task(
-    queue='root',
-    name='correction.ia_utils.generer_corrige_ia_et_graphique_async'
-)
+@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
-    """
-    Tâche principale (root queue) :
-    - Extraction texte + vision
-    - Estimation tokens
-    - Si court → traitement direct synchrone
-    - Si long  → découpage async sur child queue + callback finalize_corrige
-    """
-    logger.info("▶️ Start generer_corrige_ia_et_graphique_async (demande=%s)", demande_id)
+    from correction.models import DemandeCorrection, SoumissionIA
+    from resources.models import Matiere
 
-    # 1) Charger la demande et la soumission
-    demande    = DemandeCorrection.objects.get(id=demande_id)
-    soumission = SoumissionIA.objects.get(demande=demande)
+    try:
+        demande = DemandeCorrection.objects.get(id=demande_id)
+        soumission = SoumissionIA.objects.get(demande=demande)
 
-    # 2) Extraction OCR + BLIP + IA basique
-    soumission.statut     = 'extraction'
-    soumission.progression = 20
-    soumission.save()
+        soumission.statut = 'extraction'
+        soumission.progression = 20
+        soumission.save()
 
-    texte_brut     = ""
-    donnees_vision = {}
-    if demande.fichier:
-        temp_dir   = tempfile.gettempdir()
-        local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
-        with open(local_path, "wb") as f:
-            for chunk in demande.fichier.chunks():
-                f.write(chunk)
-        analyse = analyser_document_scientifique(local_path)
-        texte_brut     = analyse.get("texte_complet", "")
-        donnees_vision = {
-            "elements_visuels": analyse.get("elements_visuels", []),
-            "formules_latex":   analyse.get("formules_latex", []),
-            "structure_exercices": analyse.get("structure_exercices", [])
-        }
-        try: os.unlink(local_path)
-        except: pass
-    else:
-        texte_brut = demande.enonce_texte or ""
+        # 1) Extraction initiale
+        texte_brut = ""
+        if demande.fichier:
+            texte_brut = extraire_texte_fichier(demande.fichier)
+        else:
+            texte_brut = demande.enonce_texte or ""
 
-    logger.debug("Texte brut extrait (%d chars)", len(texte_brut))
+        print("📥 DEBUG – TEXTE BRUT (premiers 500 chars) :")
+        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
 
-    # 3) Analyse IA
-    soumission.statut     = 'analyse_ia'
-    soumission.progression = 40
-    soumission.save()
+        # 2) Extraction & description des tableaux
+        descs_tables = []
+        if demande.fichier:
+            path_pdf = demande.fichier.path
+            tables = extraire_tables_pdf(path_pdf)
+            for idx, table in enumerate(tables, start=1):
+                desc = decrire_table_variation(table)
+                if desc:
+                    descs_tables.append(desc)
+                    print(f"📋 DEBUG – Description table {idx} : {desc}")
 
-    matiere  = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
-    contexte = f"Exercice de {matiere.nom} - {getattr(demande.classe,'nom','')}"
-    tokens   = estimer_tokens(texte_brut)
+        print(f"🔍 DEBUG – Total descriptions tables : {len(descs_tables)}")
 
-    # 4A) Traitement direct pour petits sujets
-    if tokens < 1500:
-        logger.info("→ Traitement DIRECT (%d tokens)", tokens)
-        corrige_txt, graph_list = generer_corrige_par_exercice(
-            texte_brut, contexte, matiere, donnees_vision, demande
+        # 3) Assemblage du texte final pour l'IA
+        texte_enonce = texte_brut
+        if descs_tables:
+            texte_enonce += "\n\n" + "\n".join(descs_tables)
+
+        print("📥 DEBUG – TEXTE ENRICHI (après tables) :")
+        print(texte_enonce[:500].replace("\n", "\\n"), "...\n")
+
+        soumission.statut = 'analyse_ia'
+        soumission.progression = 40
+        soumission.save()
+
+        matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
+        contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
+
+        soumission.statut = 'generation_graphiques'
+        soumission.progression = 60
+        soumission.save()
+
+        # 3.b) Texte prêt pour DeepSeek (pas de nettoyage GPT-3.5)
+        texte_pret = texte_enonce
+        print("🧹 DEBUG – TEXTE PRÊT pour DeepSeek (premiers 500 chars) :")
+        print(texte_pret[:500].replace("\n", "\\n"), "...\n")
+
+        corrige_txt, graph_list = generer_corrige_ia_et_graphique(
+            texte_pret,
+            contexte,
+            matiere=matiere
         )
-        # PDF + débit crédit
-        soumission.statut     = 'formatage_pdf'
+
+        soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
 
-        pdf_path = generer_pdf_corrige({
-            "titre_corrige": contexte,
-            "corrige_html":  corrige_txt,
-            "soumission_id": demande_id
-        }, demande_id)
+        from .pdf_utils import generer_pdf_corrige
+        pdf_path = generer_pdf_corrige(
+            {
+                "titre_corrige": contexte,
+                "corrige_html": corrige_txt,
+                "soumission_id": demande_id
+            },
+            demande_id
+        )
 
-        if not debiter_credit_abonnement(demande.user):
-            soumission.statut = 'erreur_credit'
-            soumission.save()
-            return False
-
-        soumission.resultat_json = {
-            'corrige_text':   corrige_txt,
-            'pdf_url':        pdf_path,
-            'graphiques':     graph_list or [],
-            'analyse_vision': donnees_vision
-        }
-        soumission.statut     = 'termine'
+        soumission.statut = 'termine'
         soumission.progression = 100
+        soumission.resultat_json = {
+            'corrige_text': corrige_txt,
+            'pdf_url': pdf_path,
+            'graphiques': graph_list or []
+        }
         soumission.save()
 
         demande.corrigé = corrige_txt
         demande.save()
-        logger.info("✔️ Direct done for demande %s", demande_id)
+
+        print("🎉 TRAITEMENT TERMINÉ AVEC SUCCÈS!")
         return True
 
-    # 4B) Traitement long → découpage async via child + callback finalize_corrige
-    logger.info("→ Traitement ASYNCHRONE (%d tokens)", tokens)
-    soumission.statut     = 'generation_graphiques'
-    soumission.progression = 60
-    soumission.save()
+    except Exception as e:
+        print(f"❌ ERREUR dans la tâche IA: {e}")
+        try:
+            soumission.statut = 'erreur'
+            soumission.save()
+        except:
+            pass
+        return False
 
-    exercices = separer_exercices(texte_brut)
-    job_group = group(
-        generer_un_exercice.s(demande_id, ex, contexte, matiere.id, donnees_vision)
-        for ex in exercices
-    )
-
-    # Lancement du chord (group child + callback finalize_corrige sur root)
-    chord(job_group, finalize_corrige.s(demande_id, matiere.id, contexte))()
-
-    logger.info("▶️ Chord lancé, retour immédiat (demande=%s)", demande_id)
-    return True
