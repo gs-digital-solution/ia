@@ -265,22 +265,31 @@ LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'handlers': {
-        # Ecrit tout dans un fichier d'erreur dédié
         'file': {
-            'level': 'ERROR',
+            'level': 'INFO',       # passez à INFO ici
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'django-error.log'),
         },
         'console': {
             'class': 'logging.StreamHandler',
-            'level': 'ERROR',
+            'level': 'INFO',       # et ici
         },
     },
     'loggers': {
         'django': {
             'handlers': ['file', 'console'],
-            'level': 'ERROR',
+            'level': 'ERROR',      # Django reste en ERROR
             'propagate': True,
+        },
+        'celery': {
+            'handlers': ['console'],
+            'level': 'INFO',       # logs Celery au niveau INFO
+            'propagate': False,
+        },
+        'correction': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',       # tous les modules sous correction.*
+            'propagate': False,
         },
     },
 }

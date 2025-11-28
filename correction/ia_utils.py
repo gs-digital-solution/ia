@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 # Cache en mémoire des PromptIA pour éviter les hits répétés en BDD
 _PROMPTIA_CACHE = {}
 
+from celery import group, chord
+from .tasks import generer_un_exercice
+from .tasks import finalize_corrige
+
+
 # ========== BLIP LAZY-LOADER ==========
 _blip_model = None
 _blip_processor = None
@@ -1338,6 +1343,10 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
 
+def generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande):
+    pass
+
+
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
                                     demande=None, donnees_vision=None):  # ✅ NOUVEAU PARAMÈTRE
     """
@@ -1379,33 +1388,34 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 # ============== TÂCHE ASYNCHRONE ==============
 
 #@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
-from celery import shared_task
+
+from celery import shared_task, group, chord
+from .tasks import generer_un_exercice        # vos sous-tâches sur child
+from correction.tasks import finalize_corrige  # le callback sur root
+from correction.models import DemandeCorrection, SoumissionIA
+from resources.models   import Matiere
+from .pdf_utils         import generer_pdf_corrige
+from abonnement.services import debiter_credit_abonnement
+
 @shared_task(
     queue='root',
     name='correction.ia_utils.generer_corrige_ia_et_graphique_async'
 )
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     """
-    Tâche principale (root queue):
+    Tâche principale (root queue) :
     - Extraction texte + vision
     - Estimation tokens
     - Si court → traitement direct synchrone
-    - Si long  → découpage via group.get() sur child queue
+    - Si long  → découpage async sur child queue + callback finalize_corrige
     """
+    logger.info("▶️ Start generer_corrige_ia_et_graphique_async (demande=%s)", demande_id)
 
-    # 1) Imports locaux (pas de circular import)
-    from celery import group
-    from .tasks import generer_un_exercice
-    from correction.models import DemandeCorrection, SoumissionIA
-    from resources.models  import Matiere
-    from .pdf_utils        import generer_pdf_corrige
-    from abonnement.services import debiter_credit_abonnement
-
-    # 2) Récupération de la demande et création de la soumission
+    # 1) Charger la demande et la soumission
     demande    = DemandeCorrection.objects.get(id=demande_id)
     soumission = SoumissionIA.objects.get(demande=demande)
 
-    # 3) Extraction texte brut + vision (OCR + BLIP + IA basique)
+    # 2) Extraction OCR + BLIP + IA basique
     soumission.statut     = 'extraction'
     soumission.progression = 20
     soumission.save()
@@ -1415,16 +1425,14 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     if demande.fichier:
         temp_dir   = tempfile.gettempdir()
         local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
-        # sauvegarde locale
         with open(local_path, "wb") as f:
             for chunk in demande.fichier.chunks():
                 f.write(chunk)
-        # analyse scientifique complète
         analyse = analyser_document_scientifique(local_path)
         texte_brut     = analyse.get("texte_complet", "")
         donnees_vision = {
-            "elements_visuels":    analyse.get("elements_visuels", []),
-            "formules_latex":      analyse.get("formules_latex", []),
+            "elements_visuels": analyse.get("elements_visuels", []),
+            "formules_latex":   analyse.get("formules_latex", []),
             "structure_exercices": analyse.get("structure_exercices", [])
         }
         try: os.unlink(local_path)
@@ -1432,29 +1440,28 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     else:
         texte_brut = demande.enonce_texte or ""
 
-    logger.debug("Texte brut (500 premiers chars): %s", texte_brut[:500])
+    logger.debug("Texte brut extrait (%d chars)", len(texte_brut))
 
-    # 4) Passage à l'IA
+    # 3) Analyse IA
     soumission.statut     = 'analyse_ia'
     soumission.progression = 40
     soumission.save()
 
-    # 5) Contexte + estimation
-    matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
+    matiere  = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
     contexte = f"Exercice de {matiere.nom} - {getattr(demande.classe,'nom','')}"
-    tokens_estimes = estimer_tokens(texte_brut)
+    tokens   = estimer_tokens(texte_brut)
 
-    # 6A) Court → synchrone
-    if tokens_estimes < 1500:
+    # 4A) Traitement direct pour petits sujets
+    if tokens < 1500:
+        logger.info("→ Traitement DIRECT (%d tokens)", tokens)
         corrige_txt, graph_list = generer_corrige_par_exercice(
             texte_brut, contexte, matiere, donnees_vision, demande
         )
-        # Génération PDF + débit crédit
+        # PDF + débit crédit
         soumission.statut     = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
 
-        # créer le PDF
         pdf_path = generer_pdf_corrige({
             "titre_corrige": contexte,
             "corrige_html":  corrige_txt,
@@ -1466,74 +1473,35 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             soumission.save()
             return False
 
-        # finaliser
-        soumission.statut       = 'termine'
-        soumission.progression  = 100
         soumission.resultat_json = {
             'corrige_text':   corrige_txt,
             'pdf_url':        pdf_path,
             'graphiques':     graph_list or [],
             'analyse_vision': donnees_vision
         }
+        soumission.statut     = 'termine'
+        soumission.progression = 100
         soumission.save()
 
         demande.corrigé = corrige_txt
         demande.save()
-        logger.info("Traitement direct terminé pour demande %s", demande_id)
+        logger.info("✔️ Direct done for demande %s", demande_id)
         return True
 
-    # 6B) Long → découpage parallèle sur child queue
+    # 4B) Traitement long → découpage async via child + callback finalize_corrige
+    logger.info("→ Traitement ASYNCHRONE (%d tokens)", tokens)
     soumission.statut     = 'generation_graphiques'
     soumission.progression = 60
     soumission.save()
 
-    # split en exercices
     exercices = separer_exercices(texte_brut)
-
-    # création du group (child queue)
-    jobs = group(
+    job_group = group(
         generer_un_exercice.s(demande_id, ex, contexte, matiere.id, donnees_vision)
         for ex in exercices
     )
-    # exécution et collecte synchrone mais hors slot child
-    outputs = jobs.apply_async().get()  # ne bloque QUE le slot root
 
-    # reconstituer le corrigé global et les graphiques
-    corrige_final = "".join(
-        f"\n\n## 📝 Exercice {i+1}\n\n{out['corrige']}"
-        for i, out in enumerate(outputs) if out.get('corrige')
-    )
-    graph_list = [g for out in outputs for g in out.get('graphs', [])]
+    # Lancement du chord (group child + callback finalize_corrige sur root)
+    chord(job_group, finalize_corrige.s(demande_id, matiere.id, contexte))()
 
-    # génération du PDF final
-    soumission.statut     = 'formatage_pdf'
-    soumission.progression = 80
-    soumission.save()
-
-    pdf_path = generer_pdf_corrige({
-        "titre_corrige": contexte,
-        "corrige_html":  corrige_final,
-        "soumission_id": demande_id
-    }, demande_id)
-
-    # débit du crédit
-    if not debiter_credit_abonnement(demande.user):
-        soumission.statut = 'erreur_credit'
-        soumission.save()
-        return False
-
-    # finalisation
-    soumission.statut       = 'termine'
-    soumission.progression  = 100
-    soumission.resultat_json = {
-        'corrige_text':   corrige_final,
-        'pdf_url':        pdf_path,
-        'graphiques':     graph_list
-    }
-    soumission.save()
-
-    demande.corrigé = corrige_final
-    demande.save()
-
-    logger.info("Traitement long terminé pour demande %s", demande_id)
+    logger.info("▶️ Chord lancé, retour immédiat (demande=%s)", demande_id)
     return True
