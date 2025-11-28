@@ -1380,9 +1380,9 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
                                       donnees_vision,demande=demande)
-    else:  # Épreuve longue
-        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
+        # else:  # Épreuve longue
+        # print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
+        # return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
 
 # ============== TÂCHE ASYNCHRONE ==============
