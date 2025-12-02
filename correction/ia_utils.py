@@ -483,32 +483,8 @@ def extraire_graphiques_corrige(corrige_brut):
     pass
 
 
-# PAR :
-def extraire_graphiques_corrige(corrige_brut: str) -> list:
-    """
-    Extrait les blocs graphiques du corrigé brut
-    """
-    print("🔍 Extraction des graphiques du corrigé...")
-    graphiques = []
-
-    try:
-        # Recherche des blocs JSON dans le corrigé
-        json_blocks = extract_json_blocks(corrige_brut)
-        print(f"📊 {len(json_blocks)} bloc(s) JSON détecté(s)")
-
-        for graph_dict, start, end in json_blocks:
-            if isinstance(graph_dict, dict) and 'graphique' in graph_dict:
-                graphiques.append(graph_dict['graphique'])
-            elif isinstance(graph_dict, dict):
-                graphiques.append(graph_dict)
-
-    except Exception as e:
-        print(f"❌ Erreur extraction graphiques: {e}")
-
-    return graphiques
-
-
-def generer_corrige_par_exercice_optimise(texte_exercice: str, contexte: str, matiere=None, donnees_vision=None, demande=None) -> tuple:
+def generer_corrige_par_exercice_optimise(texte_exercice: str, contexte: str, matiere=None,
+                                          donnees_vision=None) -> tuple:
     """
     Génération de corrigé OPTIMISÉE avec gestion intelligente du modèle
     """
@@ -2039,19 +2015,14 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 
 # ============== TÂCHE ASYNCHRONE ==============
 
-def analyser_document_scientifique(fichier_path: str) -> dict:
-    """
-    Fonction d'analyse scientifique principale (alias vers la version optimisée)
-    Conservée pour la compatibilité avec le code existant
-    """
-    return analyser_document_scientifique_optimisee(fichier_path)
+def analyser_document_scientifique(local_path):
+    pass
 
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
     from resources.models import Matiere
-    from abonnement.services import debiter_credit_abonnement
 
     try:
         # Récupération de la demande et création de la soumission IA
@@ -2116,11 +2087,6 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
-
-        if not debiter_credit_abonnement(demande.user):
-            soumission.statut = 'erreur_credit'
-            soumission.save()
-            return False
 
         from .pdf_utils import generer_pdf_corrige
         pdf_path = generer_pdf_corrige(
