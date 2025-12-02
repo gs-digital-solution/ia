@@ -227,8 +227,8 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
 # TIME LIMITS (optionnel mais conseillé)
-CELERY_TASK_TIME_LIMIT      = 600  # max 10 min par tâche
-CELERY_TASK_SOFT_TIME_LIMIT = 540  # avertissement à 9 min
+#CELERY_TASK_TIME_LIMIT      = 600  # max 10 min par tâche
+#CELERY_TASK_SOFT_TIME_LIMIT = 540  # avertissement à 9 min
 
 # Pré‐fetch pour meilleure répartition
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
