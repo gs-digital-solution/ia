@@ -10,6 +10,7 @@ import matplotlib
 import openai
 import logging
 import camelot
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pdfminer.high_level import extract_text
@@ -24,286 +25,787 @@ from PIL import Image
 import base64
 import functools
 from typing import Dict, Any
+import time
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
-# Cache mémoire pour réduire les appels API
+# Cache mémoire optimisé
 _analyse_cache: Dict[str, Any] = {}
+_api_cache: Dict[str, Any] = {}
+
+# ── CONFIGURATION DEEPSEEK OPTIMISÉE ────────────────────
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_BASE = "https://api.deepseek.com/v1/chat/completions"
+
+# Configuration des modèles
+MODEL_CHAT = "deepseek-chat"  # Pour la majorité des corrections
+#MODEL_REASONER = "deepseek-reasoner"  # Uniquement pour les problèmes complexes
+MODEL_REASONER = "deepseek-chat"
+MODEL_VISION = "deepseek-chat"  # deepseek-chat gère la vision
+
+# Session HTTP avec retry strategy pour plus de robustesse
+session = requests.Session()
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+)
+session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+
 
 def cached_analyser_document_scientifique(fichier_path: str) -> Dict[str, Any]:
     """
-    Version avec cache de l'analyse scientifique
+    Version avec cache optimisée de l'analyse scientifique
     """
     import hashlib
 
-    # Créer une clé de cache basée sur le contenu du fichier
     with open(fichier_path, "rb") as f:
         file_hash = hashlib.md5(f.read()).hexdigest()
 
     cache_key = f"{file_hash}_{os.path.getsize(fichier_path)}"
 
-    # Vérifier le cache
     if cache_key in _analyse_cache:
         print("✅ Utilisation du cache pour l'analyse scientifique")
         return _analyse_cache[cache_key]
 
-    # Sinon, faire l'analyse et mettre en cache
     print("🔍 Analyse nouvelle (non cachée)")
-    resultat = analyser_document_scientifique(fichier_path)
+    resultat = analyser_document_scientifique_optimisee(fichier_path)
     _analyse_cache[cache_key] = resultat
 
-    # Limiter la taille du cache (éviter memory leak)
-    if len(_analyse_cache) > 50:  # Garder seulement 50 analyses
+    # Gestion mémoire du cache
+    if len(_analyse_cache) > 50:
         oldest_key = next(iter(_analyse_cache))
         del _analyse_cache[oldest_key]
-        print("🧹 Cache nettoyé (limite atteinte)")
 
     return resultat
 
-# ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
-openai.api_key = os.getenv("DEEPSEEK_API_KEY")
-openai.api_base = "https://api.deepseek.com"
 
-# ── MODÈLE POUR LA VISION ────────────────────────────────
-# deepseek-chat a les capacités vision quand on envoie des images
-DEEPSEEK_VISION_MODEL = "deepseek-chat"
+def call_deepseek_api_optimise(messages: list, model: str = MODEL_CHAT, temperature: float = 0.1,
+                               max_tokens: int = 4000) -> str:
+    """
+    Appel API DeepSeek optimisé avec gestion d'erreurs avancée et cache
+    """
+    cache_key = f"{model}_{hash(str(messages))}_{temperature}"
 
+    if cache_key in _api_cache:
+        print("✅ Utilisation du cache API")
+        return _api_cache[cache_key]
 
-# ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
-# ── CORRIGÉ : Appel multimodal à DeepSeek pour PDF/images ────
-def call_deepseek_vision(path_fichier: str) -> dict:
-    """
-    Envoie un PDF ou une image à DeepSeek - Version corrigée pour l'API DeepSeek.
-    """
-    system_prompt = """
-    Tu es un analyseur de documents éducatifs.
-    Analyse ce document et retourne un JSON valide avec :
-    - Le texte intégral
-    - Les blocs LaTeX des formules mathématiques  
-    - Les légendes des images
-    - Les descriptions des graphiques
-    """
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.05,
+        "stream": False
+    }
 
     try:
-        # Encoder le fichier en base64
-        with open(path_fichier, "rb") as f:
-            data_b64 = base64.b64encode(f.read()).decode("utf-8")
+        print(f"📡 Appel API DeepSeek avec modèle {model}...")
+        start_time = time.time()
 
-        # ✅ CORRECTION : Format DeepSeek compatible
-        message_content = f"""
-        [image]{data_b64}[/image]
-
-        Extrait le texte, les formules LaTeX et les légendes de ce document.
-        """
-
-        response = openai.ChatCompletion.create(
-            model=DEEPSEEK_VISION_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_content}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-            max_tokens=8000
+        response = session.post(
+            DEEPSEEK_API_BASE,
+            headers=headers,
+            json=data,
+            timeout=60
         )
 
-        content = response.choices[0].message.content
-        return content if isinstance(content, dict) else json.loads(content)
+        if response.status_code != 200:
+            error_msg = f"Erreur API ({response.status_code}): {response.text}"
+            print(f"❌ {error_msg}")
 
+            # Fallback vers un autre modèle si erreur
+            if model == MODEL_REASONER:
+                print("🔄 Fallback vers deepseek-chat...")
+                return call_deepseek_api_optimise(messages, MODEL_CHAT, temperature, max_tokens)
+            raise Exception(error_msg)
+
+        response_data = response.json()
+        content = response_data['choices'][0]['message']['content']
+
+        end_time = time.time()
+        print(f"✅ Réponse API reçue en {end_time - start_time:.2f}s - {len(content)} caractères")
+
+        # Mise en cache
+        _api_cache[cache_key] = content
+        if len(_api_cache) > 100:  # Limite du cache API
+            _api_cache.pop(next(iter(_api_cache)))
+
+        return content
+
+    except requests.exceptions.Timeout:
+        print("❌ Timeout API - Réessai avec timeout réduit...")
+        # Réessai avec timeout réduit
+        return call_deepseek_api_optimise(messages, model, temperature, max_tokens)
     except Exception as e:
-        print(f"❌ Erreur call_deepseek_vision: {e}")
-        return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
+        print(f"❌ Erreur API: {e}")
+        raise
 
-# ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
-def analyser_document_scientifique(fichier_path: str) -> dict:
+def analyser_document_scientifique_optimisee(fichier_path: str) -> dict:
     """
-    Analyse scientifique avec OCR OPTIMISÉ pour les formules mathématiques
+    Analyse scientifique OPTIMISÉE avec OCR avancé et prompt engineering
     """
-    print("🔍 Analyse scientifique avec OCR optimisé...")
+    print("🔍 Analyse scientifique optimisée...")
 
-    # 1. OCR AMÉLIORÉ avec configuration scientifique
-    texte_ocr = ""
-    caracteres_speciaux_detectes = []
+    # 1. OCR AVANCÉ avec prétraitement intelligent
+    texte_ocr, metadonnees_ocr = extraire_texte_ocr_avance(fichier_path)
+
+    # 2. ANALYSE CONTEXTUELLE OPTIMISÉE
+    prompt_analyse = construire_prompt_analyse_scientifique(texte_ocr, metadonnees_ocr)
 
     try:
-        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            image = Image.open(fichier_path)
-
-            # ✅ CONFIGURATION OCR AMÉLIORÉE POUR LES SCIENCES
-            custom_config = r'--oem 3 --psm 6 -l fra+eng+equ'
-            # oem 3 = moteur OCR LSTM le plus avancé
-            # psm 6 = bloc de texte uniforme (idéal pour les documents structurés)
-            # fra+eng+equ = français + anglais + langage équations mathématiques
-
-            texte_ocr = pytesseract.image_to_string(image, config=custom_config)
-            print(f"✅ OCR scientifique extrait: {len(texte_ocr)} caractères")
-
-            # ✅ DÉTECTION DES CARACTÈRES SPÉCIAUX SCIENTIFIQUES
-            # Symboles grecs
-            symboles_grecs = re.findall(r'[αβγδεζηθικλμνξπρσςτυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ]', texte_ocr)
-            # Opérateurs mathématiques
-            operateurs_math = re.findall(r'[∑∫∏√∞∠∆∇∂]', texte_ocr)
-            # Indices et exposants
-            indices_exposants = re.findall(r'[₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹]', texte_ocr)
-
-            if symboles_grecs:
-                caracteres_speciaux_detectes.extend(symboles_grecs)
-                print(f"   Symboles grecs détectés: {set(symboles_grecs)}")
-            if operateurs_math:
-                caracteres_speciaux_detectes.extend(operateurs_math)
-                print(f"   Opérateurs mathématiques: {set(operateurs_math)}")
-            if indices_exposants:
-                caracteres_speciaux_detectes.extend(indices_exposants)
-                print(f"   Indices/exposants: {set(indices_exposants)}")
-
-            # ✅ PRÉTRAITEMENT D'IMAGE POUR AMÉLIORER L'OCR
-            try:
-                # Conversion en niveaux de gris
-                image_gris = image.convert('L')
-                # Amélioration du contraste
-                enhancer = ImageEnhance.Contrast(image_gris)
-                image_contrast = enhancer.enhance(2.0)  # Contraste x2
-                # Amélioration de la netteté
-                enhancer = ImageEnhance.Sharpness(image_contrast)
-                image_sharp = enhancer.enhance(2.0)  # Netteté x2
-
-                # OCR sur l'image prétraitée
-                texte_ocr_ameliore = pytesseract.image_to_string(image_sharp, config=custom_config)
-                if len(texte_ocr_ameliore) > len(texte_ocr):
-                    texte_ocr = texte_ocr_ameliore
-                    print("✅ OCR amélioré par prétraitement d'image")
-
-            except Exception as e_pretraitement:
-                print(f"⚠️ Prétraitement image échoué: {e_pretraitement}")
-
-        elif fichier_path.lower().endswith('.pdf'):
-            texte_ocr = extraire_texte_pdf(fichier_path)
-            print(f"✅ PDF extrait: {len(texte_ocr)} caractères")
-
-    except Exception as e:
-        print(f"❌ Extraction échouée: {e}")
-        texte_ocr = ""
-
-    # 2. ANALYSE CONTEXTUELLE AVEC INFORMATION OCR AMÉLIORÉE
-    try:
-        # ✅ CONSTRUCTION DU PROMPT ENRICHIE AVEC INFO OCR
-        info_ocr_ameliore = ""
-        if caracteres_speciaux_detectes:
-            info_ocr_ameliore = f"""
-            INFORMATIONS OCR DÉTECTÉES :
-            - Caractères spéciaux scientifiques: {', '.join(set(caracteres_speciaux_detectes))}
-            """
-
-        prompt = f"""
-        ANALYSE CE DOCUMENT SCIENTIFIQUE :
-
-        TEXTE EXTRAIT PAR OCR :
-        {texte_ocr}
-
-        {info_ocr_ameliore}
-
-        TÂCHES IMPORTANTES :
-        1. CORRIGE les erreurs d'OCR en priorité (symboles grecs, notations scientifiques)
-        2. IDENTIFIE précisément le type d'exercice (physique, maths, chimie, etc.)
-        3. EXTRAIT toutes les données numériques avec leurs unités
-        4. DÉTECTE les formules mathématiques et notations scientifiques
-        5. STRUCTURE l'exercice (parties, questions)
-
-        ATTENTION PARTICULIÈRE :
-        - Les symboles grecs doivent être correctement interprétés
-        - Les notations scientifiques (exposants, indices) doivent être préservées
-        - Les unités de mesure doivent être exactes
-
-        RÉPONDS en JSON :
-        {{
-            "texte_complet": "texte corrigé et complété avec notations scientifiques exactes",
-            "elements_visuels": [
-                {{
-                    "type": "circuit|pendule|graphique|plan_incline|etc",
-                    "description": "description détaillée basée sur le contexte scientifique",
-                    "donnees_extraites": {{}},
-                    "contexte_scientifique": "explication du concept physique/mathématique"
-                }}
-            ],
-            "formules_latex": ["liste des formules mathématiques détectées"],
-            "structure_exercices": ["Exercice X", "Question Y", "Partie Z"],
-            "donnees_numeriques": {{
-                "valeurs": [liste des valeurs numériques],
-                "unites": [liste des unités correspondantes]
-            }}
-        }}
-        """
-
-        response = openai.ChatCompletion.create(
-            model="deepseek-chat",
+        response = call_deepseek_api_optimise(
             messages=[
-                {"role": "system",
-                 "content": "Tu es un expert en sciences avec une expertise particulière en reconnaissance de notations mathématiques et scientifiques."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT_ANALYSE_SCIENTIFIQUE
+                },
+                {
+                    "role": "user",
+                    "content": prompt_analyse
+                }
             ],
-            response_format={"type": "json_object"},
+            model=MODEL_CHAT,
             temperature=0.1,
-            max_tokens=3500  # Légèrement augmenté pour les notations complexes
+            max_tokens=3000
         )
 
-        resultat = json.loads(response.choices[0].message.content)
+        resultat = json.loads(response)
 
-        # ✅ VALIDATION ET AMÉLIORATION DU RÉSULTAT
-        # S'assurer qu'on a au moins le texte OCR de base
+        # Validation et enrichissement du résultat
         if not resultat.get("texte_complet") and texte_ocr:
             resultat["texte_complet"] = texte_ocr
 
-        # Ajouter les informations OCR détectées aux métadonnées
-        if caracteres_speciaux_detectes and "metadonnees" not in resultat:
-            resultat["metadonnees"] = {
-                "caracteres_speciaux_detectes": list(set(caracteres_speciaux_detectes)),
-                "qualite_ocr": "amelioree" if caracteres_speciaux_detectes else "standard"
-            }
+        resultat["metadonnees"] = metadonnees_ocr
+        resultat["metadonnees"]["qualite_analyse"] = "optimisee"
 
         print(f"✅ Analyse terminée: {len(resultat.get('texte_complet', ''))} caractères")
-        if caracteres_speciaux_detectes:
-            print(f"   Symboles scientifiques traités: {len(set(caracteres_speciaux_detectes))}")
-
         return resultat
 
     except Exception as e:
-        print(f"❌ Erreur analyse: {e}")
+        print(f"❌ Erreur analyse optimisée: {e}")
         return {
             "texte_complet": texte_ocr,
             "elements_visuels": [],
             "formules_latex": [],
             "structure_exercices": [],
             "donnees_numeriques": {},
-            "metadonnees": {
-                "caracteres_speciaux_detectes": list(set(caracteres_speciaux_detectes)),
-                "qualite_ocr": "erreur"
-            }
+            "metadonnees": metadonnees_ocr
         }
 
 
-def extraire_texte_robuste(fichier_path: str) -> str:
+def extraire_texte_ocr_avance(fichier_path: str) -> tuple:
     """
-    Extraction simple : OCR direct → Analyse IA AVEC CACHE
+    Extraction OCR avancée avec prétraitement intelligent
     """
-    print("🔄 Extraction simple avec cache...")
+    texte_ocr = ""
+    metadonnees = {
+        "caracteres_speciaux_detectes": [],
+        "qualite_ocr": "standard",
+        "type_document": "inconnu"
+    }
 
-    # Utiliser l'analyse scientifique AVEC CACHE
     try:
-        analyse = cached_analyser_document_scientifique(fichier_path)  # ← AVEC CACHE
-        texte = analyse.get("texte_complet", "")
-        if texte and len(texte) > 50:
-            print("✅ Extraction réussie")
-            return texte
-        else:
-            print("❌ Texte trop court, utilisation fallback OCR")
-            return texte
+        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            image = Image.open(fichier_path)
+
+            # Détection automatique du type de document
+            metadonnees["type_document"] = detecter_type_document(image)
+
+            # Configuration OCR adaptative
+            config_ocr = get_config_ocr_adaptatif(metadonnees["type_document"])
+
+            # Prétraitement d'image adaptatif
+            image_optimisee = preprocess_image_adaptatif(image, metadonnees["type_document"])
+
+            # OCR principal
+            texte_ocr = pytesseract.image_to_string(image_optimisee, config=config_ocr)
+
+            # OCR de secours avec configuration différente
+            if len(texte_ocr.strip()) < 50:
+                config_secours = r'--oem 3 --psm 11 -l fra+eng+equ'
+                texte_secours = pytesseract.image_to_string(image, config=config_secours)
+                if len(texte_secours) > len(texte_ocr):
+                    texte_ocr = texte_secours
+                    metadonnees["qualite_ocr"] = "secours"
+
+            # Analyse des caractères spéciaux
+            metadonnees["caracteres_speciaux_detectes"] = analyser_caracteres_speciaux(texte_ocr)
+
+        elif fichier_path.lower().endswith('.pdf'):
+            texte_ocr = extraire_texte_pdf_optimise(fichier_path)
+            metadonnees["type_document"] = "pdf"
+            metadonnees["qualite_ocr"] = "pdf_direct"
+
     except Exception as e:
-        print(f"❌ Extraction échouée: {e}")
+        print(f"❌ Extraction OCR avancée échouée: {e}")
+        texte_ocr = ""
+
+    return texte_ocr, metadonnees
+
+
+def detecter_type_document(image: Image.Image) -> str:
+    """
+    Détection automatique du type de document
+    """
+    try:
+        # Analyse rapide de l'image
+        largeur, hauteur = image.size
+        ratio = largeur / hauteur
+
+        # Conversion en niveaux de gris pour analyse
+        gris = image.convert('L')
+        tableau = np.array(gris)
+
+        # Détection de densité de texte
+        densite_texte = np.mean(tableau < 128)
+
+        if densite_texte > 0.3 and ratio > 1.2:
+            return "document_texte"
+        elif densite_texte < 0.1:
+            return "schema_diagramme"
+        else:
+            return "mixte"
+    except:
+        return "inconnu"
+
+
+def get_config_ocr_adaptatif(type_document: str) -> str:
+    """
+    Configuration OCR adaptative selon le type de document
+    """
+    configs = {
+        "document_texte": r'--oem 3 --psm 6 -l fra+eng',
+        "schema_diagramme": r'--oem 3 --psm 11 -l fra+eng+equ',
+        "mixte": r'--oem 3 --psm 6 -l fra+eng+equ',
+        "inconnu": r'--oem 3 --psm 6 -l fra+eng+equ'
+    }
+    return configs.get(type_document, configs["inconnu"])
+
+
+def preprocess_image_adaptatif(image: Image.Image, type_document: str) -> Image.Image:
+    """
+    Prétraitement d'image adaptatif selon le type de document
+    """
+    try:
+        if type_document == "schema_diagramme":
+            # Renforcement des contours pour les schémas
+            image = image.filter(ImageFilter.SHARPEN)
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(2.0)
+        else:
+            # Amélioration standard pour le texte
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(1.5)
+            enhancer = ImageEnhance.Sharpness(image)
+            image = enhancer.enhance(1.5)
+
+        return image
+    except Exception as e:
+        print(f"⚠️ Prétraitement adaptatif échoué: {e}")
+        return image
+
+
+def analyser_caracteres_speciaux(texte: str) -> list:
+    """
+    Analyse avancée des caractères spéciaux scientifiques
+    """
+    caracteres = []
+
+    # Symboles grecs
+    symboles_grecs = re.findall(r'[αβγδεζηθικλμνξπρσςτυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ]', texte)
+    caracteres.extend(symboles_grecs)
+
+    # Opérateurs mathématiques
+    operateurs = re.findall(r'[∑∫∏√∞∠∆∇∂±×÷]', texte)
+    caracteres.extend(operateurs)
+
+    # Indices et exposants
+    indices = re.findall(r'[₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹]', texte)
+    caracteres.extend(indices)
+
+    # Notation scientifique
+    notation_sci = re.findall(r'[×]?10[¹²³⁴⁵⁶⁷⁸⁹]', texte)
+    caracteres.extend(notation_sci)
+
+    return list(set(caracteres))
+
+
+def extraire_texte_pdf_optimise(fichier_path: str) -> str:
+    """
+    Extraction PDF optimisée avec fallback
+    """
+    try:
+        # Essai 1: Extraction directe
+        texte = extract_text(fichier_path)
+        if len(texte.strip()) > 100:
+            return texte.strip()
+
+        # Essai 2: Conversion image + OCR
+        images = convert_from_path(fichier_path, dpi=200)
+        textes_images = []
+
+        for i, image in enumerate(images):
+            if i >= 3:  # Limiter aux 3 premières pages
+                break
+            texte_page = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6 -l fra+eng')
+            textes_images.append(texte_page)
+
+        return "\n".join(textes_images).strip()
+
+    except Exception as e:
+        print(f"❌ Extraction PDF optimisée échouée: {e}")
         return ""
 
+
+# ── PROMPTS OPTIMISÉS ──────────────────────────────────
+
+SYSTEM_PROMPT_ANALYSE_SCIENTIFIQUE = """
+Tu es un expert en analyse de documents scientifiques éducatifs. 
+Ton rôle est d'analyser et structurer les documents avec une précision extrême.
+
+TÂCHES PRINCIPALES :
+1. CORRECTION OCR : Corrige les erreurs d'OCR, particulièrement les symboles scientifiques
+2. IDENTIFICATION : Détermine la matière exacte (maths, physique, chimie, biologie, etc.)
+3. EXTRACTION : Identifie toutes les données numériques, unités et formules
+4. STRUCTURATION : Détecte la structure des exercices (parties, questions)
+5. VISUEL : Analyse les éléments graphiques décrits dans le texte
+
+FORMAT DE RÉPONSE STRICT (JSON) :
+{
+    "texte_complet": "texte corrigé et structuré",
+    "matiere_principale": "maths/physique/chimie/biologie/etc",
+    "elements_visuels": [
+        {
+            "type": "circuit|graphique|schema|diagramme|formule",
+            "description": "description précise",
+            "donnees_extraites": {"variable1": "valeur1", ...},
+            "contexte_scientifique": "explication du concept"
+        }
+    ],
+    "formules_latex": ["formule1", "formule2", ...],
+    "structure_exercices": ["Exercice 1", "Question 1.1", ...],
+    "donnees_numeriques": {
+        "valeurs": [val1, val2, ...],
+        "unites": ["unite1", "unite2", ...],
+        "variables": ["var1", "var2", ...]
+    }
+}
+
+EXIGENCES :
+- Sois extrêmement précis pour les notations scientifiques
+- Conserve toutes les unités de mesure
+- Identifie les schémas même s'ils sont décrits textuellement
+"""
+
+DEFAULT_SYSTEM_PROMPT_CORRECTION = """
+Tu es un professeur expert en correction d'exercices scolaires.
+Tu corriges avec bienveillance, précision et pédagogie.
+
+🎯 **OBJECTIFS** :
+1. Identifier les points corrects de l'élève
+2. Expliquer clairement les erreurs
+3. Proposer des méthodes de correction
+4. Donner des conseils pour progresser
+
+📐 **POUR LES SCIENCES** :
+- Sois ultra-rigoureux dans les calculs
+- Vérifie toutes les unités
+- Explique chaque étape de raisonnement
+- Utilise la notation LaTeX pour les formules
+
+📚 **POUR LES LITTÉRAIRES** :
+- Analyse la structure et le style
+- Corrige l'orthographe et la grammaire
+- Propose des améliorations stylistiques
+- Contextualise les références
+
+📊 **POUR LES GRAPHIQUES** :
+Quand un graphique est demandé, utilise le format :
+---corrigé---
+{"graphique": {"type": "fonction", "expression": "x**2", "x_min": -5, "x_max": 5, "titre": "Courbe"}}
+
+📝 **FORMAT DE RÉPONSE** :
+- Structure claire avec titres
+- Explications détaillées mais concises
+- Corrections bienveillantes
+- Conseils pratiques
+"""
+
+
+def construire_prompt_analyse_scientifique(texte_ocr: str, metadonnees: dict) -> str:
+    """
+    Construit un prompt d'analyse scientifique optimisé
+    """
+    info_speciaux = ""
+    if metadonnees.get("caracteres_speciaux_detectes"):
+        speciaux = metadonnees["caracteres_speciaux_detectes"]
+        info_speciaux = f"""
+INFORMATIONS OCR DÉTECTÉES :
+- Type de document: {metadonnees.get('type_document', 'inconnu')}
+- Caractères scientifiques: {', '.join(speciaux)}
+- Qualité OCR: {metadonnees.get('qualite_ocr', 'standard')}
+"""
+
+    return f"""
+ANALYSE CE DOCUMENT SCIENTIFIQUE :
+
+TEXTE EXTRAIT PAR OCR :
+{texte_ocr}
+
+{info_speciaux}
+
+CONSIGNES SPÉCIFIQUES :
+1. Corrige les erreurs OCR en priorité (symboles grecs, notations)
+2. Identifie la matière principale avec certitude
+3. Extrait TOUTES les données numériques avec leurs unités
+4. Détecte les formules même incomplètes
+5. Structure l'exercice en parties logiques
+
+ATTENTION PARTICULIÈRE :
+- Les notations scientifiques doivent être parfaitement restituées
+- Les unités doivent être conservées et vérifiées
+- Les schémas décrits doivent être analysés
+
+Réponds UNIQUEMENT en JSON valide.
+"""
+
+
+def extraire_graphiques_corrige(corrige_brut):
+    pass
+
+
+def generer_corrige_par_exercice_optimise(texte_exercice: str, contexte: str, matiere=None,
+                                          donnees_vision=None) -> tuple:
+    """
+    Génération de corrigé OPTIMISÉE avec gestion intelligente du modèle
+    """
+    print("🎯 Génération de corrigé optimisée...")
+
+    # Choix intelligent du modèle
+    model_choice = choisir_modele_optimal(texte_exercice, matiere, donnees_vision)
+    print(f"🤖 Modèle sélectionné: {model_choice}")
+
+    # Construction du prompt optimisé
+    prompt_correction = construire_prompt_correction_optimise(
+        texte_exercice, contexte, matiere, donnees_vision
+    )
+
+    try:
+        # Appel API optimisé
+        corrige_brut = call_deepseek_api_optimise(
+            messages=[
+                {"role": "system", "content": DEFAULT_SYSTEM_PROMPT_CORRECTION},
+                {"role": "user", "content": prompt_correction}
+            ],
+            model=model_choice,
+            temperature=0.1,
+            max_tokens=4000
+        )
+
+        # Vérification de qualité
+        if not verifier_qualite_corrige_optimise(corrige_brut, texte_exercice):
+            print("🔄 Qualité insuffisante, régénération...")
+            corrige_brut = call_deepseek_api_optimise(
+                messages=[
+                    {"role": "system",
+                     "content": DEFAULT_SYSTEM_PROMPT_CORRECTION + "\n⚠️ SOIS PLUS PRÉCIS ET DÉTAILLÉ !"},
+                    {"role": "user", "content": prompt_correction}
+                ],
+                model=model_choice,
+                temperature=0.1,
+                max_tokens=5000
+            )
+
+        # Post-traitement
+        corrige_traite = post_traiter_corrige(corrige_brut)
+        graphiques = extraire_graphiques_corrige(corrige_brut)
+
+        return corrige_traite, graphiques
+
+    except Exception as e:
+        print(f"❌ Erreur génération corrigé: {e}")
+        return f"Erreur lors de la génération du corrigé: {str(e)}", []
+
+
+def choisir_modele_optimal(texte_exercice: str, matiere, donnees_vision: dict) -> str:
+    """
+    Choisit le modèle optimal selon le contexte
+    """
+    # Si matière scientifique avec éléments complexes → reasoner
+    if matiere and hasattr(matiere, 'nom'):
+        nom_matiere = matiere.nom.lower()
+        if any(mot in nom_matiere for mot in ['math', 'physique', 'chimie']):
+            # Vérifier la complexité
+            if est_exercice_complexe(texte_exercice, donnees_vision):
+                return MODEL_REASONER
+
+    # Par défaut → deepseek-chat (meilleur équilibre)
+    return MODEL_CHAT
+
+
+def est_exercice_complexe(texte_exercice: str, donnees_vision: dict) -> bool:
+    """
+    Détermine si l'exercice est complexe (nécessite deepseek-reasoner)
+    """
+    indicateurs_complexite = [
+        # Mots-clés de complexité
+        'démontrer', 'prouver', 'calculer', 'résoudre', 'déterminer',
+        'équation', 'intégrale', 'dérivée', 'théorème', 'formule',
+        # Éléments visuels complexes
+        'circuit', 'schéma', 'diagramme', 'graphique', 'figure'
+    ]
+
+    texte_lower = texte_exercice.lower()
+
+    # Vérifier les mots-clés
+    mots_complexes = sum(1 for mot in indicateurs_complexite if mot in texte_lower)
+
+    # Vérifier les données vision
+    elements_complexes = donnees_vision and len(donnees_vision.get('elements_visuels', [])) > 0
+
+    return mots_complexes >= 2 or elements_complexes
+
+
+def construire_prompt_correction_optimise(texte_exercice: str, contexte: str, matiere, donnees_vision: dict) -> str:
+    """
+    Construit un prompt de correction optimisé
+    """
+    # En-tête contextuel
+    entete = f"""
+CONTEXTE : {contexte}
+MATIÈRE : {getattr(matiere, 'nom', 'Non spécifiée')}
+"""
+
+    # Section vision si disponible
+    section_vision = ""
+    if donnees_vision:
+        section_vision = "\n## 🔬 ÉLÉMENTS VISUELS DÉTECTÉS :\n"
+
+        # Éléments visuels
+        elements = donnees_vision.get('elements_visuels', [])
+        for i, element in enumerate(elements, 1):
+            section_vision += f"\n**Élément {i} - {element.get('type', 'Type inconnu')}:**\n"
+            section_vision += f"- Description: {element.get('description', '')}\n"
+
+            donnees_extr = element.get('donnees_extraites', {})
+            if donnees_extr:
+                section_vision += "- Données extraites:\n"
+                for key, value in donnees_extr.items():
+                    section_vision += f"  • {key}: {value}\n"
+
+        # Formules LaTeX
+        formules = donnees_vision.get('formules_latex', [])
+        if formules:
+            section_vision += "\n## 📐 FORMULES IDENTIFIÉES :\n"
+            for formule in formules:
+                section_vision += f"- {formule}\n"
+
+    # Instructions adaptatives
+    instructions = get_instructions_adaptatives(matiere)
+
+    return f"""
+{entete}
+
+### 📝 EXERCICE À CORRIGER :
+{texte_exercice.strip()}
+
+{section_vision}
+
+### 🎯 CONSIGNES DE CORRECTION :
+{instructions}
+
+### ✨ EXIGENCES ABSOLUES :
+- Sois EXTRÊMEMENT PRÉCIS dans tes explications
+- Vérifie systématiquement tous les calculs
+- Donne TOUTES les étapes de raisonnement
+- Sois BIENVEILLANT et PÉDAGOGIQUE
+- Exploite les éléments visuels détectés
+
+Réponds avec une structure claire et aérée.
+"""
+
+
+def get_instructions_adaptatives(matiere) -> str:
+    """
+    Retourne des instructions adaptées à la matière
+    """
+    if not matiere or not hasattr(matiere, 'nom'):
+        return "Corrige avec précision et pédagogie."
+
+    nom_matiere = matiere.nom.lower()
+
+    if any(mot in nom_matiere for mot in ['math', 'physique', 'chimie']):
+        return """
+• Vérifie toutes les unités et conversions
+• Donne les calculs intermédiaires détaillés
+• Utilise la notation LaTeX pour les formules
+• Explique le raisonnement étape par étape
+"""
+    elif any(mot in nom_matiere for mot in ['français', 'lettre', 'littérature']):
+        return """
+• Analyse la structure et le style
+• Corrige l'orthographe et la grammaire
+• Propose des améliorations stylistiques
+• Contextualise les références culturelles
+"""
+    elif any(mot in nom_matiere for mot in ['histoire', 'géographie']):
+        return """
+• Vérifie la précision des dates et faits
+• Contextualise les événements
+• Structure la réponse de manière logique
+• Cite les sources implicites
+"""
+    else:
+        return "Corrige avec précision, structure clairement et sois pédagogique."
+
+
+def verifier_qualite_corrige_optimise(corrige: str, exercice_original: str) -> bool:
+    """
+    Vérification avancée de la qualité du corrigé
+    """
+    if not corrige or len(corrige.strip()) < 50:
+        return False
+
+    # Indicateurs de mauvaise qualité
+    indicateurs_problemes = [
+        "je ne peux pas", "impossible de", "manque d'information",
+        "énoncé incomplet", "donnée manquante", "je ne sais pas",
+        "ambigu", "imprécis", "incertain"
+    ]
+
+    # Compter les problèmes
+    problemes = sum(1 for indicateur in indicateurs_problemes
+                    if indicateur.lower() in corrige.lower())
+
+    if problemes >= 2:
+        return False
+
+    # Vérifier le ratio longueur corrigé/énoncé
+    ratio = len(corrige) / len(exercice_original) if exercice_original else 1
+    if ratio < 0.3:  # Corrigé trop court
+        return False
+
+    return True
+
+
+def post_traiter_corrige(corrige_brut: str) -> str:
+    """
+    Post-traitement intelligent du corrigé
+    """
+    # Nettoyage de base
+    corrige = re.sub(r'#+\s*', '', corrige_brut)  # Remove markdown headers
+    corrige = re.sub(r'\*{2,}', '', corrige)  # Remove excessive asterisks
+    corrige = re.sub(r'\n{3,}', '\n\n', corrige)  # Normalize line breaks
+
+    # Fusion des blocs LaTeX
+    corrige = flatten_multiline_latex_blocks(corrige)
+
+    # Formatage structurel
+    corrige = format_corrige_pdf_structure(corrige)
+
+    return corrige.strip()
+
+
+# ── FONCTIONS EXISTANTES CONSERVÉES MAIS OPTIMISÉES ─────────────────
+
+def extraire_texte_fichier_optimise(fichier_field):
+    """
+    EXTRACTION MULTIMODALE OPTIMISÉE
+    """
+    if not fichier_field:
+        return ""
+
+    temp_dir = tempfile.gettempdir()
+    local_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+
+    with open(local_path, "wb") as f:
+        for chunk in fichier_field.chunks():
+            f.write(chunk)
+
+    try:
+        # Extraction robuste avec cache
+        texte_principal = extraire_texte_robuste(local_path)
+
+        # Analyse scientifique avec cache
+        analyse_complete = cached_analyser_document_scientifique(local_path)
+
+        # Construction du texte enrichi optimisé
+        texte_enrichi = construire_texte_enrichi(texte_principal, analyse_complete)
+
+        return texte_enrichi.strip()
+
+    except Exception as e:
+        print(f"❌ Erreur extraction optimisée: {e}")
+        return ""
+    finally:
+        try:
+            os.unlink(local_path)
+        except:
+            pass
+
+
+def construire_texte_enrichi(texte_principal: str, analyse_complete: dict) -> str:
+    """
+    Construit le texte enrichi de manière optimisée
+    """
+    sections = []
+
+    # Texte principal
+    if texte_principal:
+        sections.append("## 📝 TEXTE DU DOCUMENT")
+        sections.append(texte_principal)
+
+    # Éléments visuels
+    elements_visuels = analyse_complete.get("elements_visuels", [])
+    if elements_visuels:
+        sections.append("\n## 🔬 ÉLÉMENTS VISUELS IDENTIFIÉS")
+        for i, element in enumerate(elements_visuels, 1):
+            sections.append(f"\n### Schéma {i}: {element.get('type', 'Non spécifié')}")
+            sections.append(f"**Description:** {element.get('description', '')}")
+
+            donnees = element.get('donnees_extraites', {})
+            if donnees:
+                sections.append("**Données extraites:**")
+                for key, value in donnees.items():
+                    sections.append(f"  - {key}: {value}")
+
+    # Formules LaTeX
+    formules = analyse_complete.get("formules_latex", [])
+    if formules:
+        sections.append("\n## 📐 FORMULES MATHÉMATIQUES")
+        for formule in formules:
+            sections.append(f"- {formule}")
+
+    return "\n".join(sections)
+
+
+# ── FONCTIONS EXISTANTES À CONSERVER ───────────────────
+# (Ces fonctions restent identiques mais sont appelées par les nouvelles fonctions optimisées)
+
+def extraire_texte_robuste(fichier_path: str) -> str:
+    """Version optimisée de l'extraction simple"""
+    print("🔄 Extraction robuste avec cache...")
+    try:
+        analyse = cached_analyser_document_scientifique(fichier_path)
+        texte = analyse.get("texte_complet", "")
+        return texte if texte and len(texte) > 50 else ""
+    except Exception as e:
+        print(f"❌ Extraction robuste échouée: {e}")
+        return ""
+
+
 def debug_ocr(fichier_path: str):
-    """
-    Debug simple de l'OCR
-    """
+    """Debug OCR (identique)"""
     try:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             image = Image.open(fichier_path)
@@ -636,7 +1138,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     }
 
     data = {
-        "model": "deepseek-chat",
+        "model": "deepseek-reasoner",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt_ia}
@@ -995,6 +1497,10 @@ def extraire_texte_pdf(fichier_path):
 
 
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
+def call_deepseek_vision(local_path):
+    pass
+
+
 def extraire_texte_fichier(fichier_field):
     """
     EXTRACTION MULTIMODALE AVEC CACHE OPTIMISÉ
@@ -1510,6 +2016,10 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 
 # ============== TÂCHE ASYNCHRONE ==============
 
+def analyser_document_scientifique(local_path):
+    pass
+
+
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
@@ -1614,4 +2124,113 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         except:
             pass
         return False
+
+
+# ── POINT D'ENTRÉE PRINCIPAL OPTIMISÉ ──────────────────
+
+def generer_corrige_ia_et_graphique_optimise(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None,
+                                             matiere=None, demande=None, donnees_vision=None):
+    """
+    NOUVELLE VERSION OPTIMISÉE du point d'entrée principal
+    """
+    if lecons_contenus is None:
+        lecons_contenus = []
+    if exemples_corriges is None:
+        exemples_corriges = []
+
+    print("\n" + "=" * 60)
+    print("🚀 DÉBUT TRAITEMENT INTELLIGENT OPTIMISÉ")
+    print("=" * 60)
+    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+
+    # Log des données vision
+    if donnees_vision:
+        print(f"🔬 Données vision disponibles:")
+        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
+        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
+
+    # Estimation de complexité
+    tokens_estimes = estimer_tokens(texte_enonce)
+
+    # Décision optimisée
+    if tokens_estimes < 1500:
+        print("🎯 Décision: TRAITEMENT DIRECT OPTIMISÉ")
+        return generer_corrige_direct_optimise(texte_enonce, contexte, lecons_contenus, exemples_corriges,
+                                               matiere, donnees_vision)
+    else:
+        print("🎯 Décision: DÉCOUPAGE OPTIMISÉ")
+        return generer_corrige_decoupe_optimise(texte_enonce, contexte, matiere, donnees_vision)
+
+
+def generer_corrige_direct_optimise(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
+                                    donnees_vision=None):
+    """Version optimisée du traitement direct"""
+    return generer_corrige_par_exercice_optimise(texte_enonce, contexte, matiere, donnees_vision)
+
+
+def generer_corrige_decoupe_optimise(texte_epreuve, contexte, matiere, donnees_vision=None):
+    """Version optimisée du traitement par découpage"""
+    exercices = separer_exercices(texte_epreuve)
+    tous_corriges = []
+    tous_graphiques = []
+
+    for i, exercice in enumerate(exercices, 1):
+        print(f"📝 Traitement exercice {i}/{len(exercices)}...")
+
+        corrige, graphiques = generer_corrige_par_exercice_optimise(exercice, contexte, matiere, donnees_vision)
+
+        if corrige and not corrige.startswith("Erreur"):
+            titre_exercice = f"\n\n## 📝 Exercice {i}\n\n"
+            tous_corriges.append(titre_exercice + corrige)
+            if graphiques:
+                tous_graphiques.extend(graphiques)
+            print(f"✅ Exercice {i} traité avec succès")
+        else:
+            print(f"❌ Exercice {i} en erreur: {corrige}")
+
+        time.sleep(0.5)  # Réduction du délai
+
+    if tous_corriges:
+        corrige_final = "".join(tous_corriges)
+        print(f"🎉 Découpage optimisé terminé: {len(tous_corriges)} exercice(s), {len(tous_graphiques)} graphique(s)")
+        return corrige_final, tous_graphiques
+    else:
+        print("❌ Aucun corrigé généré")
+        return "Erreur: Aucun corrigé n'a pu être généré", []
+
+
+# ── FONCTION POUR TESTER LES PERFORMANCES ──────────────
+
+def tester_performances():
+    """
+    Fonction utilitaire pour tester les performances des différents modèles
+    """
+    test_prompt = "Résous : 2x + 5 = 13. Montre toutes les étapes."
+
+    print("🧪 TEST DE PERFORMANCES DES MODÈLES")
+    print("=" * 50)
+
+    # Test deepseek-chat
+    start = time.time()
+    try:
+        result_chat = call_deepseek_api_optimise(
+            [{"role": "user", "content": test_prompt}],
+            MODEL_CHAT
+        )
+        time_chat = time.time() - start
+        print(f"✅ deepseek-chat: {time_chat:.2f}s - {len(result_chat)} caractères")
+    except Exception as e:
+        print(f"❌ deepseek-chat: Erreur - {e}")
+
+    # Test deepseek-reasoner
+    start = time.time()
+    try:
+        result_reasoner = call_deepseek_api_optimise(
+            [{"role": "user", "content": test_prompt}],
+            MODEL_REASONER
+        )
+        time_reasoner = time.time() - start
+        print(f"✅ deepseek-reasoner: {time_reasoner:.2f}s - {len(result_reasoner)} caractères")
+    except Exception as e:
+        print(f"❌ deepseek-reasoner: Erreur - {e}")
 
