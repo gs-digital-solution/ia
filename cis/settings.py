@@ -216,7 +216,7 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_TASK_TRACK_STARTED   = True
 
 from kombu import Queue
-
+CELERYD_LOG_LEVEL = 'DEBUG'
 # Broker & backend
 CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'
