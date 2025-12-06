@@ -78,3 +78,7 @@ def finalize_corrige(results, demande_id, matiere_id, contexte):
        demande.corrigé = corrige_final
        demande.save()
        return True
+
+
+def callback_final_decoupe():
+    return None
