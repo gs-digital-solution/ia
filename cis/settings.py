@@ -234,9 +234,14 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # Définition des queues
+#CELERY_TASK_QUEUES = (
+    #Queue('root'),   # pour la tâche maître
+    #Queue('child'),  # pour les sous-tâches
+#)
+
+# Définition des queues
 CELERY_TASK_QUEUES = (
     Queue('root'),   # pour la tâche maître
-    Queue('child'),  # pour les sous-tâches
 )
 
 # Queue par défaut

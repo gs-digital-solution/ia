@@ -432,8 +432,8 @@ def separer_exercices(texte_epreuve):
         r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
         r'TEIL ?1\s+LESEVERSTEHEN', r'MEDIATION',
         r'SCHRIFTLICHE PRODUKTION', r'STRUKTUREN UND KOMMUNIKATION',
-        r'SCHRIFTLICHER AUSDRUCK', r'Grammar', r'Vocabulary',
-        r'Comprehension', r'Essay'
+        r'SCHRIFTLICHER AUSDRUCK', r'SECTION A: GRAMMAR', r'SECTION B:VOCABULARY',
+        r'SECTION C: READING COMPREHENSION', r'SECTION D:ESSAY WRITTING'
     ]
 
     exercices = []
