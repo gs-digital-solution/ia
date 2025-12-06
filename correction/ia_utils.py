@@ -1418,8 +1418,6 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
     from resources.models import Matiere
-    from celery import chord
-    from .tasks import generer_un_exercice, callback_final_decoupe
 
     try:
         # Récupération de la demande et création de la soumission IA
