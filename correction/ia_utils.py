@@ -1343,44 +1343,35 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
     Traitement par découpage pour les épreuves longues avec données vision,
     désormais en parallèle via Celery group.
     """
-    from celery import group
-    from .tasks import generer_un_exercice
+    #from celery import group
+    #from .tasks import generer_un_exercice
     # 1) Sépare le texte en exercices
     exercices = separer_exercices(texte_epreuve)
 
-    # 2) Création des sous-tâches : une tâche Celery par exercice
-    jobs = group(
-        generer_un_exercice.s(
-            demande.id if demande else None,
-            ex,
-            contexte,
-            matiere.id,
-            donnees_vision or {}
-        )
-        for ex in exercices
-    )
-
-    # 3) Envoi et collecte (blocant jusqu'à ce que tous soient finis)
-    results = jobs.apply_async()
-    outputs = results.get()  # liste de dicts {'corrige':…, 'graphs': […]}
-
-    # 4) Reconstruction du corrigé et liste de graphiques
+    # 2) Traitement séquentiel
     tous_corriges = []
     tous_graphiques = []
-    for idx, out in enumerate(outputs, 1):
-        corrige = out.get('corrige', '')
-        graphs  = out.get('graphs', [])
-        if corrige:
-            titre = f"\n\n## 📝 Exercice {idx}\n\n"
-            tous_corriges.append(titre + corrige)
+
+    for idx, ex in enumerate(exercices, start=1):
+        # Appel direct à la fonction de correction
+        corrige_html, graphs = generer_corrige_par_exercice(
+            texte_exercice=ex,
+            contexte=contexte,
+            matiere=matiere,
+            donnees_vision=donnees_vision,
+            demande=demande
+        )
+
+        # Préfixe titre Exercice
+        tous_corriges.append(f"\n\n## 📝 Exercice {idx}\n\n{corrige_html}")
+
+        # Collecte des graphiques si existants
         if graphs:
             tous_graphiques.extend(graphs)
 
-    # 5) Retour
-    if tous_corriges:
-        return "".join(tous_corriges), tous_graphiques
-    else:
-        return "Erreur: Aucun corrigé n'a pu être généré", []
+    # 3) Retour
+    return "".join(tous_corriges), tous_graphiques
+
 
 
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
