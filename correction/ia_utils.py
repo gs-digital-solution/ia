@@ -218,9 +218,9 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
         # On remonte pour arrêter la tâche et voir l’erreur
         raise
 
-    # 2) Appel IA (deepseek-chat) et parsing JSON
+    # 2) Appel IA (deepseek-chat) et parsing JSON avec fallback robuste
+    prompt = f"ANALYSE CE DOCUMENT SCIENTIFIQUE :\n{texte_ocr}\n…"
     try:
-        prompt = f"ANALYSE CE DOCUMENT...\n{texte_ocr}\n..."
         response = openai.ChatCompletion.create(
             model="deepseek-chat",
             messages=[
@@ -230,10 +230,22 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             temperature=0.1,
             max_tokens=3000
         )
-        content = response.choices[0].message.content
-        resultat = json.loads(content)
+        content = response.choices[0].message.content or ""
+        try:
+            resultat = json.loads(content)
+        except json.JSONDecodeError:
+            # Loggage du JSON invalide
+            logger.error("❌ JSON non valide reçu de l'IA pour %s : %r", fichier_path, content)
+            # Fallback minimal
+            return {
+                "texte_complet": texte_ocr,
+                "elements_visuels": elements_visuels,
+                "formules_latex": [],
+                "structure_exercices": [],
+                "donnees_numeriques": {}
+            }
 
-        # Fallback si IA n’a pas renvoyé de texte_complet
+        # Si l’IA renvoie un dict partiel, on complète
         if not resultat.get("texte_complet"):
             resultat["texte_complet"] = texte_ocr
         if elements_visuels:
@@ -244,10 +256,15 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
         return resultat
 
     except Exception:
-        logger.exception("❌ Échec de l’appel IA pour %s", fichier_path)
-        # On remonte l’erreur pour la voir dans Celery
-        raise
-
+        # Erreur réseau ou API : on loggue et on retombe sur le texte brut
+        logger.exception("❌ Erreur lors de l’appel IA pour %s", fichier_path)
+        return {
+            "texte_complet": texte_ocr,
+            "elements_visuels": elements_visuels,
+            "formules_latex": [],
+            "structure_exercices": [],
+            "donnees_numeriques": {}
+        }
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
