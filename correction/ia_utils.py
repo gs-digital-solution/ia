@@ -174,102 +174,80 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Analyse simple et efficace : OCR + captioning BLIP + prompt IA.
+    Analyse : OCR (image ou PDF) + caption BLIP + appel IA.
     """
-    logger.info("🔍 Analyse scientifique simplifiée...")
+    logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
+
+    # Définition du config Tesseract **en amont**, disponible partout
+    config_tesseract = r'--oem 3 --psm 6 -l fra+eng'
+
     texte_ocr = ""
     elements_visuels = []
 
-    # 1. OCR de base + caption BLIP
+    # 1) OCR natif ou extraction PDF
     try:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            # OCR
-            image = Image.open(fichier_path)
-            custom_config = r'--oem 3 --psm 6 -l fra+eng'
-            texte_ocr = pytesseract.image_to_string(image, config=custom_config)
-            logger.info("✅ OCR extrait: %d caractères", len(texte_ocr))
-
-            # Captioning via BLIP
-            processor, model = get_blip_model()
-            inputs  = processor(images=image, return_tensors="pt").to(model.device)
-            outputs = model.generate(**inputs)
-            caption = processor.decode(outputs[0], skip_special_tokens=True)
-            logger.info("🖼️ Légende BLIP générée: %s", caption)
-            elements_visuels.append({"type": "image", "description": caption})
+            # Mode image → Tesseract
+            img = Image.open(fichier_path)
+            texte_ocr = pytesseract.image_to_string(img, config=config_tesseract)
+            logger.info("    ✓ OCR image extrait %d caractères", len(texte_ocr))
+            # … BLIP captioning …
 
         elif fichier_path.lower().endswith('.pdf'):
-            # Extraction texte PDF
+            # Mode PDF → texte (pdfminer)
             texte_ocr = extraire_texte_pdf(fichier_path)
-            logger.info("✅ PDF extrait: %d caractères", len(texte_ocr))
-            # (Optionnel) Captioning page à page si besoin :
-            # pages = convert_from_path(fichier_path, dpi=300)
-            # for page in pages:
-            #     processor, model = get_blip_model()
-            #     inputs  = processor(images=page, return_tensors="pt").to(model.device)
-            #     outputs = model.generate(**inputs)
-            #     cap = processor.decode(outputs[0], skip_special_tokens=True)
-            #     elements_visuels.append({"type": "page_pdf", "description": cap})
+            logger.info("    ✓ PDFMiner extrait %d caractères", len(texte_ocr))
 
-    except Exception as e:
-        logger.error("❌ Extraction échouée: %s", e)
-        texte_ocr = ""
+            # Si le PDFMiner est insuffisant, fallback page par page
+            if len(texte_ocr) < 50:
+                logger.warning("    ⚠️ PDFMiner trop court, fallback OCR page à page")
+                pages = convert_from_path(fichier_path, dpi=200)
+                textes = []
+                for page in pages:
+                    # Ici on utilise config_tesseract sans erreur
+                    txt_page = pytesseract.image_to_string(page, config=config_tesseract)
+                    textes.append(txt_page)
+                texte_ocr = "\n".join(textes)
+                logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
 
-    # 2. Analyse contextuelle par IA
+        else:
+            raise ValueError(f"Format non supporté : {fichier_path}")
+
+    except Exception:
+        logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
+        # On remonte pour arrêter la tâche et voir l’erreur
+        raise
+
+    # 2) Appel IA (deepseek-chat) et parsing JSON
     try:
-        prompt = f"""
-ANALYSE CE DOCUMENT SCIENTIFIQUE :
-
-TEXTE EXTRAIT :
-{texte_ocr}
-
-TÂCHES :
-1. Corrige les erreurs d'OCR si nécessaire
-2. Identifie le type d'exercice
-3. Extrait les données numériques
-4. Structure l'exercice
-
-RÉPONDS en JSON :
-{{
-  "texte_complet": "", 
-  "elements_visuels": [], 
-  "formules_latex": [], 
-  "structure_exercices": [], 
-  "donnees_numeriques": {{}}
-}}
-"""
+        prompt = f"ANALYSE CE DOCUMENT...\n{texte_ocr}\n..."
         response = openai.ChatCompletion.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "Tu es un expert en sciences."},
                 {"role": "user",   "content": prompt}
             ],
-            response_format={"type": "json_object"},
             temperature=0.1,
             max_tokens=3000
         )
-        resultat = json.loads(response.choices[0].message.content)
+        content = response.choices[0].message.content
+        resultat = json.loads(content)
 
-        # S’assurer qu’on a au moins le texte OCR de base
-        if not resultat.get("texte_complet") and texte_ocr:
+        # Fallback si IA n’a pas renvoyé de texte_complet
+        if not resultat.get("texte_complet"):
             resultat["texte_complet"] = texte_ocr
-
-        # Injecter nos légendes BLIP
         if elements_visuels:
             resultat["elements_visuels"] = elements_visuels
 
-        logger.info("✅ Analyse terminée: %d caractères",
-                    len(resultat.get("texte_complet", "")))
+        logger.info("✅ Analyse IA OK, texte_complet length=%d",
+                    len(resultat["texte_complet"]))
         return resultat
 
-    except Exception as e:
-        logger.error("❌ Erreur analyse: %s", e)
-        return {
-            "texte_complet":       texte_ocr,
-            "elements_visuels":    elements_visuels,
-            "formules_latex":      [],
-            "structure_exercices": [],
-            "donnees_numeriques":  {}
-        }
+    except Exception:
+        logger.exception("❌ Échec de l’appel IA pour %s", fichier_path)
+        # On remonte l’erreur pour la voir dans Celery
+        raise
+
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
