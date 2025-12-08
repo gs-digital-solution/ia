@@ -26,6 +26,29 @@ from resources.models import PromptIA,Matiere
 import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
+
+def preprocess_image_for_ocr(pil_image):
+    """
+    Convertit une PIL.Image en numpy array binaire nettoyé pour Tesseract.
+    """
+    # PIL → OpenCV BGR
+    img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    # niveaux de gris
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # seuillage adaptatif
+    bin_img = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        blockSize=11,
+        C=2
+    )
+    # ouverture pour supprimer bruit
+    kernel = np.ones((1,1), np.uint8)
+    clean = cv2.morphologyEx(bin_img, cv2.MORPH_OPEN, kernel)
+    return clean
+
+
 # Cache en mémoire des PromptIA pour éviter les hits répétés en BDD
 _PROMPTIA_CACHE = {}
 
@@ -131,13 +154,17 @@ def call_deepseek_vision(path_fichier: str) -> dict:
     """
     Envoie un PDF ou une image à DeepSeek - Version corrigée pour l'API DeepSeek.
     """
-    system_prompt = """
-    Tu es un analyseur de documents éducatifs.
-    Analyse ce document et retourne un JSON valide avec :
-    - Le texte intégral
-    - Les blocs LaTeX des formules mathématiques  
-    - Les légendes des images
-    - Les descriptions des graphiques
+    system_prompt = r"""
+    Tu es un expert en schémas scientifiques.
+    Analyse cette image et renvoie SEULEMENT un JSON structuré de la forme :
+    {
+      "angles": [ {"valeur":30,"unité":"°","coord":[x,y]}, ... ],
+      "nombres": [ {"valeur":9.81,"unité":"m/s²","coord":[x,y]}, ... ],
+      "flèches": [ {"direction":"↑","origine":[x,y],"dest":[x,y]}, ... ],
+      "graphiques": {"type":"fonction","expression":"x**2","x_min":0,"x_max":10,"titre":"Courbe x²"},
+      "circuits": [ {"composant":"R1","valeur":10,"unité":"Ω","connexion":[[x1,y1],[x2,y2]]}, ... ]
+    }
+    Ne renvoie **aucun** texte narratif, juste ce JSON.
     """
 
     try:
@@ -189,7 +216,12 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             # Mode image → Tesseract
             img = Image.open(fichier_path)
-            texte_ocr = pytesseract.image_to_string(img, config=config_tesseract)
+            # Transformation OpenCV + binarisation
+            clean = preprocess_image_for_ocr(img)
+            texte_ocr = pytesseract.image_to_string(
+                clean,
+                config=r'--oem 3 --psm 6 -l fra+eng+digits'
+            )
             logger.info("    ✓ OCR image extrait %d caractères", len(texte_ocr))
             # … BLIP captioning …
 
@@ -201,11 +233,16 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             # Si le PDFMiner est insuffisant, fallback page par page
             if len(texte_ocr) < 50:
                 logger.warning("    ⚠️ PDFMiner trop court, fallback OCR page à page")
-                pages = convert_from_path(fichier_path, dpi=200)
+                pages = convert_from_path(fichier_path, dpi=300)
                 textes = []
                 for page in pages:
                     # Ici on utilise config_tesseract sans erreur
-                    txt_page = pytesseract.image_to_string(page, config=config_tesseract)
+                    # pré-traitement + OCR
+                    clean = preprocess_image_for_ocr(page)
+                    txt_page = pytesseract.image_to_string(
+                        clean,
+                        config=r'--oem 3 --psm 6 -l fra+eng+digits'
+                    )
                     textes.append(txt_page)
                 texte_ocr = "\n".join(textes)
                 logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
