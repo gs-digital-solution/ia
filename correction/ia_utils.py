@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 def preprocess_image_for_ocr(pil_image):
     """
-    Convertit une PIL.Image en numpy array binaire nettoyé pour Tesseract.
+    Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
     """
-    # PIL → OpenCV BGR
+    # PIL → CV2 BGR
     img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
     # niveaux de gris
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -43,11 +43,10 @@ def preprocess_image_for_ocr(pil_image):
         blockSize=11,
         C=2
     )
-    # ouverture pour supprimer bruit
+    # ouverture pour nettoyer le petit bruit
     kernel = np.ones((1,1), np.uint8)
     clean = cv2.morphologyEx(bin_img, cv2.MORPH_OPEN, kernel)
     return clean
-
 
 # Cache en mémoire des PromptIA pour éviter les hits répétés en BDD
 _PROMPTIA_CACHE = {}
@@ -145,7 +144,7 @@ openai.api_base = "https://api.deepseek.com"
 
 # ── MODÈLE POUR LA VISION ────────────────────────────────
 # deepseek-chat a les capacités vision quand on envoie des images
-DEEPSEEK_VISION_MODEL = "deepseek-chat"
+DEEPSEEK_VISION_MODEL = "deepseek-vl2"
 
 
 # ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
@@ -155,18 +154,18 @@ def call_deepseek_vision(path_fichier: str) -> dict:
     Envoie un PDF ou une image à DeepSeek - Version corrigée pour l'API DeepSeek.
     """
     system_prompt = r"""
-    Tu es un expert en schémas scientifiques.
-    Analyse cette image et renvoie SEULEMENT un JSON structuré de la forme :
+    Tu es un expert en schémas et documents scientifiques.
+    Prends cette image ou ce PDF (base64) et renvoie **SEULEMENT** un JSON structuré :
     {
-      "angles": [ {"valeur":30,"unité":"°","coord":[x,y]}, ... ],
-      "nombres": [ {"valeur":9.81,"unité":"m/s²","coord":[x,y]}, ... ],
-      "flèches": [ {"direction":"↑","origine":[x,y],"dest":[x,y]}, ... ],
-      "graphiques": {"type":"fonction","expression":"x**2","x_min":0,"x_max":10,"titre":"Courbe x²"},
-      "circuits": [ {"composant":"R1","valeur":10,"unité":"Ω","connexion":[[x1,y1],[x2,y2]]}, ... ]
+      "text": "<le texte complet>",
+      "latex_blocks": ["…","…"],
+      "captions": ["légende du schéma", …],
+      "graphs": [ { … données graphiques … } ],
+      "angles": [ {"valeur":30,"unité":"°","coord":[x,y]}, … ],
+      "numbers": [ {"valeur":9.81,"unité":"m/s²","coord":[x,y]}, … ]
     }
-    Ne renvoie **aucun** texte narratif, juste ce JSON.
+    Ne renvoie aucun texte hors de ce JSON.
     """
-
     try:
         # Encoder le fichier en base64
         with open(path_fichier, "rb") as f:
@@ -201,106 +200,91 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Analyse : OCR (image ou PDF) + caption BLIP + appel IA.
+    Analyse scientifique avancée avec deepseek-vl2 :
+    - OCR (Tesseract) en fallback
+    - appel multimodal deepseek-vl2 pour texte + schémas
+    Retourne un dict avec :
+      - texte_complet (str)
+      - elements_visuels (list of captions)
+      - formules_latex  (list of LaTeX strings)
+      - graphs          (list of dicts graphiques)
+      - angles          (list of {"valeur","unité","coord"})
+      - numbers         (list of {"valeur","unité","coord"})
+      - structure_exercices (list)
     """
     logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
 
-    # Définition du config Tesseract **en amont**, disponible partout
-    config_tesseract = r'--oem 3 --psm 6 -l fra+eng'
-
+    # 1) OCR fallback pour avoir un premier texte
+    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
     texte_ocr = ""
-    elements_visuels = []
-
-    # 1) OCR natif ou extraction PDF
     try:
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            # Mode image → Tesseract
             img = Image.open(fichier_path)
-            # Transformation OpenCV + binarisation
             clean = preprocess_image_for_ocr(img)
-            texte_ocr = pytesseract.image_to_string(
-                clean,
-                config=r'--oem 3 --psm 6 -l fra+eng+digits'
-            )
-            logger.info("    ✓ OCR image extrait %d caractères", len(texte_ocr))
-            # … BLIP captioning …
+            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
+            logger.info("    ✓ OCR image brut extrait %d caractères", len(texte_ocr))
 
         elif fichier_path.lower().endswith('.pdf'):
-            # Mode PDF → texte (pdfminer)
             texte_ocr = extraire_texte_pdf(fichier_path)
             logger.info("    ✓ PDFMiner extrait %d caractères", len(texte_ocr))
-
-            # Si le PDFMiner est insuffisant, fallback page par page
             if len(texte_ocr) < 50:
-                logger.warning("    ⚠️ PDFMiner trop court, fallback OCR page à page")
+                logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
                 pages = convert_from_path(fichier_path, dpi=300)
-                textes = []
+                txts = []
                 for page in pages:
-                    # Ici on utilise config_tesseract sans erreur
-                    # pré-traitement + OCR
                     clean = preprocess_image_for_ocr(page)
-                    txt_page = pytesseract.image_to_string(
-                        clean,
-                        config=r'--oem 3 --psm 6 -l fra+eng+digits'
-                    )
-                    textes.append(txt_page)
-                texte_ocr = "\n".join(textes)
+                    txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
+                texte_ocr = "\n".join(txts)
                 logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
 
         else:
-            raise ValueError(f"Format non supporté : {fichier_path}")
+            raise ValueError(f"Format non supporté pour OCR : {fichier_path}")
 
     except Exception:
         logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
-        # On remonte pour arrêter la tâche et voir l’erreur
-        raise
+        # on ne stoppe pas, on continue avec texte_ocr vide
 
-    # 2) Appel IA (deepseek-chat) et parsing JSON avec fallback robuste
-    prompt = f"ANALYSE CE DOCUMENT SCIENTIFIQUE :\n{texte_ocr}\n…"
+    # 2) Appel deepseek-vl2 pour tout : texte + schémas + JSON
     try:
-        response = openai.ChatCompletion.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "Tu es un expert en sciences."},
-                {"role": "user",   "content": prompt}
-            ],
-            temperature=0.1,
-            max_tokens=3000
-        )
-        content = response.choices[0].message.content or ""
-        try:
-            resultat = json.loads(content)
-        except json.JSONDecodeError:
-            # Loggage du JSON invalide
-            logger.error("❌ JSON non valide reçu de l'IA pour %s : %r", fichier_path, content)
-            # Fallback minimal
-            return {
-                "texte_complet": texte_ocr,
-                "elements_visuels": elements_visuels,
-                "formules_latex": [],
-                "structure_exercices": [],
-                "donnees_numeriques": {}
-            }
+        vision_json = call_deepseek_vision(fichier_path)
 
-        # Si l’IA renvoie un dict partiel, on complète
-        if not resultat.get("texte_complet"):
-            resultat["texte_complet"] = texte_ocr
-        if elements_visuels:
-            resultat["elements_visuels"] = elements_visuels
+        # 2a) Texte complet : fallback sur OCR si résultat trop court
+        texte_json = vision_json.get("text", "") or ""
+        if len(texte_json) < 50:
+            texte_json = texte_ocr
 
-        logger.info("✅ Analyse IA OK, texte_complet length=%d",
-                    len(resultat["texte_complet"]))
-        return resultat
+        # 2b) Récupération des blocs
+        captions     = vision_json.get("captions", [])
+        latex_blocks = vision_json.get("latex_blocks", [])
+        graphs       = vision_json.get("graphs", [])
+        angles       = vision_json.get("angles", [])
+        numbers      = vision_json.get("numbers", [])
+        struct_exos  = vision_json.get("structure_exercices", [])
 
-    except Exception:
-        # Erreur réseau ou API : on loggue et on retombe sur le texte brut
-        logger.exception("❌ Erreur lors de l’appel IA pour %s", fichier_path)
+        logger.info("✅ deepseek-vl2 OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
+                    len(texte_json), len(captions), len(latex_blocks), len(angles), len(numbers))
+
+        return {
+            "texte_complet": texte_json,
+            "elements_visuels": captions,
+            "formules_latex": latex_blocks,
+            "graphs": graphs,
+            "angles": angles,
+            "numbers": numbers,
+            "structure_exercices": struct_exos
+        }
+
+    except Exception as e:
+        logger.exception("❌ Erreur deepseek-vl2 pour %s: %s", fichier_path, e)
+        # fallback minimal
         return {
             "texte_complet": texte_ocr,
-            "elements_visuels": elements_visuels,
+            "elements_visuels": [],
             "formules_latex": [],
-            "structure_exercices": [],
-            "donnees_numeriques": {}
+            "graphs": [],
+            "angles": [],
+            "numbers": [],
+            "structure_exercices": []
         }
 
 def extraire_texte_robuste(fichier_path: str) -> str:
@@ -614,17 +598,45 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         texte_exercice.strip()
     ]
     if donnees_vision:
+        # Schémas identifiés
         if donnees_vision.get("elements_visuels"):
             user_blocks.append("----- SCHÉMAS IDENTIFIÉS -----")
             for element in donnees_vision["elements_visuels"]:
                 desc = element.get("description", "")
                 user_blocks.append(f"- {desc}")
 
+        # Formules LaTeX
         if donnees_vision.get("formules_latex"):
             user_blocks.append("----- FORMULES DÉTECTÉES -----")
             for formule in donnees_vision["formules_latex"]:
                 user_blocks.append(f"- {formule}")
 
+        # Données graphiques brutes (JSON)
+        if donnees_vision.get("graphs"):
+            user_blocks.append("----- DONNÉES GRAPHIQUES (JSON) -----")
+            user_blocks.append(
+                json.dumps(donnees_vision["graphs"], ensure_ascii=False, indent=2)
+            )
+
+        # Angles détectés
+        if donnees_vision.get("angles"):
+            user_blocks.append("----- ANGLES IDENTIFIÉS -----")
+            for angle in donnees_vision["angles"]:
+                val = angle.get("valeur", "")
+                unit = angle.get("unité", "")
+                coord = angle.get("coord", "")
+                user_blocks.append(f"- {val}{unit} à coord {coord}")
+
+        # Nombres détectés
+        if donnees_vision.get("numbers"):
+            user_blocks.append("----- NOMBRES ET UNITÉS -----")
+            for num in donnees_vision["numbers"]:
+                val = num.get("valeur", "")
+                unit = num.get("unité", "")
+                coord = num.get("coord", "")
+                user_blocks.append(f"- {val}{unit} à coord {coord}")
+
+    # On reconstitue le contenu utilisateur final
     msg_user["content"] = "\n\n".join(user_blocks)
 
     # 4) Préparation de l’appel API avec deux messages
@@ -1476,6 +1488,9 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             donnees_vision_complete = {
                 "elements_visuels": analyse_complete.get("elements_visuels", []),
                 "formules_latex":   analyse_complete.get("formules_latex", []),
+                "graphs":           analyse_complete.get("graphs", []),
+                "angles":           analyse_complete.get("angles", []),
+                "numbers":          analyse_complete.get("numbers", []),
                 "structure_exercices": analyse_complete.get("structure_exercices", [])
             }
             texte_brut = analyse_complete.get("texte_complet", "")
