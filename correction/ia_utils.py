@@ -144,7 +144,7 @@ openai.api_base = "https://api.deepseek.com"
 
 # ── MODÈLE POUR LA VISION ────────────────────────────────
 # deepseek-chat a les capacités vision quand on envoie des images
-DEEPSEEK_VISION_MODEL = "deepseek-vl2"
+DEEPSEEK_VISION_MODEL = "deepseek-reasoner"
 
 
 # ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
