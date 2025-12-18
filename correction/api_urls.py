@@ -19,7 +19,10 @@ from .api_views import (
     FeedbackAPIView,
     PartagerCorrigeAPIView,
     DebugExtractionAPIView,
+    PartialCorrectionAPIView,
+    MergePdfsAPIView
 )
+from .api_views import SplitExercisesAPIView
 
 # On importe les routes d’abonnement/paiement/ressources ici
 urlpatterns = [
@@ -44,7 +47,9 @@ urlpatterns = [
 
     # Soumission d’exercice & statut
     path('soumission/',                    SoumissionExerciceAPIView.as_view(),      name='api_soumission'),
+    path('soumission/exercice/',           PartialCorrectionAPIView.as_view(),      name='api_soumission_exercice'),
     path('soumission/<int:soumission_id>/status/', StatutSoumissionAPIView.as_view(), name='api_soumission_status'),
+    path('soumission/<int:demande_id>/merge-pdfs/',MergePdfsAPIView.as_view(),name='api_merge_pdfs'),
 
     # Listes protégées
     path('departements/',  DepartementsListAPIView.as_view(),   name='api_departements'),
@@ -62,6 +67,9 @@ urlpatterns = [
 
     # route de BLOCAGE PDF ou SOUMISSION coté backend
     path('app-config/', AppConfigAPIView.as_view(), name='api_app_config'),
+
+    # route d'affichage/selection des exercices à corriger
+    path('split/', SplitExercisesAPIView.as_view(), name='api_split_exercises'),
 
 ]
 

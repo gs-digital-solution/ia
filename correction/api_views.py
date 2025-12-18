@@ -29,7 +29,7 @@ from weasyprint import HTML as WeasyHTML
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from .models import SoumissionIA
-from .pdf_utils import generer_pdf_corrige
+from .pdf_utils import generer_pdf_corrige,merge_pdfs
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from rest_framework.permissions import AllowAny
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
@@ -39,9 +39,14 @@ import time
 from .ia_utils import (
     flatten_multiline_latex_blocks,
     extract_and_process_graphs,
-    format_corrige_pdf_structure
+    format_corrige_pdf_structure,
+    generer_corrige_exercice_async
 )
-
+from rest_framework.parsers import MultiPartParser, JSONParser
+from rest_framework.permissions import IsAuthenticated
+from .ia_utils import separer_exercices, extraire_texte_fichier
+import tempfile, os
+from django.conf import settings
 
 
 class UserRegisterAPIView(APIView):
@@ -511,3 +516,178 @@ class AppConfigAPIView(APIView):
             "message_bloquant": app_config.message_bloquant,
         })
 
+
+
+#VUE POUR LISTE D'EXERCICES A CORRIGER
+class SplitExercisesAPIView(APIView):
+    """
+    POST /api/split/
+    Reçoit soit un fichier (PDF/Image) sous la clé 'fichier',
+    soit un texte brut sous 'enonce_texte',
+    et renvoie la liste des exercices détectés : index + titre/extrait.
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, JSONParser]
+
+    def post(self, request):
+        # 1) Récupérer le texte brut
+        texte = request.data.get('enonce_texte', '').strip()
+        fichier = request.FILES.get('fichier')
+
+        if fichier:
+            # Sauvegarde temporaire du fichier
+            tmpdir = tempfile.gettempdir()
+            local_path = os.path.join(tmpdir, fichier.name)
+            with open(local_path, 'wb') as fd:
+                for chunk in fichier.chunks():
+                    fd.write(chunk)
+            # Extraction du texte (OCR + IA si nécessaire)
+            texte = extraire_texte_fichier(fichier)
+            # On peut supprimer le fichier temporaire :
+            try: os.remove(local_path)
+            except: pass
+
+        if not texte:
+            return Response(
+                {"error": "Aucun texte ou fichier fourni."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2) Séparer les exercices
+        exercices = separer_exercices(texte)
+
+        # 3) Construire la réponse : index + titre (première ligne)
+        liste = []
+        for idx, ex in enumerate(exercices):
+            # Titre = première ligne non vide
+            premiere_ligne = ex.strip().split('\n', 1)[0]
+            titre = premiere_ligne if premiere_ligne else f"Exercice {idx+1}"
+            liste.append({
+                "index": idx,
+                "titre": titre,
+                # optionnel : un extrait plus long, e.g. premiers 100 caractères :
+                "extrait": ex.strip()[:100] + ("…" if len(ex) > 100 else "")
+            })
+
+        return Response({"exercices": liste})
+
+
+#VUE PARTIELLE DES EXERCICES
+class PartialCorrectionAPIView(APIView):
+        """
+        POST /api/soumission/exercice/
+        Lance le traitement IA+PDF sur UN SEUL exercice identifié par son index.
+        Payload JSON : { "demande_id": <int>, "index": <int> }
+        """
+        permission_classes = [IsAuthenticated]
+        parser_classes = [JSONParser]
+
+        def post(self, request):
+            user = request.user
+            demande_id = request.data.get("demande_id")
+            idx = request.data.get("index")
+
+            # 1) Validation minimale
+            if demande_id is None or idx is None:
+                return Response(
+                    {"error": "demande_id et index sont requis"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                idx = int(idx)
+            except ValueError:
+                return Response(
+                    {"error": "index doit être un entier"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 2) Récupérer la demande et vérifier l’utilisateur
+            demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
+
+            # 3) Extraire le texte complet (enoncé_texte ou fichier)
+            if demande.fichier:
+                texte_complet = extraire_texte_fichier(demande.fichier)
+            else:
+                texte_complet = demande.enonce_texte or ""
+
+            if not texte_complet:
+                return Response(
+                    {"error": "Impossible d'extraire le texte de la demande."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 4) Séparer les exercices et valider l'index
+            exercices = separer_exercices(texte_complet)
+            if idx < 0 or idx >= len(exercices):
+                return Response(
+                    {"error": f"index hors limites (0 à {len(exercices) - 1})"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 5) Créer la soumission IA (statut initial + stocker index)
+            soumission = SoumissionIA.objects.create(
+                user=user,
+                demande=demande,
+                statut='en_attente',
+                progression=0,
+                exercice_index=idx
+            )
+
+            # 6) Lancer la tâche asynchrone sur cet exercice
+            generer_corrige_exercice_async.delay(soumission.id)
+
+            # 7) Répondre immédiatement avec l'ID de la soumission
+            return Response({
+                "success": True,
+                "soumission_exercice_id": soumission.id,
+                "message": "Exercice envoyé au traitement."
+            }, status=status.HTTP_202_ACCEPTED)
+
+
+class MergePdfsAPIView(APIView):
+    """
+    GET  /api/soumission/<demande_id>/merge-pdfs/
+    Fusionne tous les PDF partiels (statut 'termine') de la demande
+    et renvoie l'URL du PDF global.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, demande_id):
+        # 1) Vérifier la demande et l'utilisateur
+        demande = get_object_or_404(DemandeCorrection, id=demande_id, user=request.user)
+
+        # 2) Récupérer les soumissions terminées, triées par index
+        soumissions = SoumissionIA.objects.filter(
+            demande=demande, statut='termine'
+        ).order_by('exercice_index')
+
+        if not soumissions.exists():
+            return Response(
+                {"error": "Aucun PDF partiel disponible pour fusion."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 3) Extraire les URLs des PDF partiels
+        pdf_urls = [
+            s.resultat_json.get('pdf_url')
+            for s in soumissions
+            if s.resultat_json.get('pdf_url')
+        ]
+        if not pdf_urls:
+            return Response(
+                {"error": "Aucune URL de PDF partiel trouvée."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 4) Fusionner et récupérer l'URL globale
+        output_name = f"global_{demande_id}.pdf"
+        try:
+            merged_url = merge_pdfs(pdf_urls, output_name)
+        except Exception as e:
+            return Response(
+                {"error": f"Échec de la fusion des PDF : {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # 5) Répondre avec l'URL du PDF global
+        return Response({"pdf_url": merged_url})

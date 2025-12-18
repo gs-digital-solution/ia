@@ -141,5 +141,16 @@ class SoumissionIA(models.Model):
         date_maj = models.DateTimeField(auto_now=True)
         resultat_json = models.JSONField(null=True, blank=True)
 
+        # index de l’exercice dans la liste extraite (0-based)
+        exercice_index = models.IntegerField(
+            null=True,
+            blank=True,
+            verbose_name="Index exercice",
+            help_text="Index de l’exercice traité par ce ticket"
+        )
+
         def __str__(self):
-            return f"{self.user.username} - {self.statut} ({self.progression}%)"
+            base = f"{self.user.username} - {self.statut} ({self.progression}%)"
+            if self.exercice_index is not None:
+                return f"{base} [Exercice #{self.exercice_index + 1}]"
+            return base

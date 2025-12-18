@@ -21,6 +21,10 @@ from celery import shared_task
 from PIL import Image
 import base64
 from resources.models import PromptIA,Matiere
+from .pdf_utils import generer_pdf_corrige
+from .models import SoumissionIA
+from resources.models import Matiere
+from abonnement.services import debiter_credit_abonnement
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -1588,3 +1592,87 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             pass
         return False
 
+
+
+@shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
+def generer_corrige_exercice_async(soumission_id):
+    """
+    Tâche asynchrone pour corriger UN exercice isolé.
+    - Récupère SoumissionIA, DemandeCorrection, index de l'exercice
+    - Sépare le texte, traite l'exercice idx par IA + graphiques
+    - Génère le PDF, débite le crédit, met à jour statut et resultat_json
+    """
+    try:
+        soum = SoumissionIA.objects.get(id=soumission_id)
+        dem = soum.demande
+
+        # 1) Préparer le texte complet
+        if dem.fichier:
+            texte = extraire_texte_fichier(dem.fichier)
+        else:
+            texte = dem.enonce_texte or ""
+
+        # 2) Séparer et extraire le fragment
+        blocs = separer_exercices(texte)
+        idx = soum.exercice_index or 0
+        fragment = blocs[idx] if idx < len(blocs) else ""
+
+        # 3) Mise à jour statut
+        soum.statut = 'analyse_ia'
+        soum.progression = 20
+        soum.save()
+
+        # 4) Lancer la génération (IA + graph) sur ce fragment
+        mat = dem.matiere if dem.matiere else Matiere.objects.first()
+        contexte = f"Exercice de {mat.nom} – Exercice {idx+1}"
+        corrige_txt, _ = generer_corrige_ia_et_graphique(
+            texte_enonce=fragment,
+            contexte=contexte,
+            matiere=mat,
+            demande=dem
+        )
+
+        # 5) Mise à jour PDF
+        soum.statut = 'formatage_pdf'
+        soum.progression = 60
+        soum.save()
+
+        pdf_url = generer_pdf_corrige(
+            {
+                "titre_corrige": contexte,
+                "corrige_html": corrige_txt,
+                "soumission_id": soum.id
+            },
+            soum.id
+        )
+
+        # 6) Débit de crédit
+        if not debiter_credit_abonnement(dem.user):
+            soum.statut = 'erreur_credit'
+            soum.save()
+            return False
+
+        # 7) Finalisation
+        soum.statut = 'termine'
+        soum.progression = 100
+        soum.resultat_json = {
+            "exercice_index": idx,
+            "corrige_text": corrige_txt,
+            "pdf_url": pdf_url
+        }
+        soum.save()
+
+        # Optionnel : stocker aussi le contenu dans la DemandeCorrection
+        dem.corrigé = dem.corrigé or ""
+        dem.corrigé += f"\n\n<!-- Exercice {idx+1} -->\n" + corrige_txt
+        dem.save()
+
+        return True
+    except Exception as e:
+        try:
+            soum = SoumissionIA.objects.get(id=soumission_id)
+            soum.statut = 'erreur'
+            soum.save()
+        except:
+            pass
+        return False

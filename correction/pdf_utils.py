@@ -5,6 +5,11 @@ import tempfile
 import pdfkit
 from django.conf import settings
 from django.template.loader import render_to_string
+try:
+    from PyPDF2 import PdfMerger
+except ImportError:
+    from pypdf import PdfMerger
+
 
 
 def prerender_mathjax(html: str) -> str:
@@ -82,4 +87,29 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         f.write(pdf_bytes)
 
     return settings.MEDIA_URL + "pdfs/" + fname
+
+
+def merge_pdfs(pdf_urls: list, output_name: str) -> str:
+    """
+    Fusionne une liste d'URLs de PDF (/media/pdfs/...) en un PDF global.
+    - pdf_urls   : ['<MEDIA_URL>pdfs/corrige_1.pdf', …]
+    - output_name: nom du fichier final, ex. 'global_42.pdf'
+    Renvoie l’URL publique du PDF fusionné.
+    """
+    merger = PdfMerger()
+    for url in pdf_urls:
+        # Construit le chemin sur disque à partir de l'URL
+        rel = url.replace(settings.MEDIA_URL, '').lstrip('/')
+        fpath = os.path.join(settings.MEDIA_ROOT, rel)
+        if os.path.exists(fpath):
+            merger.append(fpath)
+    # Dossier de sortie
+    pdf_dir = os.path.join(settings.MEDIA_ROOT, "pdfs")
+    os.makedirs(pdf_dir, exist_ok=True)
+    out_path = os.path.join(pdf_dir, output_name)
+    # Écriture du PDF global
+    merger.write(out_path)
+    merger.close()
+    # URL publique à renvoyer
+    return settings.MEDIA_URL + "pdfs/" + output_name
 
