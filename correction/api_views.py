@@ -45,7 +45,7 @@ from .ia_utils import (
 from rest_framework.permissions import IsAuthenticated
 from .ia_utils import separer_exercices, extraire_texte_fichier
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-
+import traceback
 import tempfile, os
 from django.conf import settings
 
@@ -596,19 +596,17 @@ class SplitExercisesAPIView(APIView):
 
 
 #VUE PARTIELLE DES EXERCICES
-class PartialCorrectionAPIView(APIView):
-        """
-        POST /api/soumission/exercice/
-        Lance le traitement IA+PDF sur UN SEUL exercice identifié par son index.
-        Payload JSON : { "demande_id": <int>, "index": <int> }
-        """
-        permission_classes = [IsAuthenticated]
-        parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-        def post(self, request):
-            user = request.user
-            demande_id = request.data.get("demande_id")
-            idx = request.data.get("index")
+
+class PartialCorrectionAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes     = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        try:
+            user      = request.user
+            demande_id= request.data.get("demande_id")
+            idx       = request.data.get("index")
 
             # 1) Validation minimale
             if demande_id is None or idx is None:
@@ -616,18 +614,19 @@ class PartialCorrectionAPIView(APIView):
                     {"error": "demande_id et index sont requis"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            # Conversion et revalidation
             try:
                 idx = int(idx)
-            except ValueError:
+            except:
                 return Response(
                     {"error": "index doit être un entier"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 2) Récupérer la demande et vérifier l’utilisateur
+            # 2) Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
-            # 3) Extraire le texte complet (enoncé_texte ou fichier)
+            # 3) Récupérer le texte complet
             if demande.fichier:
                 texte_complet = extraire_texte_fichier(demande.fichier)
             else:
@@ -639,15 +638,15 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 4) Séparer les exercices et valider l'index
+            # 4) Séparation + validation index
             exercices = separer_exercices(texte_complet)
             if idx < 0 or idx >= len(exercices):
                 return Response(
-                    {"error": f"index hors limites (0 à {len(exercices) - 1})"},
+                    {"error": f"index hors limites (0 à {len(exercices)-1})"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 5) Créer la soumission IA (statut initial + stocker index)
+            # 5) Création de la soumission
             soumission = SoumissionIA.objects.create(
                 user=user,
                 demande=demande,
@@ -656,16 +655,24 @@ class PartialCorrectionAPIView(APIView):
                 exercice_index=idx
             )
 
-            # 6) Lancer la tâche asynchrone sur cet exercice
+            # 6) Lancement asynchrone
             generer_corrige_exercice_async.delay(soumission.id)
 
-            # 7) Répondre immédiatement avec l'ID de la soumission
+            # 7) Réponse
             return Response({
                 "success": True,
                 "soumission_exercice_id": soumission.id,
                 "message": "Exercice envoyé au traitement."
             }, status=status.HTTP_202_ACCEPTED)
 
+        except Exception as e:
+            # Affiche la stack complète dans les logs
+            traceback.print_exc()
+            # Renvoie un message minimal au front
+            return Response(
+                {"error": f"Erreur interne: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class MergePdfsAPIView(APIView):
     """
