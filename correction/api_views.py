@@ -522,30 +522,29 @@ class AppConfigAPIView(APIView):
 class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
-    Reçoit soit un fichier (PDF/Image) sous la clé 'fichier',
-    soit un texte brut sous 'enonce_texte',
-    et renvoie la liste des exercices détectés : index + titre/extrait.
+    - Crée une DemandeCorrection
+    - Retourne { demande_id: ..., exercices: [...] }
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
 
     def post(self, request):
-        # 1) Récupérer le texte brut
+        user = request.user
+
+        # 1) Récupérer les IDs passés
+        pays_id          = request.data.get('pays')
+        sous_id          = request.data.get('sous_systeme')
+        depart_id        = request.data.get('departement')
+        classe_id        = request.data.get('classe')
+        matiere_id       = request.data.get('matiere')
+        type_exo_id      = request.data.get('type_exercice')
+        lecons_ids       = request.data.get('lecons_ids')
+
+        # 2) Récupérer / extraire le texte
         texte = request.data.get('enonce_texte', '').strip()
         fichier = request.FILES.get('fichier')
-
         if fichier:
-            # Sauvegarde temporaire du fichier
-            tmpdir = tempfile.gettempdir()
-            local_path = os.path.join(tmpdir, fichier.name)
-            with open(local_path, 'wb') as fd:
-                for chunk in fichier.chunks():
-                    fd.write(chunk)
-            # Extraction du texte (OCR + IA si nécessaire)
             texte = extraire_texte_fichier(fichier)
-            # On peut supprimer le fichier temporaire :
-            try: os.remove(local_path)
-            except: pass
 
         if not texte:
             return Response(
@@ -553,23 +552,46 @@ class SplitExercisesAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2) Séparer les exercices
-        exercices = separer_exercices(texte)
+        # 3) Créer la demande
+        demande = DemandeCorrection.objects.create(
+            user=user,
+            pays_id=pays_id,
+            sous_systeme_id=sous_id,
+            departement_id=depart_id,
+            classe_id=classe_id,
+            matiere_id=matiere_id,
+            type_exercice_id=type_exo_id,
+            fichier=fichier,
+            enonce_texte=texte
+        )
+        # 3b) lier les leçons si présentes
+        if lecons_ids:
+            try:
+                ids = json.loads(lecons_ids) if isinstance(lecons_ids, str) else lecons_ids
+                demande.lecons.set(ids)
+            except:
+                pass
 
-        # 3) Construire la réponse : index + titre (première ligne)
-        liste = []
-        for idx, ex in enumerate(exercices):
-            # Titre = première ligne non vide
-            premiere_ligne = ex.strip().split('\n', 1)[0]
-            titre = premiere_ligne if premiere_ligne else f"Exercice {idx+1}"
-            liste.append({
+        # 4) Découper en exercices
+        blocs = separer_exercices(texte)
+
+        # 5) Construire la liste JSON
+        exercices = []
+        for idx, ex in enumerate(blocs):
+            titre = ex.strip().split('\n',1)[0] or f"Exercice {idx+1}"
+            extrait = ex.strip()[:100] + ("…" if len(ex) > 100 else "")
+            exercices.append({
                 "index": idx,
                 "titre": titre,
-                # optionnel : un extrait plus long, e.g. premiers 100 caractères :
-                "extrait": ex.strip()[:100] + ("…" if len(ex) > 100 else "")
+                "extrait": extrait
             })
 
-        return Response({"exercices": liste})
+        # 6) Répondre
+        return Response({
+            "demande_id": demande.id,
+            "exercices": exercices
+        })
+
 
 
 #VUE PARTIELLE DES EXERCICES

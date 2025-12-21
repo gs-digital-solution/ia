@@ -433,68 +433,40 @@ def format_corrige_pdf_structure(texte_corrige_raw):
 
 def separer_exercices(texte_epreuve):
     """
-    Détecte et sépare automatiquement les exercices d'une épreuve
+    Détecte et sépare les exercices d'une épreuve :
+    uniquement les lignes commençant par 'Exercice <n>' ou 'PARTIE <I>' en début de ligne.
     """
     if not texte_epreuve:
         return []
 
-    print("🔍 Détection des exercices...")
+    # Normalisation des retours chariot
+    lignes = texte_epreuve.splitlines()
 
-    # Patterns pour détecter le début des exercices
-    patterns_separation = [
-        r'Exercice\s+\d+[:.]', r'EXERCICE\s+\d+[:.]',
-        r'Partie\s+[IVXLCDM]+[:.]',
-        r'\n\d+[-.)]\s', r'\n[a-z]\)\s',
-        r'Question\s+\d+',
-        # Nouveaux genres d’épreuves (langues, lettres, geo, etc.)
-        r'COMENTARIO DEL TEXTO', r'ESTRUCTURAS DE COMUNICACIÓN',
-        r'PRODUCCIÓN DE TEXTOS', r'RECEPCIÓN DE TEXTOS',
-        r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
-        r'TEIL ?1\s+LESEVERSTEHEN', r'MEDIATION',
-        r'SCHRIFTLICHE PRODUKTION', r'STRUKTUREN UND KOMMUNIKATION',
-        r'SCHRIFTLICHER AUSDRUCK', r'SECTION A: GRAMMAR', r'SECTION B:VOCABULARY',
-        r'SECTION C: READING COMPREHENSION', r'SECTION D:ESSAY WRITTING'
+    # Patterns stricts en début de ligne
+    patterns = [
+        re.compile(r'^(?:EXERCICE|Exercice)\s+\d+\b'),
+        re.compile(r'^(?:PARTIE|Partie)\s+[IVXLCDM]+\b')
     ]
 
     exercices = []
-    lignes = texte_epreuve.split('\n')
-    exercice_courant = []
-    dans_exercice = False
+    courant = []
 
     for ligne in lignes:
-        ligne = ligne.strip()
-        if not ligne:
-            continue
+        if any(pat.match(ligne) for pat in patterns):
+            # nouveau bloc : enregistrer l'ancien s'il existe
+            if courant:
+                exercices.append('\n'.join(courant))
+                courant = []
+        courant.append(ligne)
+    # ajouter le dernier bloc
+    if courant:
+        exercices.append('\n'.join(courant))
 
-        # Vérifier si cette ligne commence un nouvel exercice
-        nouvel_exercice = False
-        for pattern in patterns_separation:
-            if re.search(pattern, ligne, re.IGNORECASE):
-                nouvel_exercice = True
-                break
-
-        if nouvel_exercice and exercice_courant:
-            # Sauvegarder l'exercice précédent
-            exercices.append('\n'.join(exercice_courant))
-            exercice_courant = []
-            dans_exercice = True
-
-        exercice_courant.append(ligne)
-
-    # Ajouter le dernier exercice
-    if exercice_courant:
-        exercices.append('\n'.join(exercice_courant))
-
-    # Si aucun exercice détecté, traiter tout comme un seul exercice
+    # Si aucun exercice détecté, retourner tout
     if not exercices:
-        exercices = [texte_epreuve]
-
-    print(f"✅ {len(exercices)} exercice(s) détecté(s)")
-    for i, ex in enumerate(exercices):
-        print(f"   Exercice {i + 1}: {len(ex)} caractères")
+        return [texte_epreuve]
 
     return exercices
-
 
 def estimer_tokens(texte):
     """
