@@ -42,9 +42,10 @@ from .ia_utils import (
     format_corrige_pdf_structure,
     generer_corrige_exercice_async
 )
-from rest_framework.parsers import MultiPartParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from .ia_utils import separer_exercices, extraire_texte_fichier
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
 import tempfile, os
 from django.conf import settings
 
@@ -602,7 +603,7 @@ class PartialCorrectionAPIView(APIView):
         Payload JSON : { "demande_id": <int>, "index": <int> }
         """
         permission_classes = [IsAuthenticated]
-        parser_classes = [JSONParser]
+        parser_classes = [MultiPartParser, FormParser, JSONParser]
 
         def post(self, request):
             user = request.user
