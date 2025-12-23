@@ -1004,6 +1004,23 @@ def extraire_texte_fichier(fichier_field):
     # 4) Retourne le texte extrait
     return analyse.get("texte_complet", "")
 
+
+from pytesseract import image_to_string
+def ocr_image_simple(image_path: str) -> str:
+    """
+    OCR basique pour les images (png/jpg).
+    Retourne le texte brut extrait par Tesseract.
+    """
+    try:
+        img = Image.open(image_path)
+        clean = preprocess_image_for_ocr(img)  # votre fonction existante
+        # --oem 3 = meilleur OCR, psm 6 = page entière
+        texte = image_to_string(clean, config='--oem 3 --psm 6 -l fra+eng')
+        return texte.strip()
+    except Exception as e:
+        print(f"❌ OCR simple échoué sur {image_path}: {e}")
+        return ""
+
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
     """

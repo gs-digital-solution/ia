@@ -48,6 +48,8 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import traceback
 import tempfile, os
 from django.conf import settings
+import mimetypes
+
 
 
 class UserRegisterAPIView(APIView):
@@ -541,15 +543,39 @@ class SplitExercisesAPIView(APIView):
         type_exo_id      = request.data.get('type_exercice')
         lecons_ids       = request.data.get('lecons_ids')
 
+
+
         # 2) Récupérer / extraire le texte
         texte = request.data.get('enonce_texte', '').strip()
         fichier = request.FILES.get('fichier')
         if fichier:
-            texte = extraire_texte_fichier(fichier)
+            # 2.a) Sauvegarde temporaire
+            tmpdir = tempfile.gettempdir()
+            tmp_path = os.path.join(tmpdir, fichier.name)
+            with open(tmp_path, 'wb') as fd:
+                for chunk in fichier.chunks():
+                    fd.write(chunk)
 
-        if not texte:
+            # 2.b) Détection du type MIME
+            mime, _ = mimetypes.guess_type(tmp_path)
+            if mime != None and mime.startswith('image/'):
+                # Appel OCR simple pour image
+                from .ia_utils import ocr_image_simple
+                texte = ocr_image_simple(tmp_path)
+            else:
+                # Extraction complète (PDF ou autres)
+                texte = extraire_texte_fichier(fichier)
+
+            # 2.c) Cleanup
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
+
+        # 2.d) Validation
+        if not texte or texte.trim().isEmpty:
             return Response(
-                {"error": "Aucun texte ou fichier fourni."},
+                {"error": "Aucun texte ou fichier fourni ou OCR a échoué."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
