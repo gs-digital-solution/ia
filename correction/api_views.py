@@ -40,7 +40,8 @@ from .ia_utils import (
     flatten_multiline_latex_blocks,
     extract_and_process_graphs,
     format_corrige_pdf_structure,
-    generer_corrige_exercice_async
+    generer_corrige_exercice_async,
+
 )
 from rest_framework.permissions import IsAuthenticated
 from .ia_utils import separer_exercices, extraire_texte_fichier
@@ -543,42 +544,17 @@ class SplitExercisesAPIView(APIView):
         type_exo_id      = request.data.get('type_exercice')
         lecons_ids       = request.data.get('lecons_ids')
 
-
-
         # 2) Récupérer / extraire le texte
         texte = request.data.get('enonce_texte', '').strip()
         fichier = request.FILES.get('fichier')
         if fichier:
-            # 2.a) Sauvegarde temporaire
-            tmpdir = tempfile.gettempdir()
-            tmp_path = os.path.join(tmpdir, fichier.name)
-            with open(tmp_path, 'wb') as fd:
-                for chunk in fichier.chunks():
-                    fd.write(chunk)
+            texte = extraire_texte_fichier(fichier)
 
-            # 2.b) Détection du type MIME
-            mime, _ = mimetypes.guess_type(tmp_path)
-            if mime != None and mime.startswith('image/'):
-                # Appel OCR simple pour image
-                from .ia_utils import ocr_image_simple
-                texte = ocr_image_simple(tmp_path)
-            else:
-                # Extraction complète (PDF ou autres)
-                texte = extraire_texte_fichier(fichier)
-
-            # 2.c) Cleanup
-            try:
-                os.remove(tmp_path)
-            except:
-                pass
-
-        # 2.d) Validation
-        if not texte or texte.trim().isEmpty:
+        if not texte:
             return Response(
-                {"error": "Aucun texte ou fichier fourni ou OCR a échoué."},
+                {"error": "Aucun texte ou fichier fourni."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         # 3) Créer la demande
         demande = DemandeCorrection.objects.create(
             user=user,
