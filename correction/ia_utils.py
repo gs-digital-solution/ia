@@ -92,54 +92,46 @@ def is_departement_scientifique(departement):
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
 def get_best_promptia(demande):
     """
-    Retourne le PromptIA le plus spécifique pour la demande.
-    Ordre de priorité maximal : tous les champs, et fallback au fur et à mesure si besoin.
+    Retourne le PromptIA le plus spécifique pour la demande, ou None.
+    Ne fait jamais filter({}) qui retomberait sur le 1er prompt anglais.
+    Fallback progressif, puis prompt par défaut si rien trouvé.
     """
-    print("[DEBUG] -> get_best_promptia called with demande:", demande, "type:", type(demande))
-
-    filtra = dict(
-        pays=demande.pays,
-        sous_systeme=demande.sous_systeme,
-        classe=demande.classe,
-        matiere=demande.matiere,
-        departement=demande.departement,
-        type_exercice=demande.type_exercice,
-    )
-
-    # Retire les valeurs nulles
+    # 1) Construire le filtre initial
+    filtra = {
+        'pays': demande.pays,
+        'sous_systeme': demande.sous_systeme,
+        'classe': demande.classe,
+        'matiere': demande.matiere,
+        'departement': demande.departement,
+        'type_exercice': demande.type_exercice,
+    }
+    # Ne garder que les clés non-nulles
     filtra = {k: v for k, v in filtra.items() if v is not None}
 
-    # Clé de cache basée sur les filtres utilisés
-    key = tuple(sorted(filtra.items()))
-    # Si déjà traité en mémoire, on renvoie directement
-    if key in _PROMPTIA_CACHE:
-        return _PROMPTIA_CACHE[key]
+    # 2) Si on a au moins un critère, tenter la recherche exacte
+    if filtra:
+        qs = PromptIA.objects.filter(**filtra)
+        if qs.exists():
+            return qs.first()
 
-    # Recherche de la correspondance la plus précise
-    qs = PromptIA.objects.filter(**filtra)
-    if qs.exists():
-        promptia = qs.first()
-    else:
-        # Fallback progressif sur les champs
-        promptia = None
-        champs_tris = ['type_exercice', 'departement', 'classe', 'sous_systeme', 'pays']
-        for champ in champs_tris:
-            if filtra.get(champ):
+        # 2b) Fallback progressif en retirant un champ à la fois
+        for champ in ['type_exercice', 'departement', 'classe', 'sous_systeme', 'pays']:
+            if champ in filtra:
                 filtra2 = dict(filtra)
                 filtra2.pop(champ)
-                qs2 = PromptIA.objects.filter(**filtra2)
-                if qs2.exists():
-                    promptia = qs2.first()
-                    break
-        # En dernier recours, par matière seule
-        if promptia is None:
+                if filtra2:
+                    qs2 = PromptIA.objects.filter(**filtra2)
+                    if qs2.exists():
+                        return qs2.first()
+
+        # 2c) Fallback par matière seule si matière faisait partie du filtre
+        if 'matiere' in filtra:
             qs3 = PromptIA.objects.filter(matiere=demande.matiere)
             if qs3.exists():
-                promptia = qs3.first()
+                return qs3.first()
 
-    # On met en cache le résultat (même None)
-    _PROMPTIA_CACHE[key] = promptia
-    return promptia
+    # 3) Aucune correspondance : retomber sur DEFAULT_SYSTEM_PROMPT
+    return None
 
 
 # ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
