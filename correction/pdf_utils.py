@@ -10,43 +10,39 @@ try:
 except ImportError:
     from pypdf import PdfMerger
 
-import logging
 from urllib.parse import urlparse
-
-logger = logging.getLogger(__name__)
 
 
 def prerender_mathjax(html: str) -> str:
-    logger.info("[prerender_mathjax] Début du pré-rendu MathJax")
+    print("▶▶ prerender_mathjax: début")
     tf_in = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
     tf_in.write(html.encode("utf-8"))
     tf_in.close()
-    logger.info(f"[prerender_mathjax] Fichier d'entrée : {tf_in.name}")
+    print(f"    fichier entrée  : {tf_in.name}")
 
     tf_out = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
     tf_out.close()
-    logger.info(f"[prerender_mathjax] Fichier de sortie : {tf_out.name}")
+    print(f"    fichier sortie : {tf_out.name}")
 
     cmd = f"npx mjpage < {tf_in.name} > {tf_out.name}"
-    logger.info(f"[prerender_mathjax] Exécution de la commande : {cmd}")
+    print(f"    lancement : {cmd}")
     subprocess.check_call(cmd, shell=True)
-    logger.info("[prerender_mathjax] Pré-rendu terminé")
+    print("✔ prerender_mathjax terminé")
 
     with open(tf_out.name, encoding="utf-8") as f:
         return f.read()
 
 
 def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
-    logger.info(f"[generer_pdf_corrige] Début génération du PDF pour la soumission #{soumission_id}")
-
+    print(f"▶▶ generer_pdf_corrige: soumission #{soumission_id}")
     html = render_to_string("correction/corrige_view.html", context)
-    logger.info(f"[generer_pdf_corrige] Template rendu ({len(html)} caractères)")
+    print(f"    template rendu, {len(html)} caractères")
 
     html_prerender = prerender_mathjax(html)
-    debug_html_path = f"/tmp/dernier_corrige_{soumission_id}.html"
-    with open(debug_html_path, "w", encoding="utf-8") as f:
+    debug_html = f"/tmp/dernier_corrige_{soumission_id}.html"
+    with open(debug_html, "w", encoding="utf-8") as f:
         f.write(html_prerender)
-    logger.info(f"[generer_pdf_corrige] HTML intermédiaire sauvé : {debug_html_path}")
+    print(f"    HTML intermédiaire sauvegardé : {debug_html}")
 
     options = {
         "enable-local-file-access": None,
@@ -63,9 +59,9 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         "margin-right": "10mm",
         "quiet": "",
     }
-    logger.info("[generer_pdf_corrige] Conversion du HTML en PDF")
+    print("    conversion HTML → PDF")
     pdf_bytes = pdfkit.from_string(html_prerender, False, options=options)
-    logger.info("[generer_pdf_corrige] Conversion terminée")
+    print("✔ PDF généré en mémoire")
 
     pdf_dir = os.path.join(settings.MEDIA_ROOT, "pdfs")
     os.makedirs(pdf_dir, exist_ok=True)
@@ -73,57 +69,67 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     path = os.path.join(pdf_dir, fname)
     with open(path, "wb") as f:
         f.write(pdf_bytes)
-    logger.info(f"[generer_pdf_corrige] PDF enregistré à {path}")
+    print(f"✔ PDF sauvé : {path}")
 
     return settings.MEDIA_URL + "pdfs/" + fname
 
 
 def merge_pdfs(pdf_urls: list, output_name: str) -> str:
-    """
-    Fusionne plusieurs fichiers PDF en un seul.
-    """
-    logger.info(f"[merge_pdfs] Début fusion de {len(pdf_urls)} PDF(s) : {pdf_urls}")
-    merger = PdfMerger()
-    chemins_trouves = []
+    print("▶▶ merge_pdfs appelé")
+    print("    MEDIA_URL   =", settings.MEDIA_URL)
+    print("    MEDIA_ROOT  =", settings.MEDIA_ROOT)
+    print("    pdf_urls    =", pdf_urls)
 
+    try:
+        merger = PdfMerger()
+        print("    PdfMerger instancié")
+    except Exception as e:
+        print("‼ Erreur instanciation PdfMerger:", e)
+        raise
+
+    chemins_trouves = []
     for url in pdf_urls:
-        # Extraction du chemin local
-        if url.startswith('http'):
+        print("    traiter url:", url)
+        if url.startswith("http"):
             path = urlparse(url).path
         else:
             path = url
-        rel = path.replace(settings.MEDIA_URL, '').lstrip('/')
-        fpath = os.path.join(settings.MEDIA_ROOT, rel)
-        logger.info(f"[merge_pdfs] URL reçue : {url} → chemin local : {fpath}")
+        print("        path :", path)
 
-        # Vérification d’existence
-        if not os.path.exists(fpath):
-            logger.warning(f"[merge_pdfs] Fichier introuvable : {fpath}")
+        rel = path.replace(settings.MEDIA_URL, "").lstrip("/")
+        print("        rel  :", rel)
+
+        fpath = os.path.join(settings.MEDIA_ROOT, rel)
+        print("        fpath:", fpath)
+
+        exists = os.path.exists(fpath)
+        print("        existe ?", exists)
+        if not exists:
+            print("    ⚠ fichier introuvable, skip.")
             continue
 
-        # Ajout au merger
         try:
             merger.append(fpath)
             chemins_trouves.append(fpath)
-            logger.info(f"[merge_pdfs] Ajouté au merger : {fpath}")
-        except Exception:
-            logger.exception(f"[merge_pdfs] Échec ajout du PDF : {fpath}")
+            print("    + ajouté au merger")
+        except Exception as e:
+            print("‼ Erreur ajout PDF:", fpath, e)
             raise
 
+    print("    fichiers valides:", chemins_trouves)
     if not chemins_trouves:
-        logger.error("[merge_pdfs] Aucun fichier valide trouvé pour la fusion – arrêt")
+        print("‼ Aucun fichier valide à fusionner, on lève FileNotFoundError")
         raise FileNotFoundError("merge_pdfs: aucun fichier valide trouvé pour fusion")
 
-    # Écriture du PDF global
     pdf_dir = os.path.join(settings.MEDIA_ROOT, "pdfs")
     os.makedirs(pdf_dir, exist_ok=True)
     out_path = os.path.join(pdf_dir, output_name)
     try:
         merger.write(out_path)
         merger.close()
-        logger.info(f"[merge_pdfs] Fusion OK, fichier généré : {out_path}")
-    except Exception:
-        logger.exception(f"[merge_pdfs] Échec écriture du PDF global : {out_path}")
+        print("✔ fusion OK, fichier généré :", out_path)
+    except Exception as e:
+        print("‼ Erreur écriture PDF global :", e)
         raise
 
     return settings.MEDIA_URL + "pdfs/" + output_name
