@@ -10,6 +10,10 @@ try:
 except ImportError:
     from pypdf import PdfMerger
 
+import logging
+logger = logging.getLogger(__name__)
+from urllib.parse import urlparse
+
 
 
 def prerender_mathjax(html: str) -> str:
@@ -89,27 +93,43 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
     return settings.MEDIA_URL + "pdfs/" + fname
 
 
+
 def merge_pdfs(pdf_urls: list, output_name: str) -> str:
-    """
-    Fusionne une liste d'URLs de PDF (/media/pdfs/...) en un PDF global.
-    - pdf_urls   : ['<MEDIA_URL>pdfs/corrige_1.pdf', …]
-    - output_name: nom du fichier final, ex. 'global_42.pdf'
-    Renvoie l’URL publique du PDF fusionné.
-    """
     merger = PdfMerger()
+    logger.debug(f"[merge_pdfs] pdf_urls reçues : {pdf_urls}")
+
+    chemins_trouves = []
     for url in pdf_urls:
-        # Construit le chemin sur disque à partir de l'URL
-        rel = url.replace(settings.MEDIA_URL, '').lstrip('/')
+        # 1) Extraire le chemin relatif depuis MEDIA_URL
+        if url.startswith('http'):
+            # si url absolue : ne garder que le path
+            path = urlparse(url).path
+        else:
+            path = url
+        rel = path.replace(settings.MEDIA_URL, '').lstrip('/')
         fpath = os.path.join(settings.MEDIA_ROOT, rel)
-        if os.path.exists(fpath):
-            merger.append(fpath)
-    # Dossier de sortie
+
+        # 2) Vérifier l’existence
+        if not os.path.exists(fpath):
+            logger.warning(f"[merge_pdfs] Fichier introuvable : {fpath}")
+            continue
+
+        # 3) Ajouter au merger
+        chemins_trouves.append(fpath)
+        merger.append(fpath)
+
+    # 4) Cas sans aucun PDF à fusionner
+    if not chemins_trouves:
+        raise Exception("merge_pdfs: aucun fichier valide trouvé pour fusion")
+
+    # 5) Écriture du PDF global
     pdf_dir = os.path.join(settings.MEDIA_ROOT, "pdfs")
     os.makedirs(pdf_dir, exist_ok=True)
     out_path = os.path.join(pdf_dir, output_name)
-    # Écriture du PDF global
+
     merger.write(out_path)
     merger.close()
-    # URL publique à renvoyer
+
+    logger.debug(f"[merge_pdfs] Fusion OK, fichier généré : {out_path}")
     return settings.MEDIA_URL + "pdfs/" + output_name
 
