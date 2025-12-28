@@ -385,21 +385,22 @@ class DownloadCorrigeAPIView(APIView):
 
 
 
-class HistoriqueCorrectionsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+from rest_framework import generics
+from .serializers import HistoriqueSerializer
+from .models import DemandeCorrection
 
-    def get(self, request):
-        demandes = DemandeCorrection.objects.filter(user=request.user).order_by('-date_soumission')
-        data = []
-        for demande in demandes:
-            soumission = SoumissionIA.objects.filter(demande=demande).first()
-            data.append({
-                "id": demande.id,
-                "matiere": demande.matiere.nom if demande.matiere else "",
-                "date": demande.date_soumission.strftime("%d/%m/%Y %H:%M"),
-                "statut": soumission.statut if soumission else "inconnu"
-            })
-        return Response(data)
+class HistoriqueCorrectionsAPIView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class   = HistoriqueSerializer
+
+    def get_queryset(self):
+        # On précharge les SoumissionIA + CorrigePartiel pour optimiser les requêtes
+        return DemandeCorrection.objects.filter(
+            user=self.request.user
+        ).order_by('-date_soumission').prefetch_related(
+            'soumissionia_set__corriges'
+        )
+
 
 
 class FeedbackAPIView(APIView):
