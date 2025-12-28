@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
+from .models import DemandeCorrection, CorrigePartiel
+
 from .models import (
     CustomUser,
     AppConfig,
@@ -127,3 +129,13 @@ class SoumissionIAAdmin(admin.ModelAdmin):
     list_display = ['user', 'demande', 'statut', 'progression', 'date_creation']
     list_filter = ['statut', 'date_creation']
     readonly_fields = ['date_creation', 'date_maj']
+
+
+
+@admin.register(DemandeCorrection)
+class DemandeCorrectionAdmin(admin.ModelAdmin):
+       list_display = ('user', 'date_soumission', 'corrigé')
+
+@admin.register(CorrigePartiel)
+class CorrigePartielAdmin(admin.ModelAdmin):
+       list_display = ('soumission', 'titre_exercice', 'date_creation')
