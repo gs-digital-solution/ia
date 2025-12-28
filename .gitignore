@@ -2,7 +2,9 @@
 *.sqlite3
 *.pyc
 __pycache__/
-migrations/
+#migrations/
+!correction/migrations/
+!correction/migrations/*.py
 /staticfiles/
 /media/
 /static/
