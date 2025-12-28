@@ -29,7 +29,7 @@ from weasyprint import HTML as WeasyHTML
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from .models import SoumissionIA
-from .pdf_utils import generer_pdf_corrige,merge_pdfs
+from .pdf_utils import generer_pdf_corrige
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from rest_framework.permissions import AllowAny
 from resources.api_views import PaysListAPIView, SousSystemeListAPIView
@@ -50,6 +50,13 @@ import traceback
 import tempfile, os
 from django.conf import settings
 import mimetypes
+from rest_framework import generics
+from .models import SoumissionIA, CorrigePartiel
+from .serializers import CorrigePartielSerializer
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
+
 
 
 
@@ -677,50 +684,31 @@ class PartialCorrectionAPIView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-class MergePdfsAPIView(APIView):
-    """
-    GET  /api/soumission/<demande_id>/merge-pdfs/
-    Fusionne tous les PDF partiels (statut 'termine') de la demande
-    et renvoie l'URL du PDF global.
-    """
+
+
+#Lister les corrigés partiels d’une soumission
+class CorrigesListAPIView(generics.ListAPIView):
+    serializer_class = CorrigePartielSerializer
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, demande_id):
-        # 1) Vérifier la demande et l'utilisateur
-        demande = get_object_or_404(DemandeCorrection, id=demande_id, user=request.user)
+    def get_queryset(self):
+        soumission_id = self.kwargs['soumission_id']
+        # On s’assure que l’utilisateur y a bien droit
+        soumission = get_object_or_404(SoumissionIA, id=soumission_id, user=self.request.user)
+        return soumission.corriges.all()
 
-        # 2) Récupérer les soumissions terminées, triées par index
-        soumissions = SoumissionIA.objects.filter(
-            demande=demande, statut='termine'
-        ).order_by('exercice_index')
 
-        if not soumissions.exists():
-            return Response(
-                {"error": "Aucun PDF partiel disponible pour fusion."},
-                status=status.HTTP_404_NOT_FOUND
-            )
+#  VUE POUR TELECHARGER LES PDF PARTIELS
+class DownloadPartialCorrigeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        # 3) Extraire les URLs des PDF partiels
-        pdf_urls = [
-            s.resultat_json.get('pdf_url')
-            for s in soumissions
-            if s.resultat_json.get('pdf_url')
-        ]
-        if not pdf_urls:
-            return Response(
-                {"error": "Aucune URL de PDF partiel trouvée."},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        # 4) Fusionner et récupérer l'URL globale
-        output_name = f"global_{demande_id}.pdf"
-        try:
-            merged_url = merge_pdfs(pdf_urls, output_name)
-        except Exception as e:
-            return Response(
-                {"error": f"Échec de la fusion des PDF : {e}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        # 5) Répondre avec l'URL du PDF global
-        return Response({"pdf_url": merged_url})
+    def get(self, request, corrige_id):
+        corrige = get_object_or_404(
+            CorrigePartiel,
+            id=corrige_id,
+            soumission__user=request.user
+        )
+        if not corrige.fichier_pdf:
+            return Response({"error": "Pas de fichier PDF disponible."}, status=404)
+        url = request.build_absolute_uri(corrige.fichier_pdf.url)
+        return Response({"pdf_url": url})

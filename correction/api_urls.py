@@ -20,7 +20,8 @@ from .api_views import (
     PartagerCorrigeAPIView,
     DebugExtractionAPIView,
     PartialCorrectionAPIView,
-    MergePdfsAPIView
+    CorrigesListAPIView,
+    DownloadPartialCorrigeAPIView
 )
 from .api_views import SplitExercisesAPIView
 
@@ -49,7 +50,7 @@ urlpatterns = [
     path('soumission/',                    SoumissionExerciceAPIView.as_view(),      name='api_soumission'),
     path('soumission/exercice/',           PartialCorrectionAPIView.as_view(),      name='api_soumission_exercice'),
     path('soumission/<int:soumission_id>/status/', StatutSoumissionAPIView.as_view(), name='api_soumission_status'),
-    path('soumission/<int:demande_id>/merge-pdfs/',MergePdfsAPIView.as_view(),name='api_merge_pdfs'),
+    #path('soumission/<int:demande_id>/merge-pdfs/',MergePdfsAPIView.as_view(),name='api_merge_pdfs'),
 
     # Listes protégées
     path('departements/',  DepartementsListAPIView.as_view(),   name='api_departements'),
@@ -70,6 +71,18 @@ urlpatterns = [
 
     # route d'affichage/selection des exercices à corriger
     path('split/', SplitExercisesAPIView.as_view(), name='api_split_exercises'),
+
+path(
+  'soumission/<int:soumission_id>/corriges/',
+  CorrigesListAPIView.as_view(),
+  name='api_soumission_corriges'
+),
+
+path(
+  'corriges-partiels/<int:corrige_id>/download/',
+  DownloadPartialCorrigeAPIView.as_view(),
+  name='api_download_partial_corrige'
+),
 
 ]
 
