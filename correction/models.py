@@ -18,7 +18,7 @@ class DemandeCorrection(models.Model):
     lecons = models.ManyToManyField(Lecon, blank=True)
     fichier = models.FileField(upload_to='soumissions/', blank=True, null=True)
     date_soumission = models.DateTimeField(auto_now_add=True)
-    corrige = models.TextField(blank=True)  # Stockage d’un corrigé (format texte/HTML)
+    corrigé = models.TextField(blank=True)  # Stockage d’un corrigé (format texte/HTML)
     enonce_texte = models.TextField(blank=True, default="")
 
     def __str__(self):
