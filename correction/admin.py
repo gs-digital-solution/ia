@@ -1,15 +1,15 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import DemandeCorrection, CorrigePartiel
-
 from .models import (
     CustomUser,
     AppConfig,
     FeedbackCorrection,
     DeviceConnectionHistory,
     DeviceMigrationRequest,
-    SoumissionIA
+    SoumissionIA,
+    DemandeCorrection,
+    CorrigePartiel,
 )
 from abonnement.models import PromoCode
 
@@ -81,7 +81,6 @@ class CustomUserAdmin(UserAdmin):
         return ro
 
 
-# Enregistrement des autres modèles
 @admin.register(AppConfig)
 class AppConfigAdmin(admin.ModelAdmin):
     list_display = ['pdf_enabled', 'correction_enabled']
@@ -112,9 +111,8 @@ class DeviceMigrationRequestAdmin(admin.ModelAdmin):
         "request_date",
         "decision_date",
         "user_date_joined",
-        "get_migration_count"
+        "get_migration_count",
     )
-
     list_filter = ("status", "request_date")
     search_fields = ("user_first_name", "previous_device_id", "new_device_id")
 
@@ -126,16 +124,17 @@ class DeviceMigrationRequestAdmin(admin.ModelAdmin):
 
 @admin.register(SoumissionIA)
 class SoumissionIAAdmin(admin.ModelAdmin):
-    list_display = ['user', 'demande', 'statut', 'progression', 'date_creation']
-    list_filter = ['statut', 'date_creation']
+    list_display    = ['user', 'demande', 'statut', 'progression', 'date_creation']
+    list_filter     = ['statut', 'date_creation']
     readonly_fields = ['date_creation', 'date_maj']
-
 
 
 @admin.register(DemandeCorrection)
 class DemandeCorrectionAdmin(admin.ModelAdmin):
-       list_display = ('user', 'date_soumission', 'corrigé')
+    list_display = ('user', 'date_soumission', 'fichier')
+    # si besoin, vous pouvez ajouter readonly_fields = ('fichier',) ou d'autres champs
+
 
 @admin.register(CorrigePartiel)
 class CorrigePartielAdmin(admin.ModelAdmin):
-       list_display = ('soumission', 'titre_exercice', 'date_creation')
+    list_display = ('soumission', 'titre_exercice', 'date_creation')

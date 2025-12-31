@@ -205,7 +205,6 @@ class SoumissionExerciceAPIView(APIView):
             matiere_id = request.data.get('matiere')
             type_exercice_id = request.data.get('type_exercice')
             departement_id = request.data.get('departement')
-            enonce_texte = request.data.get('enonce_texte', '')
             fichier = request.FILES.get('fichier')
 
             # Récupérer les leçons sélectionnées
@@ -223,8 +222,8 @@ class SoumissionExerciceAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Vérifier qu'on a au moins un énoncé ou un fichier
-            if not fichier and not enonce_texte.strip():
+            # Vérifier qu'on a un fichier
+            if not fichier :
                 return Response(
                     {"error": "Fichier ou énoncé texte requis"},
                     status=status.HTTP_400_BAD_REQUEST
@@ -240,7 +239,6 @@ class SoumissionExerciceAPIView(APIView):
                 departement_id=departement_id,
                 type_exercice_id=type_exercice_id,
                 fichier=fichier,
-                enonce_texte=enonce_texte
             )
 
             # Ajouter les leçons sélectionnées
@@ -544,26 +542,23 @@ class SplitExercisesAPIView(APIView):
         user = request.user
 
         # 1) Récupérer les IDs passés
-        pays_id          = request.data.get('pays')
-        sous_id          = request.data.get('sous_systeme')
-        depart_id        = request.data.get('departement')
-        classe_id        = request.data.get('classe')
-        matiere_id       = request.data.get('matiere')
-        type_exo_id      = request.data.get('type_exercice')
-        lecons_ids       = request.data.get('lecons_ids')
+        pays_id     = request.data.get('pays')
+        sous_id     = request.data.get('sous_systeme')
+        depart_id   = request.data.get('departement')
+        classe_id   = request.data.get('classe')
+        matiere_id  = request.data.get('matiere')
+        type_exo_id = request.data.get('type_exercice')
+        lecons_ids  = request.data.get('lecons_ids')
 
-        # 2) Récupérer / extraire le texte
-        texte = request.data.get('enonce_texte', '').strip()
+        # 2) Récupérer le fichier d’énoncé et vérifier sa présence
         fichier = request.FILES.get('fichier')
-        if fichier:
-            texte = extraire_texte_fichier(fichier)
-
-        if not texte:
+        if not fichier:
             return Response(
-                {"error": "Aucun texte ou fichier fourni."},
+                {"error": "Le fichier d’énoncé est requis."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        # 3) Créer la demande
+
+        # 3) Créer la demande sans enonce_texte
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
@@ -572,25 +567,26 @@ class SplitExercisesAPIView(APIView):
             classe_id=classe_id,
             matiere_id=matiere_id,
             type_exercice_id=type_exo_id,
-            fichier=fichier,
-            enonce_texte=texte
+            fichier=fichier
         )
-        # 3b) lier les leçons si présentes
+
+        # 3b) Lier les leçons si présentes
         if lecons_ids:
             try:
                 ids = json.loads(lecons_ids) if isinstance(lecons_ids, str) else lecons_ids
                 demande.lecons.set(ids)
-            except:
+            except Exception:
                 pass
 
-        # 4) Découper en exercices
+        # 4) Extraire le texte et découper en exercices
+        texte = extraire_texte_fichier(fichier)
         blocs = separer_exercices(texte)
 
         # 5) Construire la liste JSON
         exercices = []
         for idx, ex in enumerate(blocs):
-            titre = ex.strip().split('\n',1)[0] or f"Exercice {idx+1}"
-            extrait = ex.strip()[:100] + ("…" if len(ex) > 100 else "")
+            titre   = ex.strip().split('\n', 1)[0] or f"Exercice {idx+1}"
+            extrait = ex.strip()[:100] + ("…" if len(ex.strip()) > 100 else "")
             exercices.append({
                 "index": idx,
                 "titre": titre,
@@ -636,12 +632,8 @@ class PartialCorrectionAPIView(APIView):
             # 2) Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
-            # 3) Récupérer le texte complet
-            if demande.fichier:
-                texte_complet = extraire_texte_fichier(demande.fichier)
-            else:
-                texte_complet = demande.enonce_texte or ""
-
+            # 3) Récupérer le texte complet depuis le fichier
+            texte_complet = extraire_texte_fichier(demande.fichier)
             if not texte_complet:
                 return Response(
                     {"error": "Impossible d'extraire le texte de la demande."},
