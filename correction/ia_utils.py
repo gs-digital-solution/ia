@@ -1572,11 +1572,8 @@ def generer_corrige_exercice_async(soumission_id):
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
 
-        # 1) Préparer le texte complet
-        if dem.fichier:
-            texte = extraire_texte_fichier(dem.fichier)
-        else:
-            texte = dem.enonce_texte or ""
+        # 1) Préparer le texte complet depuis le fichier d’énoncé
+        texte = extraire_texte_fichier(dem.fichier)
 
         # 2) Séparer et extraire le fragment
         blocs = separer_exercices(texte)
@@ -1629,9 +1626,9 @@ def generer_corrige_exercice_async(soumission_id):
         soum.save()
 
         # Optionnel : stocker aussi le contenu dans la DemandeCorrection
-        dem.corrigé = dem.corrigé or ""
-        dem.corrigé += f"\n\n<!-- Exercice {idx+1} -->\n" + corrige_txt
-        dem.save()
+        #dem.corrigé = dem.corrigé or ""
+        #dem.corrigé += f"\n\n<!-- Exercice {idx+1} -->\n" + corrige_txt
+        #dem.save()
 
         return True
     except Exception as e:
