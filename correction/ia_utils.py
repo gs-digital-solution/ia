@@ -1470,8 +1470,8 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
                 os.unlink(local_path)
             except:
                 pass
-        else:
-            texte_brut = demande.enonce_texte or ""
+                #else:
+            #texte_brut = demande.enonce_texte or ""
 
         print("📥 DEBUG – TEXTE BRUT AVEC VISION (premiers 500 chars) :")
         print(texte_brut[:500].replace("\n", "\\n"), "...\n")
