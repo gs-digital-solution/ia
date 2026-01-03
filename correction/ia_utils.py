@@ -25,6 +25,8 @@ from .pdf_utils import generer_pdf_corrige
 from .models import SoumissionIA
 from resources.models import Matiere
 from abonnement.services import debiter_credit_abonnement
+from .models import CorrigePartiel
+from django.core.files import File
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -1559,14 +1561,10 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         return False
 
 
-
 @shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
 def generer_corrige_exercice_async(soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
-    - Récupère SoumissionIA, DemandeCorrection, index de l'exercice
-    - Sépare le texte, traite l'exercice idx par IA + graphiques
-    - Génère le PDF, débite le crédit, met à jour statut et resultat_json
     """
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
@@ -1587,7 +1585,7 @@ def generer_corrige_exercice_async(soumission_id):
 
         # 4) Lancer la génération (IA + graph) sur ce fragment
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
-        contexte = f"Exercice de {mat.nom} – Exercice {idx+1}"
+        contexte = f"Exercice de {mat.nom} – Exercice {idx + 1}"
         corrige_txt, _ = generer_corrige_ia_et_graphique(
             texte_enonce=fragment,
             contexte=contexte,
@@ -1615,7 +1613,26 @@ def generer_corrige_exercice_async(soumission_id):
             soum.save()
             return False
 
-        # 7) Finalisation
+        # 7) CRÉATION DU CorrigePartiel - CE QUI MANQUE !
+        # Récupère le chemin physique du PDF
+        pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
+        pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
+
+        # Ouvre le fichier PDF
+        with open(pdf_absolute_path, 'rb') as f:
+            # Crée le CorrigePartiel avec le fichier
+            corrige = CorrigePartiel.objects.create(
+                soumission=soum,
+                titre_exercice=f"Exercice {idx + 1}",
+            )
+            # Attache le fichier PDF
+            corrige.fichier_pdf.save(
+                f"corrige_exercice_{idx + 1}_{soum.id}.pdf",
+                File(f)
+            )
+            corrige.save()
+
+        # 8) Finalisation
         soum.statut = 'termine'
         soum.progression = 100
         soum.resultat_json = {
@@ -1625,13 +1642,11 @@ def generer_corrige_exercice_async(soumission_id):
         }
         soum.save()
 
-        # Optionnel : stocker aussi le contenu dans la DemandeCorrection
-        #dem.corrigé = dem.corrigé or ""
-        #dem.corrigé += f"\n\n<!-- Exercice {idx+1} -->\n" + corrige_txt
-        #dem.save()
-
         return True
     except Exception as e:
+        print(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             soum = SoumissionIA.objects.get(id=soumission_id)
             soum.statut = 'erreur'
