@@ -33,18 +33,19 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 from .models import DemandeCorrection, SoumissionIA, CorrigePartiel
 
 class CorrigePartielSerializer(serializers.ModelSerializer):
-    fichier_pdf_url = serializers.SerializerMethodField()
+    url_pdf = serializers.SerializerMethodField()  # ← CHANGÉ : 'url_pdf' pour matcher Flutter
+    titre = serializers.CharField(source='titre_exercice')  # ← CHANGÉ : 'titre' pour matcher Flutter
 
     class Meta:
         model = CorrigePartiel
         fields = [
             'id',
-            'titre_exercice',
+            'titre',          # ← CHANGÉ : était 'titre_exercice'
             'date_creation',
-            'fichier_pdf_url',
+            'url_pdf',        # ← CHANGÉ : était 'fichier_pdf_url'
         ]
 
-    def get_fichier_pdf_url(self, obj):
+    def get_url_pdf(self, obj):
         if not obj.fichier_pdf:
             return None
         request = self.context.get('request')
@@ -56,9 +57,11 @@ class CorrigePartielSerializer(serializers.ModelSerializer):
         return None
 
 class SoumissionIASerializer(serializers.ModelSerializer):
-    corriges         = CorrigePartielSerializer(many=True, read_only=True)
-    global_pdf_url   = serializers.SerializerMethodField()
-    date_creation    = serializers.DateTimeField(format="%d/%m/%Y %H:%M")
+    corriges = CorrigePartielSerializer(many=True, read_only=True)
+    global_pdf_url = serializers.SerializerMethodField()
+    date_soumission = serializers.DateTimeField(  # ← CHANGÉ : 'date_soumission' pour matcher Flutter
+        source='date_creation', format="%d/%m/%Y %H:%M"
+    )
 
     class Meta:
         model = SoumissionIA
@@ -66,9 +69,9 @@ class SoumissionIASerializer(serializers.ModelSerializer):
             'id',
             'exercice_index',
             'statut',
-            'date_creation',
-            'corriges',         # liste des CorrigePartiel
-            'global_pdf_url',   # ancien PDF global
+            'date_soumission',  # ← CHANGÉ : était 'date_creation'
+            'corriges',
+            'global_pdf_url',
         ]
 
     def get_global_pdf_url(self, obj):
