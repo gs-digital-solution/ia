@@ -56,7 +56,7 @@ from .serializers import CorrigePartielSerializer
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
-
+from correction.ia_utils import  separer_exercices_avec_titres
 
 
 
@@ -533,7 +533,8 @@ class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
     - Crée une DemandeCorrection
-    - Retourne { demande_id: ..., exercices: [...] }
+    - Stocke les exercices avec leurs titres complets dans exercices_data
+    - Retourne { demande_id: ..., exercices: [...] } avec vrais titres
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
@@ -542,23 +543,39 @@ class SplitExercisesAPIView(APIView):
         user = request.user
 
         # 1) Récupérer les IDs passés
-        pays_id     = request.data.get('pays')
-        sous_id     = request.data.get('sous_systeme')
-        depart_id   = request.data.get('departement')
-        classe_id   = request.data.get('classe')
-        matiere_id  = request.data.get('matiere')
+        pays_id = request.data.get('pays')
+        sous_id = request.data.get('sous_systeme')
+        depart_id = request.data.get('departement')
+        classe_id = request.data.get('classe')
+        matiere_id = request.data.get('matiere')
         type_exo_id = request.data.get('type_exercice')
-        lecons_ids  = request.data.get('lecons_ids')
+        lecons_ids = request.data.get('lecons_ids')
 
-        # 2) Récupérer le fichier d’énoncé et vérifier sa présence
+        # 2) Récupérer le fichier d'énoncé et vérifier sa présence
         fichier = request.FILES.get('fichier')
         if not fichier:
             return Response(
-                {"error": "Le fichier d’énoncé est requis."},
+                {"error": "Le fichier d'énoncé est requis."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3) Créer la demande sans enonce_texte
+        # 2b) VÉRIFICATION TAILLE FICHIER (1 Mo max)
+        if fichier.size > 1048576:  # 1 Mo en octets
+            return Response(
+                {"error": "Le fichier ne doit pas dépasser 1 Mo."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2c) VÉRIFICATION FORMAT (PDF ou images)
+        ext = os.path.splitext(fichier.name)[1].lower()
+        allowed_ext = ['.pdf', '.png', '.jpg', '.jpeg']
+        if ext not in allowed_ext:
+            return Response(
+                {"error": f"Format {ext} non supporté. Utilisez PDF, PNG, JPG ou JPEG."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 3) Créer la demande (nom_fichier sera auto-rempli via save())
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
@@ -578,27 +595,64 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et découper en exercices
+        # 4) Extraire le texte et découper en exercices AVEC TITRES
         texte = extraire_texte_fichier(fichier)
-        blocs = separer_exercices(texte)
 
-        # 5) Construire la liste JSON
-        exercices = []
-        for idx, ex in enumerate(blocs):
-            titre   = ex.strip().split('\n', 1)[0] or f"Exercice {idx+1}"
-            extrait = ex.strip()[:100] + ("…" if len(ex.strip()) > 100 else "")
-            exercices.append({
+        # Utiliser la nouvelle fonction améliorée
+        exercices_detaillees = separer_exercices_avec_titres(texte)
+
+        # 5) Construire la liste JSON complète pour stockage
+        exercices_complets = []
+        for idx, ex in enumerate(exercices_detaillees):
+            # ex est maintenant un dict avec 'titre', 'titre_complet', 'contenu'
+            titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
+            contenu = ex.get('contenu', '')
+
+            # Nettoyer le titre pour l'affichage
+            titre_affichage = titre_complet
+            if len(titre_affichage) > 80:
+                titre_affichage = titre_affichage[:77] + "..."
+
+            # Extraire un extrait (premières lignes)
+            lignes = contenu.strip().split('\n')
+            extrait_lignes = []
+            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
+                line_stripped = line.strip()
+                if line_stripped and len(line_stripped) < 100:
+                    extrait_lignes.append(line_stripped)
+
+            extrait = ' / '.join(extrait_lignes) if extrait_lignes else contenu.strip()[:150]
+            if len(extrait) > 150:
+                extrait = extrait[:147] + "..."
+
+            exercices_complets.append({
                 "index": idx,
-                "titre": titre,
-                "extrait": extrait
+                "titre": titre_affichage,
+                "titre_complet": titre_complet,  # Titre original complet
+                "extrait": extrait,
+                "contenu": contenu[:500]  # Stocker un peu de contenu pour preview
             })
 
-        # 6) Répondre
+        # 6) Stocker les exercices dans la demande
+        demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
+        demande.save()
+
+        # 7) Construire la réponse pour le frontend
+        exercices_reponse = []
+        for ex in exercices_complets:
+            exercices_reponse.append({
+                "index": ex["index"],
+                "titre": ex["titre"],  # Titre formaté pour l'affichage
+                "extrait": ex["extrait"]
+            })
+
+        # 8) Répondre
         return Response({
             "demande_id": demande.id,
-            "exercices": exercices
+            "exercices": exercices_reponse,
+            "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
+            "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée"
         })
-
 
 
 #VUE PARTIELLE DES EXERCICES

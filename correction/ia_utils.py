@@ -462,6 +462,107 @@ def separer_exercices(texte_epreuve):
 
     return exercices
 
+
+def separer_exercices_avec_titres(texte_epreuve):
+    """
+    Version améliorée qui retourne les exercices avec leurs titres complets.
+    Utilisée par SplitExercisesAPIView pour stocker les titres réels.
+    """
+    if not texte_epreuve:
+        return []
+
+    lignes = texte_epreuve.splitlines()
+
+    # Patterns étendus - beaucoup plus flexibles
+    patterns = [
+        # Exercice avec numéro et optionnellement des points
+        re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+.*', re.IGNORECASE),
+
+        # Partie avec chiffres romains
+        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[IVXLCDM]+.*', re.IGNORECASE),
+
+        # Évaluation des compétences
+        re.compile(r'^EVALUATION DES .*', re.IGNORECASE),
+        re.compile(r'^ÉVALUATION DES .*', re.IGNORECASE),
+
+        # Compétence, Situation
+        re.compile(r'^COMPÉTENCE.*', re.IGNORECASE),
+        re.compile(r'^COMPETENCE.*', re.IGNORECASE),
+        re.compile(r'^SITUATION.*', re.IGNORECASE),
+
+        # Question, Problème
+        re.compile(r'^QUESTION\s*\d+.*', re.IGNORECASE),
+        re.compile(r'^PROBLÈME\s*\d+.*', re.IGNORECASE),
+    ]
+
+    resultats = []
+    courant = []
+    titre_courant = None
+    in_exercice = False
+
+    for i, ligne in enumerate(lignes):
+        ligne_stripped = ligne.strip()
+
+        if not ligne_stripped and not in_exercice:
+            continue  # Ignorer les lignes vides avant le premier exercice
+
+        # Vérifier si c'est un début d'exercice
+        est_debut = False
+        for pattern in patterns:
+            if pattern.match(ligne_stripped):
+                est_debut = True
+                break
+
+        if est_debut:
+            # Enregistrer l'exercice précédent
+            if courant:
+                # Nettoyer le titre: prendre la première ligne non vide
+                titre_final = titre_courant
+                if not titre_final and courant:
+                    for l in courant:
+                        if l.strip():
+                            titre_final = l.strip()
+                            break
+
+                resultats.append({
+                    'titre': titre_final or f"Exercice {len(resultats) + 1}",
+                    'contenu': '\n'.join(courant),
+                    'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
+                })
+                courant = []
+
+            titre_courant = ligne_stripped
+            courant.append(ligne)
+            in_exercice = True
+        else:
+            if in_exercice or i == 0:  # Si on a un titre ou c'est le début du doc
+                courant.append(ligne)
+
+    # Dernier exercice
+    if courant:
+        titre_final = titre_courant
+        if not titre_final and courant:
+            for l in courant:
+                if l.strip():
+                    titre_final = l.strip()
+                    break
+
+        resultats.append({
+            'titre': titre_final or f"Exercice {len(resultats) + 1}",
+            'contenu': '\n'.join(courant),
+            'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
+        })
+
+    # Si aucun exercice détecté, créer un seul "exercice"
+    if not resultats:
+        resultats.append({
+            'titre': "Document complet",
+            'contenu': texte_epreuve,
+            'titre_complet': "Document complet"
+        })
+
+    return resultats
+
 def estimer_tokens(texte):
     """
     Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
@@ -1613,21 +1714,40 @@ def generer_corrige_exercice_async(soumission_id):
             soum.save()
             return False
 
-        # 7) CRÉATION DU CorrigePartiel - CE QUI MANQUE !
+        # 7) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
         # Récupère le chemin physique du PDF
         pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
         pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
 
+        # DÉTERMINER LE TITRE RÉEL DE L'EXERCICE
+        titre_reel = f"Exercice {idx + 1}"  # Valeur par défaut
+
+        try:
+            # Vérifier si la demande a des exercices_data stockés
+            if dem.exercices_data:
+                exercices_stockes = json.loads(dem.exercices_data)
+                if idx < len(exercices_stockes):
+                    # Prendre le titre_complet ou le titre
+                    ex_data = exercices_stockes[idx]
+                    titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
+
+                    # Nettoyer un peu le titre si trop long
+                    if len(titre_reel) > 200:
+                        titre_reel = titre_reel[:197] + "..."
+        except Exception as e:
+            print(f"⚠️ Erreur récupération titre réel: {e}")
+            # On garde le titre par défaut
+
         # Ouvre le fichier PDF
         with open(pdf_absolute_path, 'rb') as f:
-            # Crée le CorrigePartiel avec le fichier
+            # Crée le CorrigePartiel avec le VRAI titre
             corrige = CorrigePartiel.objects.create(
                 soumission=soum,
-                titre_exercice=f"Exercice {idx + 1}",
+                titre_exercice=titre_reel,  # ← TITRE RÉEL ICI
             )
             # Attache le fichier PDF
             corrige.fichier_pdf.save(
-                f"corrige_exercice_{idx + 1}_{soum.id}.pdf",
+                f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
                 File(f)
             )
             corrige.save()
