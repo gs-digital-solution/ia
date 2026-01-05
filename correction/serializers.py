@@ -86,7 +86,7 @@ class SoumissionIASerializer(serializers.ModelSerializer):
 
 class HistoriqueSerializer(serializers.ModelSerializer):
     matiere = serializers.SerializerMethodField()
-    nom_fichier = serializers.CharField(source='nom_fichier', allow_null=True)  # ← NOUVEAU
+    nom_fichier = serializers.CharField(source='nom_fichier', allow_null=True,default="Fichier inconnu")  # ← NOUVEAU
     date = serializers.DateTimeField(source='date_soumission', format="%d/%m/%Y %H:%M")
     soumissions = SoumissionIASerializer(source='soumissionia_set', many=True, required=False)
 
