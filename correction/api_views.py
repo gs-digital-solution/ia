@@ -656,17 +656,15 @@ class SplitExercisesAPIView(APIView):
 
 
 #VUE PARTIELLE DES EXERCICES
-
-
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
-    parser_classes     = [MultiPartParser, FormParser, JSONParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         try:
-            user      = request.user
-            demande_id= request.data.get("demande_id")
-            idx       = request.data.get("index")
+            user = request.user
+            demande_id = request.data.get("demande_id")
+            idx = request.data.get("index")
 
             # 1) Validation minimale
             if demande_id is None or idx is None:
@@ -694,11 +692,15 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 4) Séparation + validation index
-            exercices = separer_exercices(texte_complet)
-            if idx < 0 or idx >= len(exercices):
+            # 4) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
+            exercices_detaillees = separer_exercices_avec_titres(texte_complet)
+
+            # Convertir en liste de textes pour compatibilité
+            exercices_textes = [ex.get('contenu', '') for ex in exercices_detaillees]
+
+            if idx < 0 or idx >= len(exercices_textes):
                 return Response(
-                    {"error": f"index hors limites (0 à {len(exercices)-1})"},
+                    {"error": f"index hors limites (0 à {len(exercices_textes) - 1})"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -729,7 +731,6 @@ class PartialCorrectionAPIView(APIView):
                 {"error": f"Erreur interne: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 
 
 #Lister les corrigés partiels d’une soumission

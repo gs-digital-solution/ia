@@ -1075,7 +1075,7 @@ def extraire_texte_pdf(fichier_path):
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
 def extraire_texte_fichier(fichier_field):
     """
-    Extraction unique via l’analyse scientifique (OCR + IA).
+    Extraction robuste via analyse scientifique avec fallback OCR pour images.
     """
     if not fichier_field:
         return ""
@@ -1087,19 +1087,65 @@ def extraire_texte_fichier(fichier_field):
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    # 2) Appel unique à l'analyse scientifique
-    analyse = analyser_document_scientifique(local_path)
+    # 2) Détecter le type de fichier
+    ext = os.path.splitext(local_path)[1].lower()
 
-    # 3) Nettoyage du fichier temporaire
+    # 3) Pour les images, essayer d'abord un OCR simple et rapide
+    texte = ""
+    if ext in ['.png', '.jpg', '.jpeg']:
+        print(f"🖼️  Fichier image détecté: {ext}, tentative OCR Tesseract...")
+        try:
+            import pytesseract
+            from PIL import Image
+            image = Image.open(local_path)
+
+            # Préprocess pour améliorer l'OCR
+            image = image.convert('L')  # Niveaux de gris
+            texte = pytesseract.image_to_string(image, lang='fra+eng')
+            print(f"✅ OCR Tesseract réussi: {len(texte)} caractères")
+
+            if len(texte) > 100:  # Si l'OCR a bien fonctionné
+                # Nettoyer
+                try:
+                    os.unlink(local_path)
+                except:
+                    pass
+                return texte.strip()
+            else:
+                print("⚠️  OCR Tesseract a retourné peu de texte, essai DeepSeek...")
+        except Exception as e:
+            print(f"⚠️  OCR Tesseract échoué: {e}, passage à DeepSeek...")
+
+    # 4) Appel à l'analyse scientifique (DeepSeek) - pour PDF et images avec OCR faible
+    try:
+        analyse = analyser_document_scientifique(local_path)
+        texte = analyse.get("texte_complet", "")
+        print(f"🔬 Analyse scientifique: {len(texte)} caractères")
+    except Exception as e:
+        print(f"❌ Analyse scientifique échouée: {e}")
+        texte = ""
+
+    # 5) Fallback final pour images si tout échoue
+    if not texte or len(texte) < 50:
+        if ext in ['.png', '.jpg', '.jpeg']:
+            print("🔄 Fallback final: OCR brut sans prétraitement...")
+            try:
+                import pytesseract
+                from PIL import Image
+                image = Image.open(local_path)
+                texte = pytesseract.image_to_string(image, lang='fra+eng')
+                print(f"✅ Fallback OCR: {len(texte)} caractères")
+            except Exception as e:
+                print(f"❌ Tous les OCR ont échoué: {e}")
+                texte = "Impossible d'extraire le texte de cette image."
+
+    # 6) Nettoyage
     try:
         os.unlink(local_path)
     except:
         pass
 
-    # 4) Retourne le texte extrait
-    return analyse.get("texte_complet", "")
-
-
+    return texte.strip()
 
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
