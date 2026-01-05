@@ -85,13 +85,14 @@ class SoumissionIASerializer(serializers.ModelSerializer):
 
 
 class HistoriqueSerializer(serializers.ModelSerializer):
-    matiere = serializers.SerializerMethodField()  # <-- CHANGÉ
+    matiere = serializers.SerializerMethodField()
+    nom_fichier = serializers.CharField(source='nom_fichier', allow_null=True)  # ← NOUVEAU
     date = serializers.DateTimeField(source='date_soumission', format="%d/%m/%Y %H:%M")
     soumissions = SoumissionIASerializer(source='soumissionia_set', many=True, required=False)
 
     class Meta:
         model = DemandeCorrection
-        fields = ['id', 'matiere', 'date', 'soumissions']
+        fields = ['id', 'matiere', 'nom_fichier', 'date', 'soumissions']  # ← Ajouté nom_fichier
 
     def get_matiere(self, obj):
         return obj.matiere.nom if obj.matiere else "Matière inconnue"
