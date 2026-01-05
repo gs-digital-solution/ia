@@ -131,7 +131,7 @@ class SoumissionIAAdmin(admin.ModelAdmin):
 
 @admin.register(DemandeCorrection)
 class DemandeCorrectionAdmin(admin.ModelAdmin):
-    list_display = ('user', 'date_soumission', 'fichier')
+    list_display = ('user', 'date_soumission', 'fichier','exercices_data','nom_fichier')
     # si besoin, vous pouvez ajouter readonly_fields = ('fichier',) ou d'autres champs
 
 

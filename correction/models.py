@@ -17,12 +17,20 @@ class DemandeCorrection(models.Model):
     type_exercice = models.ForeignKey(TypeExercice, on_delete=models.SET_NULL, null=True)
     lecons = models.ManyToManyField(Lecon, blank=True)
     fichier = models.FileField(upload_to='soumissions/', blank=True, null=True)
+    nom_fichier = models.CharField(max_length=255, blank=True, null=True)
+    exercices_data = models.TextField(blank=True, null=True)  # Stockera les exercices en JSON
     date_soumission = models.DateTimeField(auto_now_add=True)
 
 
     def __str__(self):
         return f"{self.user.username} - {self.date_soumission:%d/%m/%Y %H:%M}"
 
+    def save(self, *args, **kwargs):
+        # Récupérer automatiquement le nom du fichier si non défini
+        if self.fichier and not self.nom_fichier:
+            import os
+            self.nom_fichier = os.path.basename(self.fichier.name)
+        super().save(*args, **kwargs)
 
 class AppConfig(models.Model):
     pdf_enabled = models.BooleanField(default=True, verbose_name="Afficher le bouton PDF")
