@@ -86,13 +86,36 @@ class SoumissionIASerializer(serializers.ModelSerializer):
 
 class HistoriqueSerializer(serializers.ModelSerializer):
     matiere = serializers.SerializerMethodField()
-    nom_fichier = serializers.CharField(source='nom_fichier', allow_null=True,default="Fichier inconnu")  # ← NOUVEAU
+    nom_fichier = serializers.SerializerMethodField()  # ← CHANGÉ en SerializerMethodField
     date = serializers.DateTimeField(source='date_soumission', format="%d/%m/%Y %H:%M")
     soumissions = SoumissionIASerializer(source='soumissionia_set', many=True, required=False)
 
     class Meta:
         model = DemandeCorrection
-        fields = ['id', 'matiere', 'nom_fichier', 'date', 'soumissions']  # ← Ajouté nom_fichier
+        fields = ['id', 'matiere', 'nom_fichier', 'date', 'soumissions']
 
     def get_matiere(self, obj):
         return obj.matiere.nom if obj.matiere else "Matière inconnue"
+
+    def get_nom_fichier(self, obj):
+        """
+        Récupère le nom du fichier de manière robuste.
+        Gère les anciens enregistrements sans champ nom_fichier.
+        """
+        try:
+            # Essayer d'abord le champ nom_fichier
+            if hasattr(obj, 'nom_fichier') and obj.nom_fichier:
+                return obj.nom_fichier
+
+            # Fallback: extraire du fichier
+            if obj.fichier and hasattr(obj.fichier, 'name'):
+                import os
+                return os.path.basename(obj.fichier.name)
+
+            # Fallback final
+            return f"Sujet #{obj.id}"
+
+        except Exception as e:
+            # En cas d'erreur, retourner un fallback
+            print(f"⚠️ Erreur dans get_nom_fichier pour obj {obj.id}: {e}")
+            return f"Sujet #{obj.id}"
