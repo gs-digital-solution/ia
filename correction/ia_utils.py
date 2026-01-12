@@ -1725,7 +1725,7 @@ def generer_corrige_exercice_async(soumission_id):
         idx = soum.exercice_index or 0
         fragment = blocs[idx] if idx < len(blocs) else ""
 
-        # 3) Mise à jour statut
+        # 3) Mise à jour statut ou analyse IA
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
@@ -1754,7 +1754,8 @@ def generer_corrige_exercice_async(soumission_id):
             soum.id
         )
 
-        # 6) Débit de crédit
+        # 6) Débit de crédit : cette fonction ou ce bout de code) peut ètre déplacée à n'importe quelle
+        # étape de la soumission. AInsi, je peux décider de vérifier le crédit plutôt avant l'analyse IA par exple
         if not debiter_credit_abonnement(dem.user):
             soum.statut = 'erreur_credit'
             soum.save()

@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .api_views import AppConfigAPIView
+from .api_views import AppConfigAPIView, ContactWhatsAppAPIView
 from .api_views import (
     UserRegisterAPIView,
     UserLoginAPIView,
@@ -68,7 +68,8 @@ urlpatterns = [
 
     # route de BLOCAGE PDF ou SOUMISSION coté backend
     path('app-config/', AppConfigAPIView.as_view(), name='api_app_config'),
-
+    # route pour envoyer au frontend lee lien whatsap
+    path('contact-whatsapp/', ContactWhatsAppAPIView.as_view(), name='api_contact_whatsapp'),
     # route d'affichage/selection des exercices à corriger
     path('split/', SplitExercisesAPIView.as_view(), name='api_split_exercises'),
 

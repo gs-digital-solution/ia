@@ -169,3 +169,28 @@ class CorrigePartiel(models.Model):
 
     def __str__(self):
         return f"Corrigé Exo « {self.titre_exercice} » – Soumission #{self.soumission.id}"
+
+# lien whatsap pour permettre aux utilisateurs de nous contacter
+class ContactWhatsApp(models.Model):
+    """
+    Modèle pour stocker le lien WhatsApp de contact
+    """
+    lien_whatsapp = models.URLField(
+        max_length=500,
+        help_text="Lien WhatsApp complet (ex: https://wa.me/2376XXXXXXX?text=Bonjour)"
+    )
+    message_accueil = models.TextField(
+        default="Bonjour, je suis intéressé par vos services CIS. Pouvez-vous m'aider ?",
+        help_text="Message par défaut qui s'affichera dans WhatsApp"
+    )
+    actif = models.BooleanField(default=True)
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_mise_a_jour = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Contact WhatsApp ({'Actif' if self.actif else 'Inactif'})"
+
+    class Meta:
+        verbose_name = "Contact WhatsApp"
+        verbose_name_plural = "Contact WhatsApp"
+

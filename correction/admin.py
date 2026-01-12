@@ -10,6 +10,7 @@ from .models import (
     SoumissionIA,
     DemandeCorrection,
     CorrigePartiel,
+   ContactWhatsApp,
 )
 from abonnement.models import PromoCode
 
@@ -138,3 +139,39 @@ class DemandeCorrectionAdmin(admin.ModelAdmin):
 @admin.register(CorrigePartiel)
 class CorrigePartielAdmin(admin.ModelAdmin):
     list_display = ('soumission', 'titre_exercice', 'date_creation')
+
+
+
+
+
+@admin.register(ContactWhatsApp)
+class ContactWhatsAppAdmin(admin.ModelAdmin):
+    list_display = ('lien_whatsapp_truncated', 'actif', 'date_creation', 'date_mise_a_jour')
+    list_filter = ('actif', 'date_creation')
+    search_fields = ('lien_whatsapp', 'message_accueil')
+    readonly_fields = ('date_creation', 'date_mise_a_jour')
+
+    # Afficher un seul formulaire pour éviter les doublons
+    def has_add_permission(self, request):
+        # Limiter à un seul enregistrement
+        if ContactWhatsApp.objects.count() >= 1:
+            return False
+        return super().has_add_permission(request)
+
+    def lien_whatsapp_truncated(self, obj):
+        """Affiche le lien tronqué dans la liste admin"""
+        if len(obj.lien_whatsapp) > 50:
+            return f"{obj.lien_whatsapp[:50]}..."
+        return obj.lien_whatsapp
+
+    lien_whatsapp_truncated.short_description = "Lien WhatsApp"
+
+    fieldsets = (
+        (None, {
+            'fields': ('lien_whatsapp', 'message_accueil', 'actif')
+        }),
+        ('Dates', {
+            'fields': ('date_creation', 'date_mise_a_jour'),
+            'classes': ('collapse',)
+        }),
+    )

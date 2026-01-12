@@ -57,7 +57,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from correction.ia_utils import  separer_exercices_avec_titres
-
+from .models import ContactWhatsApp
 
 
 class UserRegisterAPIView(APIView):
@@ -663,6 +663,13 @@ class PartialCorrectionAPIView(APIView):
     def post(self, request):
         try:
             user = request.user
+            # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
+            if not user_abonnement_actif(user):
+                return Response(
+                    {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
+                    status=status.HTTP_402_PAYMENT_REQUIRED
+                )
+            # ===========================================================
             demande_id = request.data.get("demande_id")
             idx = request.data.get("index")
 
@@ -759,3 +766,45 @@ class DownloadPartialCorrigeAPIView(APIView):
             return Response({"error": "Pas de fichier PDF disponible."}, status=404)
         url = request.build_absolute_uri(corrige.fichier_pdf.url)
         return Response({"pdf_url": url})
+
+
+# Vue pour récupérer le lien WhatsApp
+class ContactWhatsAppAPIView(APIView):
+    """
+    API pour récupérer le lien WhatsApp de contact
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            # Récupérer le premier contact WhatsApp actif
+            contact = ContactWhatsApp.objects.filter(actif=True).first()
+
+            if not contact:
+                return Response({
+                    "success": False,
+                    "error": "Aucun contact WhatsApp configuré"
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Construire le lien avec le message d'accueil
+            lien_complet = contact.lien_whatsapp
+            # S'assurer que le lien contient le paramètre text
+            if "?text=" not in lien_complet:
+                if "?" in lien_complet:
+                    lien_complet += f"&text={contact.message_accueil}"
+                else:
+                    lien_complet += f"?text={contact.message_accueil}"
+
+            return Response({
+                "success": True,
+                "lien_whatsapp": lien_complet,
+                "message_accueil": contact.message_accueil,
+                "actif": contact.actif
+            })
+
+        except Exception as e:
+            print(f"❌ Erreur récupération contact WhatsApp: {e}")
+            return Response({
+                "success": False,
+                "error": "Erreur lors de la récupération du contact"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
