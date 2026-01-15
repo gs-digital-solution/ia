@@ -7,18 +7,39 @@ class PaysSerializer(serializers.ModelSerializer):
         model = Pays
         fields = ['id', 'nom']
 
+
 class PaymentMethodSerializer(serializers.ModelSerializer):
-    pays = PaysSerializer(read_only=True)
+    est_externe = serializers.SerializerMethodField()
+
     class Meta:
         model = PaymentMethod
-        fields = ['code','nom_affiche','operateur','pays','ussd','logo_url']
+        fields = [
+            'id', 'code', 'nom_affiche', 'operateur', 'type_paiement',
+            'pays', 'ussd', 'service_code', 'lien_externe',
+            'instructions_externes', 'logo_url', 'description',
+            'actif', 'priorite', 'est_externe'
+        ]
+
+    def get_est_externe(self, obj):
+        return obj.est_externe()
 
 class PaymentStartSerializer(serializers.Serializer):
     abonnement_id = serializers.IntegerField()
     method_code   = serializers.CharField()
     phone         = serializers.CharField()
 
+
 class PaymentTransactionSerializer(serializers.ModelSerializer):
+    payment_method = PaymentMethodSerializer(read_only=True)
+    est_externe = serializers.SerializerMethodField()
+
     class Meta:
         model = PaymentTransaction
-        fields = ['transaction_id','status','amount','payment_method','created']
+        fields = [
+            'id', 'user', 'abonnement', 'payment_method',
+            'amount', 'phone', 'transaction_id', 'status',
+            'created', 'updated', 'raw_response', 'est_externe'
+        ]
+
+    def get_est_externe(self, obj):
+        return obj.payment_method.est_externe()

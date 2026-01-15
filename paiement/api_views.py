@@ -46,7 +46,7 @@ class StartPaymentAPI(APIView):
             abo = SubscriptionType.objects.get(
                 pk=ser.validated_data['abonnement_id'], actif=True
             )
-            pm  = PaymentMethod.objects.get(
+            pm = PaymentMethod.objects.get(
                 code=ser.validated_data['method_code'], actif=True
             )
         except Exception:
@@ -55,12 +55,14 @@ class StartPaymentAPI(APIView):
                 status=400
             )
 
-        callback_url = request.build_absolute_uri('/api/paiement/callback/')
-        print(">>> StartPaymentAPI callback_url:", callback_url)
+        # Vérifier si c'est un paiement externe
+        if pm.est_externe():
+            # Pour les paiements externes, pas besoin de callback_url
+            callback_url = None
+        else:
+            callback_url = request.build_absolute_uri('/api/paiement/callback/')
 
-        # On passe le numéro tel quel ; chaque provider le normalisera à sa façon
         phone_input = ser.validated_data['phone']
-        print(">>> StartPaymentAPI raw phone:", phone_input)
 
         try:
             tx = process_payment(
@@ -70,10 +72,20 @@ class StartPaymentAPI(APIView):
                 payment_method=pm,
                 callback_url=callback_url
             )
-            return Response(
-                PaymentTransactionSerializer(tx).data,
-                status=status.HTTP_201_CREATED
-            )
+
+            # Si c'est un paiement externe, retourner le lien
+            response_data = PaymentTransactionSerializer(tx).data
+            if pm.est_externe() and tx.raw_response:
+                response_data.update({
+                    'type_paiement': 'EXTERNE',
+                    'lien_paiement': tx.raw_response.get('lien_paiement'),
+                    'instructions': tx.raw_response.get('instructions'),
+                    'montant': tx.raw_response.get('montant'),
+                    'nom_abonnement': tx.raw_response.get('nom_abonnement'),
+                })
+
+            return Response(response_data, status=status.HTTP_201_CREATED)
+
         except Exception:
             tb = traceback.format_exc()
             logging.getLogger(__name__).error("Erreur process_payment:\n%s", tb)
@@ -81,7 +93,6 @@ class StartPaymentAPI(APIView):
                 {"detail": "Erreur interne du serveur. Veuillez réessayer plus tard."},
                 status=500
             )
-
 
 class PaymentStatusAPI(generics.RetrieveAPIView):
     queryset = PaymentTransaction.objects.all()

@@ -1,9 +1,18 @@
 _PROVIDERS = {
     'TOUCHPAY': 'paiement.providers.touchpay.TouchpayProvider',
-     'CAMPAY': 'paiement.providers.campay.CampayProvider', 
+    'CAMPAY': 'paiement.providers.campay.CampayProvider',
+    'EXTERNE': 'paiement.providers.externe.ExterneProvider',  # NOUVEAU
+    'LYGOS': 'paiement.providers.externe.ExterneProvider',  # Utilise le même provider
 }
 
+
 def get_provider_for_method(payment_method):
+    # Si c'est un paiement externe, utiliser ExterneProvider
+    if payment_method.est_externe():
+        from paiement.providers.externe import ExterneProvider
+        return ExterneProvider(payment_method)
+
+    # Sinon, logique normale
     prefix = payment_method.code.split('_')[0].upper()
     path = _PROVIDERS.get(prefix)
     if not path:

@@ -9,25 +9,45 @@ from abonnement.models import SubscriptionType
 class PaymentMethod(models.Model):
     """
     Table admin pour toutes les méthodes publiques de paiement.
-    (MTN Mobile Money, Orange Money, etc.)
+    (MTN Mobile Money, Orange Money, Lygos, etc.)
     """
-    code = models.CharField(max_length=64, unique=True)   # Ex: "PAIEMENTMARCHAND_MTN_CM"
+    TYPE_CHOICES = [
+        ('INTERNE', 'Paiement interne (via app)'),
+        ('EXTERNE', 'Paiement externe (redirection)'),
+    ]
+
+    code = models.CharField(max_length=64, unique=True)  # Ex: "PAIEMENTMARCHAND_MTN_CM", "LYGOS_CM"
     pays = models.ForeignKey(Pays, on_delete=models.CASCADE, related_name="payment_methods")
-    nom_affiche = models.CharField(max_length=64)         # "MTN Mobile Money"
-    operateur = models.CharField(max_length=64)           # MTN, Orange, Wave...
-    ussd = models.CharField(max_length=64, blank=True)    # *126#, etc.
+    nom_affiche = models.CharField(max_length=64)  # "MTN Mobile Money" ou "Lygos"
+    operateur = models.CharField(max_length=64)  # MTN, Orange, Lygos, Wave...
+    type_paiement = models.CharField(max_length=10, choices=TYPE_CHOICES, default='INTERNE')
+
+    # Pour les paiements INTERNES (via app)
+    ussd = models.CharField(max_length=64, blank=True)  # *126#, etc.
+    service_code = models.CharField(
+        max_length=100, blank=True, null=True,
+        help_text="Code Touchpay à passer (ex: PAIEMENTMARCHAND_MTN_CM)"
+    )
+
+    # Pour les paiements EXTERNES (redirection)
+    lien_externe = models.URLField(max_length=500, blank=True, null=True, help_text="URL de redirection")
+    instructions_externes = models.TextField(
+        blank=True,
+        default="Cliquez sur le lien suivant pour payer. Après paiement, faites une capture d'écran du message de confirmation et envoyez-la par WhatsApp.",
+        help_text="Instructions pour les paiements externes"
+    )
+
     logo_url = models.URLField(blank=True, null=True)
     description = models.TextField(blank=True)
     actif = models.BooleanField(default=True)
-    service_code = models.CharField(
-    max_length = 100, blank = True,null=True,
-    help_text = "Code Touchpay à passer (ex: PAIEMENTMARCHAND_MTN_CM)"
-                                   )
     extra_config = models.JSONField(blank=True, null=True)  # Autres params spécifiques par méthode
+    priorite = models.IntegerField(default=1, help_text="Ordre d'affichage")
 
     def __str__(self):
         return f"{self.nom_affiche} ({self.operateur}, {self.pays.code})"
 
+    def est_externe(self):
+        return self.type_paiement == 'EXTERNE'
 
 ### B. *Historique des paiements/transactions*
 class PaymentTransaction(models.Model):
