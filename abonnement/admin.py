@@ -27,7 +27,7 @@ class UserAbonnementAdmin(admin.ModelAdmin):
         'utilisateur',
         'get_whatsapp_number',  # Affiche le numéro WhatsApp
         'abonnement',
-        'date_debut',
+        'date_debut',  # Affiche mais ne modifie pas
         'date_fin',
         'statut',
         'exercice_restants'
@@ -46,15 +46,19 @@ class UserAbonnementAdmin(admin.ModelAdmin):
     # 6. Pagination
     list_per_page = 20
 
-    # 7. Organisation du formulaire
+    # 7. Organisation du formulaire - ENLEVER date_debut car auto_now_add=True
     fieldsets = (
         ('Utilisateur', {
             'fields': ('utilisateur', 'abonnement', 'code_promo_utilise')
         }),
         ('Détails', {
-            'fields': ('date_debut', 'date_fin', 'exercice_restants', 'statut')
+            'fields': ('date_fin', 'exercice_restants', 'statut')
+            # date_debut est automatique, ne pas l'inclure
         }),
     )
+
+    # 8. Champs en lecture seule
+    readonly_fields = ('date_debut',)
 
 
 class SubscriptionTypeAdmin(admin.ModelAdmin):
@@ -78,6 +82,9 @@ class PromoCodeAdmin(admin.ModelAdmin):
 
     get_whatsapp_number.short_description = "WhatsApp"
     get_whatsapp_number.admin_order_field = 'proprietaire__whatsapp_number'
+
+    # date_creation est auto_now_add, donc en lecture seule
+    readonly_fields = ('date_creation',)
 
 
 class GlobalSubscriptionConfigAdmin(admin.ModelAdmin):
