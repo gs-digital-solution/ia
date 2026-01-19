@@ -466,35 +466,131 @@ def separer_exercices(texte_epreuve):
 def separer_exercices_avec_titres(texte_epreuve):
     """
     Version améliorée qui retourne les exercices avec leurs titres complets.
-    Utilisée par SplitExercisesAPIView pour stocker les titres réels.
+    - Exclut les entêtes administratives
+    - Inclut les parties pédagogiques comme "PARTIE B : EVALUATION DES COMPETENCES"
+    - Conserve la même structure de retour pour compatibilité
     """
     if not texte_epreuve:
         return []
 
     lignes = texte_epreuve.splitlines()
 
-    # Patterns étendus - beaucoup plus flexibles
-    patterns = [
-        # Exercice avec numéro et optionnellement des points
-        re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+.*', re.IGNORECASE),
+    # ========== PATTERNS AMÉLIORÉS ==========
+    # Patterns pour les VRAIS exercices/parties pédagogiques
+    patterns_exercices = [
+        # Exercices avec numéros et points
+        re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+[\s\-:\.].*', re.IGNORECASE),
+        re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+\s*$', re.IGNORECASE),
 
-        # Partie avec chiffres romains
-        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[IVXLCDM]+.*', re.IGNORECASE),
+        # Parties avec évaluation des compétences (INCLURE)
+        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[A-Z]\s*[:\.]\s*É?VALUATION\s+DES?\s+.*', re.IGNORECASE),
 
-        # Évaluation des compétences
-        re.compile(r'^EVALUATION DES .*', re.IGNORECASE),
-        re.compile(r'^ÉVALUATION DES .*', re.IGNORECASE),
+        # Parties avec chiffres romains et contexte pédagogique
+        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[IVXLCDM]+\s*[:\.].*', re.IGNORECASE),
 
-        # Compétence, Situation
-        re.compile(r'^COMPÉTENCE.*', re.IGNORECASE),
-        re.compile(r'^COMPETENCE.*', re.IGNORECASE),
-        re.compile(r'^SITUATION.*', re.IGNORECASE),
+        # "SITUATION" comme titre pédagogique
+        re.compile(r'^SITUATION\s*[:\.].*', re.IGNORECASE),
 
-        # Question, Problème
-        re.compile(r'^QUESTION\s*\d+.*', re.IGNORECASE),
-        re.compile(r'^PROBLÈME\s*\d+.*', re.IGNORECASE),
+        # Sections avec lettres
+        re.compile(r'^(?:PARTIE|Partie|SECTION)[\s\-]*[A-Z]\s*[:\.].*', re.IGNORECASE),
     ]
 
+    # ========== FILTRES D'EXCLUSION ==========
+    # Liste des mots-clés d'entêtes administratives (à EXCLURE)
+    mots_cles_admin = [
+        'MINISTÈRE', 'MINISTERE', 'MINISTRY',
+        'ENSEIGNEMENT', 'EDUCATION',
+        'SECONDAIRE', 'SECONDARY',
+        'REPUBLIQUE', 'RÉPUBLIQUE', 'REPUBLIC',
+        'ANNÉE', 'ANNEE', 'YEAR',
+        'PROFESSEUR', 'PROFESSOR',
+        'ENSEIGNANT', 'TEACHER',
+        'NOM', 'NAME', 'PRÉNOM', 'FIRSTNAME',
+        'ÉLÈVE', 'ELEVE', 'STUDENT',
+        'BARÈME', 'BAREME',
+        'SUJET', 'SUBJECT',
+        'PAGE', 'P\.',
+        'DIRECTION', 'DIRECTORATE',
+        'ACADÉMIE', 'ACADEMIE', 'ACADEMY',
+        'LYCÉE', 'LYCEE',
+        'COLLÈGE', 'COLLEGE',
+        'ÉTABLISSEMENT', 'ETABLISSEMENT',
+        'RECTORAT', 'RECTORATE',
+        'INSPECTION', 'INSPECTORATE',
+        'ÉCOLE', 'ECOLE', 'SCHOOL',
+    ]
+
+    # ========== FONCTIONS D'AIDE ==========
+    def est_entete_administrative(ligne):
+        """Détecte si une ligne est une entête administrative pure"""
+        ligne_upper = ligne.upper().strip()
+
+        # 1. Vérifier les mots-clés administratifs
+        for mot in mots_cles_admin:
+            if mot in ligne_upper:
+                # Vérifier que ce n'est pas dans un contexte pédagogique
+                mots_pedagogiques = ['COMPÉTENCE', 'COMPETENCE', 'ÉVALUATION', 'EVALUATION',
+                                     'SITUATION', 'EXERCICE', 'PARTIE', 'QUESTION']
+                contexte_pedagogique = any(p in ligne_upper for p in mots_pedagogiques)
+
+                # Si c'est une entête admin sans contexte pédagogique, exclure
+                if not contexte_pedagogique:
+                    return True
+
+        # 2. Patterns d'entêtes administratives
+        patterns_admin = [
+            re.compile(r'.*(ministère|ministry).*(enseignement|education).*', re.IGNORECASE),
+            re.compile(r'.*(secondaire|secondary).*', re.IGNORECASE),
+            re.compile(r'.*(république|republique|republic).*', re.IGNORECASE),
+            re.compile(r'^page\s+\d+\s+sur\s+\d+$', re.IGNORECASE),
+            re.compile(r'^\d+\s*/\s*\d+$'),
+            re.compile(r'^\s*\d+\s*$'),  # Numéro seul
+        ]
+
+        for pattern in patterns_admin:
+            if pattern.match(ligne):
+                return True
+
+        # 3. Lignes toutes en majuscules très courtes (probables entêtes)
+        if ligne.isupper() and len(ligne) < 80:
+            mots = ligne.split()
+            if len(mots) <= 5:
+                # Vérifier si ce sont des mots administratifs courts
+                mots_courts = {'ET', 'OU', 'DE', 'DES', 'DU', 'LE', 'LA', 'LES', 'AU', 'AUX'}
+                if all(m.upper() in mots_courts for m in mots if len(m) <= 3):
+                    return True
+
+        return False
+
+    def est_titre_exercice(ligne):
+        """Détecte si une ligne est un titre d'exercice ou de partie pédagogique"""
+        ligne_stripped = ligne.strip()
+
+        # 1. Exclure les entêtes administratives
+        if est_entete_administrative(ligne_stripped):
+            return False
+
+        # 2. Vérifier les patterns d'exercice
+        for pattern in patterns_exercices:
+            if pattern.match(ligne_stripped):
+                return True
+
+        # 3. Vérifier les patterns globaux (PATTERNS_BLOCS) qui sont pédagogiques
+        for pattern_str in PATTERNS_BLOCS:
+            if re.match(pattern_str, ligne_stripped, re.IGNORECASE):
+                # Mais exclure si c'est juste "SITUATION" sans contexte
+                if 'SITUATION' in ligne_stripped.upper() and len(ligne_stripped) < 20:
+                    # Vérifier le contexte dans les lignes suivantes
+                    return True  # On l'inclut quand même
+                return True
+
+        # 4. Vérifier les titres avec notation (points)
+        if re.search(r'\(\s*\d+[,\.]\d*\s*(?:point|pt)s?\s*\)', ligne_stripped, re.IGNORECASE):
+            return True
+
+        return False
+
+    # ========== TRAITEMENT PRINCIPAL ==========
     resultats = []
     courant = []
     titre_courant = None
@@ -503,25 +599,25 @@ def separer_exercices_avec_titres(texte_epreuve):
     for i, ligne in enumerate(lignes):
         ligne_stripped = ligne.strip()
 
+        # Ignorer les lignes vides avant le premier exercice
         if not ligne_stripped and not in_exercice:
-            continue  # Ignorer les lignes vides avant le premier exercice
+            continue
 
-        # Vérifier si c'est un début d'exercice
-        est_debut = False
-        for pattern in patterns:
-            if pattern.match(ligne_stripped):
-                est_debut = True
-                break
-
-        if est_debut:
+        # Vérifier si c'est un début d'exercice (avec exclusion des entêtes)
+        if est_titre_exercice(ligne_stripped):
             # Enregistrer l'exercice précédent
             if courant:
-                # Nettoyer le titre: prendre la première ligne non vide
+                # Trouver un titre significatif
                 titre_final = titre_courant
                 if not titre_final and courant:
+                    # Chercher dans les premières lignes non vides
                     for l in courant:
                         if l.strip():
                             titre_final = l.strip()
+                            # Limiter la longueur pour l'affichage
+                            if len(titre_final) > 100:
+                                mots = titre_final.split()
+                                titre_final = ' '.join(mots[:10]) + '...'
                             break
 
                 resultats.append({
@@ -536,7 +632,9 @@ def separer_exercices_avec_titres(texte_epreuve):
             in_exercice = True
         else:
             if in_exercice or i == 0:  # Si on a un titre ou c'est le début du doc
-                courant.append(ligne)
+                # Filtrer les entêtes administratives même dans le contenu
+                if not est_entete_administrative(ligne_stripped):
+                    courant.append(ligne)
 
     # Dernier exercice
     if courant:
@@ -545,6 +643,9 @@ def separer_exercices_avec_titres(texte_epreuve):
             for l in courant:
                 if l.strip():
                     titre_final = l.strip()
+                    if len(titre_final) > 100:
+                        mots = titre_final.split()
+                        titre_final = ' '.join(mots[:10]) + '...'
                     break
 
         resultats.append({
@@ -555,14 +656,27 @@ def separer_exercices_avec_titres(texte_epreuve):
 
     # Si aucun exercice détecté, créer un seul "exercice"
     if not resultats:
-        resultats.append({
-            'titre': "Document complet",
-            'contenu': texte_epreuve,
-            'titre_complet': "Document complet"
-        })
+        # Nettoyer les entêtes administratives du contenu
+        contenu_nettoye = []
+        for ligne in lignes:
+            ligne_stripped = ligne.strip()
+            if ligne_stripped and not est_entete_administrative(ligne_stripped):
+                contenu_nettoye.append(ligne)
+
+        if contenu_nettoye:
+            resultats.append({
+                'titre': "Document complet",
+                'contenu': '\n'.join(contenu_nettoye),
+                'titre_complet': "Document complet"
+            })
+        else:
+            resultats.append({
+                'titre': "Document complet",
+                'contenu': texte_epreuve,
+                'titre_complet': "Document complet"
+            })
 
     return resultats
-
 def estimer_tokens(texte):
     """
     Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
