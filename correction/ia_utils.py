@@ -437,311 +437,80 @@ def separer_exercices(texte_epreuve):
     return [ex['contenu'] for ex in resultats]
 
 
-def separer_exercices_avec_titres_intelligente(texte_epreuve):
+def separer_exercices_avec_titres(texte_epreuve):
     """
-    Fonction intelligente qui détecte les exercices basée sur la structure.
-    Analyse les patterns, la hiérarchie et le contexte pour déterminer
-    ce qui est un titre d'exercice vs sous-titre vs contenu.
+    Version ultra-simple qui fait le minimum vital.
+    Compatible avec l'API existante.
     """
     if not texte_epreuve:
         return []
 
+    resultats = []
     lignes = texte_epreuve.splitlines()
 
-    # ========== CONFIGURATION INTELLIGENTE ==========
-    # Patterns de DÉBUT d'énoncé (ce qui indique vraiment un exercice)
-    PATTERNS_DEBUT_ENONCE = [
-        # Questions numérotées
-        re.compile(r'^\s*\d+[\.\)]\s+.+', re.IGNORECASE),  # "1. ...", "1) ..."
-        re.compile(r'^\s*[a-z][\.\)]\s+.+', re.IGNORECASE),  # "a. ...", "a) ..."
+    # Recherche simple des exercices
+    exercices_trouves = []
+    current_block = []
+    current_title = None
 
-        # Débuts de phrases typiques d'énoncés
-        re.compile(r'^\s*(?:Soit|Soient|On\s+considère|On\s+donne|Détermine|Calculer?|Montrer?|'
-                   r'Démontrer?|Résoudre?|Étudier?|Expliquer?|Justifier?|'
-                   r'Vérifier?|Trouver?|Donner?|Exprimer?)\b', re.IGNORECASE),
-
-        # Équations mathématiques
-        re.compile(r'.*[=≠<>≤≥].*'),  # Contient un signe mathématique
-
-        # Formules LaTeX
-        re.compile(r'.*\\[\(\[\{].*'),  # Contient \(, \[, \{
-    ]
-
-    # Patterns de TITRES (niveaux différents)
-    PATTERNS_TITRES = {
-        'SECTION': [
-            re.compile(r'^PARTIE\s+[A-D]\s*[:\.].*', re.IGNORECASE),
-            re.compile(r'^SECTION\s+[A-Z]\s*[:\.].*', re.IGNORECASE),
-        ],
-        'EXERCICE': [
-            re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice|PROBLÈME|Problème)\s+[\dIVXL]+\s*[:\.]?.*',
-                       re.IGNORECASE),
-            re.compile(r'^ACTIVITÉ\s+\d+\s*[:\.].*', re.IGNORECASE),
-        ],
-        'SOUS_TITRE': [
-            re.compile(r'^[IVXLCDM]+[\.\)]\s+.+', re.IGNORECASE),  # I., II., III.
-            re.compile(r'^[A-Z][\.\)]\s+.+', re.IGNORECASE),  # A., B., C.
-        ]
-    }
-
-    # ========== FONCTIONS D'ANALYSE ==========
-    def analyse_ligne_contexte(idx, profondeur=3):
-        """Analyse le contexte autour d'une ligne."""
-        debut = max(0, idx - profondeur)
-        fin = min(len(lignes), idx + profondeur + 1)
-        contexte = lignes[debut:fin]
-
-        # Compte les indicateurs d'énoncé dans le contexte
-        indicateurs = 0
-        for ligne in contexte:
-            ligne_stripped = ligne.strip()
-            if not ligne_stripped:
-                continue
-
-            # Vérifie les patterns d'énoncé
-            for pattern in PATTERNS_DEBUT_ENONCE:
-                if pattern.match(ligne_stripped):
-                    indicateurs += 1
-                    break
-
-        return indicateurs, contexte
-
-    def detecter_type_titre(ligne):
-        """Détecte le type de titre et son niveau."""
-        ligne_stripped = ligne.strip()
-
-        for niveau, patterns in PATTERNS_TITRES.items():
-            for pattern in patterns:
-                if pattern.match(ligne_stripped):
-                    return niveau, ligne_stripped
-
-        return None, ligne_stripped
-
-    def est_ligne_administrative(ligne):
-        """Détecte les lignes administratives à exclure."""
+    for i, ligne in enumerate(lignes):
         ligne_stripped = ligne.strip().upper()
 
-        # Mots-clés administratifs
-        admin_keywords = [
-            'MINISTÈRE', 'MINISTERE', 'MINISTRY',
-            'ENSEIGNEMENT', 'EDUCATION', 'SECONDAIRE',
-            'REPUBLIQUE', 'RÉPUBLIQUE', 'REPUBLIC',
-            'ANNÉE', 'ANNEE', 'SESSION', 'EXAMEN',
-            'PROFESSEUR', 'ENSEIGNANT', 'NOM', 'PRÉNOM',
-            'ÉLÈVE', 'ELEVE', 'BARÈME', 'BAREME',
-            'SUJET', 'PAGE', '/', '\\',
-        ]
+        # Détecter "EXERCICE" ou "PROBLEME" au début d'une ligne
+        if (ligne_stripped.startswith('EXERCICE') or
+                ligne_stripped.startswith('PROBLEME') or
+                ligne_stripped.startswith('PROBLÈME') or
+                (ligne_stripped.startswith('PARTIE') and 'EVALUATION DES COMPETENCES' in ligne_stripped)):
 
-        for mot in admin_keywords:
-            if mot in ligne_stripped:
-                return True
-
-        # Lignes très courtes en majuscules
-        if ligne_stripped.isupper() and len(ligne_stripped) < 50:
-            return True
-
-        return False
-
-    def a_suffisamment_de_contenu(bloc, min_lignes=3, min_caracteres=50):
-        """Vérifie si un bloc a suffisamment de contenu pour être un exercice."""
-        if not bloc:
-            return False
-
-        # Compter les lignes non vides
-        lignes_non_vides = sum(1 for l in bloc if l.strip())
-
-        # Compter les caractères
-        caracteres = sum(len(l) for l in bloc)
-
-        return lignes_non_vides >= min_lignes and caracteres >= min_caracteres
-
-    # ========== ALGORITHME PRINCIPAL ==========
-    resultats = []
-    blocs_potentiels = []  # (titre, contenu, niveau, score_confiance)
-
-    i = 0
-    while i < len(lignes):
-        ligne = lignes[i]
-        ligne_stripped = ligne.strip()
-
-        # Ignorer les lignes administratives et vides
-        if not ligne_stripped or est_ligne_administrative(ligne):
-            i += 1
-            continue
-
-        # Détecter le type de titre
-        niveau_titre, texte_titre = detecter_type_titre(ligne)
-
-        if niveau_titre in ['EXERCICE', 'SECTION']:
-            # C'est un titre potentiel, analyser le contexte
-            indicateurs_contexte, contexte = analyse_ligne_contexte(i)
-
-            # Score de confiance basé sur :
-            # 1. Type de titre (EXERCICE > SECTION)
-            # 2. Nombre d'indicateurs d'énoncé dans le contexte
-            # 3. Longueur du titre (pas trop court)
-            score_confiance = 0
-
-            if niveau_titre == 'EXERCICE':
-                score_confiance += 3
-            elif niveau_titre == 'SECTION':
-                score_confiance += 1
-
-            score_confiance += min(indicateurs_contexte, 3)  # Max 3 points
-            if len(ligne_stripped) > 10:
-                score_confiance += 1
-
-            # Collecter le contenu potentiel
-            contenu_potentiel = []
-            j = i + 1
-            while j < len(lignes):
-                ligne_suivante = lignes[j]
-                ligne_suivante_stripped = ligne_suivante.strip()
-
-                # S'arrêter au prochain titre significatif
-                if j < len(lignes) - 1:
-                    niveau_suivant, _ = detecter_type_titre(lignes[j + 1])
-                    if niveau_suivant in ['EXERCICE', 'SECTION'] and j > i + 2:
-                        break
-
-                # Ajouter la ligne au contenu (même si vide pour structure)
-                contenu_potentiel.append(ligne_suivante)
-                j += 1
-
-            # Vérifier si le contenu est suffisant
-            if a_suffisamment_de_contenu(contenu_potentiel):
-                blocs_potentiels.append({
-                    'titre': texte_titre,
-                    'contenu': contenu_potentiel,
-                    'niveau': niveau_titre,
-                    'score': score_confiance,
-                    'position': i
+            # Sauvegarder le bloc précédent
+            if current_block and current_title:
+                exercices_trouves.append({
+                    'title': current_title,
+                    'lines': current_block.copy()
                 })
 
-            i = j  # Avancer à la fin du bloc
+            # Nouveau bloc
+            current_title = ligne.strip()
+            current_block = [ligne]
         else:
-            i += 1
+            if current_block:
+                current_block.append(ligne)
 
-    # ========== FILTRAGE INTELLIGENT DES BLOCS ==========
-    # Trier par score de confiance (décroissant)
-    blocs_potentiels.sort(key=lambda x: x['score'], reverse=True)
+    # Dernier bloc
+    if current_block and current_title:
+        exercices_trouves.append({
+            'title': current_title,
+            'lines': current_block.copy()
+        })
 
-    # Sélectionner les meilleurs blocs (éviter les chevauchements)
-    positions_couvertes = set()
+    # Formatage pour l'API
+    for ex in exercices_trouves:
+        # Nettoyer un peu le titre
+        titre = ex['title']
+        if len(titre) > 100:
+            titre = titre[:97] + "..."
 
-    for bloc in blocs_potentiels:
-        # Vérifier si ce bloc chevauche un bloc déjà sélectionné
-        debut_bloc = bloc['position']
-        fin_bloc = debut_bloc + len(bloc['contenu'])
-        positions_bloc = set(range(debut_bloc, fin_bloc + 1))
+        # Prendre les 50 premières lignes max pour éviter les blocs trop longs
+        contenu_lines = ex['lines'][:50]
+        contenu = '\n'.join(contenu_lines)
 
-        if not positions_bloc.intersection(positions_couvertes):
-            # Ce bloc est indépendant, l'ajouter aux résultats
-            positions_couvertes.update(positions_bloc)
+        resultats.append({
+            'titre': titre,
+            'contenu': contenu,
+            'titre_complet': ex['title']
+        })
 
-            # Nettoyer le contenu (retirer lignes vides en début/fin)
-            contenu_nettoye = []
-            for ligne_contenu in bloc['contenu']:
-                if ligne_contenu.strip() or (contenu_nettoye and any(l.strip() for l in contenu_nettoye[-3:])):
-                    contenu_nettoye.append(ligne_contenu)
-
-            # Retirer les lignes vides finales
-            while contenu_nettoye and not contenu_nettoye[-1].strip():
-                contenu_nettoye.pop()
-
-            if contenu_nettoye:
-                resultats.append({
-                    'titre': bloc['titre'],
-                    'contenu': '\n'.join([bloc['titre']] + contenu_nettoye),
-                    'titre_complet': bloc['titre'],
-                    'score_confiance': bloc['score'],
-                    'niveau': bloc['niveau']
-                })
-
-    # ========== FALLBACK : DÉTECTION PAR QUESTIONS ==========
+    # Si aucun exercice trouvé
     if not resultats:
-        # Essayer de détecter les questions numérotées directement
-        questions = []
-        question_courante = []
-        titre_courant = None
+        # Prendre les 100 premières lignes
+        contenu = '\n'.join(lignes[:100])
+        resultats.append({
+            'titre': "Document complet",
+            'contenu': contenu,
+            'titre_complet': "Document complet"
+        })
 
-        for i, ligne in enumerate(lignes):
-            ligne_stripped = ligne.strip()
-
-            if not ligne_stripped or est_ligne_administrative(ligne):
-                continue
-
-            # Détecter une nouvelle question
-            if re.match(r'^\s*\d+[\.\)]\s+', ligne_stripped):
-                if question_courante and titre_courant:
-                    questions.append({
-                        'titre': titre_courant,
-                        'contenu': '\n'.join(question_courante),
-                        'titre_complet': titre_courant
-                    })
-
-                titre_courant = ligne_stripped
-                question_courante = [ligne]
-            else:
-                if question_courante:
-                    question_courante.append(ligne)
-
-        # Dernière question
-        if question_courante and titre_courant:
-            questions.append({
-                'titre': titre_courant,
-                'contenu': '\n'.join(question_courante),
-                'titre_complet': titre_courant
-            })
-
-        if questions:
-            return questions
-
-    # ========== FALLBACK ULTIME : DOCUMENT ENTIER ==========
-    if not resultats:
-        # Nettoyer les lignes administratives
-        contenu_nettoye = []
-        for ligne in lignes:
-            if ligne.strip() and not est_ligne_administrative(ligne):
-                contenu_nettoye.append(ligne)
-
-        if contenu_nettoye:
-            resultats.append({
-                'titre': "Document complet",
-                'contenu': '\n'.join(contenu_nettoye),
-                'titre_complet': "Document complet",
-                'score_confiance': 0,
-                'niveau': 'DOCUMENT'
-            })
-        else:
-            resultats.append({
-                'titre': "Document complet",
-                'contenu': texte_epreuve,
-                'titre_complet': "Document complet",
-                'score_confiance': 0,
-                'niveau': 'DOCUMENT'
-            })
-
-    # ========== POST-TRAITEMENT ==========
-    # Fusionner les titres courts avec leur contenu
-    resultats_finales = []
-    for i, resultat in enumerate(resultats):
-        # Si le titre est très court, essayer de l'enrichir
-        if len(resultat['titre']) < 20 and i < len(resultats) - 1:
-            # Regarder la première ligne de contenu significative
-            lignes_contenu = resultat['contenu'].split('\n')
-            for ligne_contenu in lignes_contenu[1:]:  # Skip le titre lui-même
-                if len(ligne_contenu.strip()) > 20:
-                    # Extraire un titre plus significatif
-                    mots = ligne_contenu.strip().split()[:8]
-                    titre_etendu = resultat['titre'] + " - " + ' '.join(mots)
-                    if len(titre_etendu) > len(resultat['titre']):
-                        resultat['titre_complet'] = titre_etendu
-                    break
-
-        resultats_finales.append(resultat)
-
-    return resultats_finales
+    return resultats
 
 def estimer_tokens(texte):
     """
