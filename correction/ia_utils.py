@@ -529,8 +529,8 @@ def separer_exercices_avec_titres(texte_epreuve):
         for mot in mots_cles_admin:
             if mot in ligne_upper:
                 # Vérifier que ce n'est pas dans un contexte pédagogique
-                mots_pedagogiques = ['COMPÉTENCE', 'COMPETENCE', 'ÉVALUATION', 'EVALUATION',
-                                     'SITUATION', 'EXERCICE', 'PARTIE', 'QUESTION']
+                mots_pedagogiques = ['COMPÉTENCE', 'COMPETENCE', 'ÉVALUATION', 'EVALUATION'
+                                     , 'EXERCICE', 'PARTIE', 'QUESTION']
                 contexte_pedagogique = any(p in ligne_upper for p in mots_pedagogiques)
 
                 # Si c'est une entête admin sans contexte pédagogique, exclure
