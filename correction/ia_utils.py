@@ -8,6 +8,7 @@ import cv2
 from pdf2image import convert_from_path
 import matplotlib
 import openai
+from datetime import datetime
 import logging
 import camelot
 matplotlib.use('Agg')
@@ -425,50 +426,21 @@ def format_corrige_pdf_structure(texte_corrige_raw):
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
 
+# Version simple maintenue pour compatibilité (mais dépréciée)
 def separer_exercices(texte_epreuve):
     """
-    Détecte et sépare les exercices d'une épreuve :
-    uniquement les lignes commençant par 'Exercice <n>' ou 'PARTIE <I>' en début de ligne.
+    Version simple maintenue pour compatibilité.
+    DÉPRÉCIÉE : Utiliser separer_exercices_avec_titres() à la place.
     """
-    if not texte_epreuve:
-        return []
-
-    # Normalisation des retours chariot
-    lignes = texte_epreuve.splitlines()
-
-    # Patterns stricts en début de ligne
-    patterns = [
-        re.compile(r'^(?:EXERCICE|Exercice)\s+\d+\b'),
-        re.compile(r'^(?:PARTIE|Partie)\s+[IVXLCDM]+\b')
-    ]
-
-    exercices = []
-    courant = []
-
-    for ligne in lignes:
-        if any(pat.match(ligne) for pat in patterns):
-            # nouveau bloc : enregistrer l'ancien s'il existe
-            if courant:
-                exercices.append('\n'.join(courant))
-                courant = []
-        courant.append(ligne)
-    # ajouter le dernier bloc
-    if courant:
-        exercices.append('\n'.join(courant))
-
-    # Si aucun exercice détecté, retourner tout
-    if not exercices:
-        return [texte_epreuve]
-
-    return exercices
+    resultats = separer_exercices_avec_titres(texte_epreuve)
+    # Retourne juste les contenus pour compatibilité
+    return [ex['contenu'] for ex in resultats]
 
 
 def separer_exercices_avec_titres(texte_epreuve):
     """
-    Version améliorée qui retourne les exercices avec leurs titres complets.
-    - Exclut les entêtes administratives
-    - Inclut les parties pédagogiques comme "PARTIE B : EVALUATION DES COMPETENCES"
-    - Conserve la même structure de retour pour compatibilité
+    Version améliorée et unifiée qui retourne les exercices avec leurs titres complets.
+    Utilisée par TOUT le système pour garantir la cohérence.
     """
     if not texte_epreuve:
         return []
@@ -493,34 +465,28 @@ def separer_exercices_avec_titres(texte_epreuve):
 
         # Sections avec lettres
         re.compile(r'^(?:PARTIE|Partie|SECTION)[\s\-]*[A-Z]\s*[:\.].*', re.IGNORECASE),
+
+        # Utiliser aussi les PATTERNS_BLOCS globaux
+        *[re.compile(pattern, re.IGNORECASE) for pattern in PATTERNS_BLOCS],
     ]
 
     # ========== FILTRES D'EXCLUSION ==========
-    # Liste des mots-clés d'entêtes administratives (à EXCLURE)
     mots_cles_admin = [
         'MINISTÈRE', 'MINISTERE', 'MINISTRY',
-        'ENSEIGNEMENT', 'EDUCATION',
-        'SECONDAIRE', 'SECONDARY',
+        'ENSEIGNEMENT', 'EDUCATION', 'SECONDAIRE', 'SECONDARY',
         'REPUBLIQUE', 'RÉPUBLIQUE', 'REPUBLIC',
         'ANNÉE', 'ANNEE', 'YEAR',
-        'PROFESSEUR', 'PROFESSOR',
-        'ENSEIGNANT', 'TEACHER',
+        'PROFESSEUR', 'PROFESSOR', 'ENSEIGNANT', 'TEACHER',
         'NOM', 'NAME', 'PRÉNOM', 'FIRSTNAME',
         'ÉLÈVE', 'ELEVE', 'STUDENT',
-        'BARÈME', 'BAREME',
-        'SUJET', 'SUBJECT',
-        'PAGE', 'P\.',
-        'DIRECTION', 'DIRECTORATE',
+        'BARÈME', 'BAREME', 'SUJET', 'SUBJECT',
+        'PAGE', 'P\.', 'DIRECTION', 'DIRECTORATE',
         'ACADÉMIE', 'ACADEMIE', 'ACADEMY',
-        'LYCÉE', 'LYCEE',
-        'COLLÈGE', 'COLLEGE',
-        'ÉTABLISSEMENT', 'ETABLISSEMENT',
-        'RECTORAT', 'RECTORATE',
-        'INSPECTION', 'INSPECTORATE',
-        'ÉCOLE', 'ECOLE', 'SCHOOL',
+        'LYCÉE', 'LYCEE', 'COLLÈGE', 'COLLEGE',
+        'ÉTABLISSEMENT', 'ETABLISSEMENT', 'RECTORAT', 'RECTORATE',
+        'INSPECTION', 'INSPECTORATE', 'ÉCOLE', 'ECOLE', 'SCHOOL',
     ]
 
-    # ========== FONCTIONS D'AIDE ==========
     def est_entete_administrative(ligne):
         """Détecte si une ligne est une entête administrative pure"""
         ligne_upper = ligne.upper().strip()
@@ -529,11 +495,10 @@ def separer_exercices_avec_titres(texte_epreuve):
         for mot in mots_cles_admin:
             if mot in ligne_upper:
                 # Vérifier que ce n'est pas dans un contexte pédagogique
-                mots_pedagogiques = ['COMPÉTENCE', 'COMPETENCE', 'ÉVALUATION', 'EVALUATION'
-                                     , 'EXERCICE', 'PARTIE', 'QUESTION']
+                mots_pedagogiques = ['COMPÉTENCE', 'COMPETENCE', 'ÉVALUATION', 'EVALUATION',
+                                     'SITUATION', 'EXERCICE', 'PARTIE', 'QUESTION']
                 contexte_pedagogique = any(p in ligne_upper for p in mots_pedagogiques)
 
-                # Si c'est une entête admin sans contexte pédagogique, exclure
                 if not contexte_pedagogique:
                     return True
 
@@ -544,18 +509,17 @@ def separer_exercices_avec_titres(texte_epreuve):
             re.compile(r'.*(république|republique|republic).*', re.IGNORECASE),
             re.compile(r'^page\s+\d+\s+sur\s+\d+$', re.IGNORECASE),
             re.compile(r'^\d+\s*/\s*\d+$'),
-            re.compile(r'^\s*\d+\s*$'),  # Numéro seul
+            re.compile(r'^\s*\d+\s*$'),
         ]
 
         for pattern in patterns_admin:
             if pattern.match(ligne):
                 return True
 
-        # 3. Lignes toutes en majuscules très courtes (probables entêtes)
+        # 3. Lignes toutes en majuscules très courtes
         if ligne.isupper() and len(ligne) < 80:
             mots = ligne.split()
             if len(mots) <= 5:
-                # Vérifier si ce sont des mots administratifs courts
                 mots_courts = {'ET', 'OU', 'DE', 'DES', 'DU', 'LE', 'LA', 'LES', 'AU', 'AUX'}
                 if all(m.upper() in mots_courts for m in mots if len(m) <= 3):
                     return True
@@ -575,16 +539,7 @@ def separer_exercices_avec_titres(texte_epreuve):
             if pattern.match(ligne_stripped):
                 return True
 
-        # 3. Vérifier les patterns globaux (PATTERNS_BLOCS) qui sont pédagogiques
-        for pattern_str in PATTERNS_BLOCS:
-            if re.match(pattern_str, ligne_stripped, re.IGNORECASE):
-                # Mais exclure si c'est juste "SITUATION" sans contexte
-                if 'SITUATION' in ligne_stripped.upper() and len(ligne_stripped) < 20:
-                    # Vérifier le contexte dans les lignes suivantes
-                    return True  # On l'inclut quand même
-                return True
-
-        # 4. Vérifier les titres avec notation (points)
+        # 3. Vérifier les titres avec notation (points)
         if re.search(r'\(\s*\d+[,\.]\d*\s*(?:point|pt)s?\s*\)', ligne_stripped, re.IGNORECASE):
             return True
 
@@ -603,38 +558,43 @@ def separer_exercices_avec_titres(texte_epreuve):
         if not ligne_stripped and not in_exercice:
             continue
 
-        # Vérifier si c'est un début d'exercice (avec exclusion des entêtes)
+        # Vérifier si c'est un début d'exercice
         if est_titre_exercice(ligne_stripped):
             # Enregistrer l'exercice précédent
             if courant:
                 # Trouver un titre significatif
                 titre_final = titre_courant
                 if not titre_final and courant:
-                    # Chercher dans les premières lignes non vides
                     for l in courant:
                         if l.strip():
                             titre_final = l.strip()
-                            # Limiter la longueur pour l'affichage
                             if len(titre_final) > 100:
                                 mots = titre_final.split()
                                 titre_final = ' '.join(mots[:10]) + '...'
                             break
 
-                resultats.append({
-                    'titre': titre_final or f"Exercice {len(resultats) + 1}",
-                    'contenu': '\n'.join(courant),
-                    'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
-                })
+                # Nettoyer le contenu des entêtes administratives
+                contenu_nettoye = []
+                for l in courant:
+                    l_stripped = l.strip()
+                    if l_stripped and not est_entete_administrative(l_stripped):
+                        contenu_nettoye.append(l)
+
+                if contenu_nettoye:
+                    resultats.append({
+                        'titre': titre_final or f"Exercice {len(resultats) + 1}",
+                        'contenu': '\n'.join(contenu_nettoye),
+                        'contenu_brut': '\n'.join(courant),  # Version brute pour compatibilité
+                        'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
+                    })
                 courant = []
 
             titre_courant = ligne_stripped
             courant.append(ligne)
             in_exercice = True
         else:
-            if in_exercice or i == 0:  # Si on a un titre ou c'est le début du doc
-                # Filtrer les entêtes administratives même dans le contenu
-                if not est_entete_administrative(ligne_stripped):
-                    courant.append(ligne)
+            if in_exercice or i == 0:
+                courant.append(ligne)
 
     # Dernier exercice
     if courant:
@@ -648,15 +608,23 @@ def separer_exercices_avec_titres(texte_epreuve):
                         titre_final = ' '.join(mots[:10]) + '...'
                     break
 
-        resultats.append({
-            'titre': titre_final or f"Exercice {len(resultats) + 1}",
-            'contenu': '\n'.join(courant),
-            'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
-        })
+        # Nettoyer le contenu
+        contenu_nettoye = []
+        for l in courant:
+            l_stripped = l.strip()
+            if l_stripped and not est_entete_administrative(l_stripped):
+                contenu_nettoye.append(l)
 
-    # Si aucun exercice détecté, créer un seul "exercice"
+        if contenu_nettoye:
+            resultats.append({
+                'titre': titre_final or f"Exercice {len(resultats) + 1}",
+                'contenu': '\n'.join(contenu_nettoye),
+                'contenu_brut': '\n'.join(courant),
+                'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
+            })
+
+    # Si aucun exercice détecté
     if not resultats:
-        # Nettoyer les entêtes administratives du contenu
         contenu_nettoye = []
         for ligne in lignes:
             ligne_stripped = ligne.strip()
@@ -667,16 +635,19 @@ def separer_exercices_avec_titres(texte_epreuve):
             resultats.append({
                 'titre': "Document complet",
                 'contenu': '\n'.join(contenu_nettoye),
+                'contenu_brut': texte_epreuve,
                 'titre_complet': "Document complet"
             })
         else:
             resultats.append({
                 'titre': "Document complet",
                 'contenu': texte_epreuve,
+                'contenu_brut': texte_epreuve,
                 'titre_complet': "Document complet"
             })
 
     return resultats
+
 def estimer_tokens(texte):
     """
     Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
@@ -1618,29 +1589,31 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
 def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
     """
     Traitement par découpage pour les épreuves longues avec données vision,
-    désormais en parallèle via Celery group.
+    utilisant la nouvelle fonction unifiée.
     """
-    #from celery import group
-    #from .tasks import generer_un_exercice
-    # 1) Sépare le texte en exercices
-    exercices = separer_exercices(texte_epreuve)
+    # 1) Sépare le texte en exercices AVEC la nouvelle fonction
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
 
     # 2) Traitement séquentiel
     tous_corriges = []
     tous_graphiques = []
 
-    for idx, ex in enumerate(exercices, start=1):
-        # Appel direct à la fonction de correction
+    for idx, ex_data in enumerate(exercices_data, start=1):
+        # Utiliser le contenu nettoyé de l'exercice
         corrige_html, graphs = generer_corrige_par_exercice(
-            texte_exercice=ex,
+            texte_exercice=ex_data['contenu'],
             contexte=contexte,
             matiere=matiere,
             donnees_vision=donnees_vision,
             demande=demande
         )
 
-        # Préfixe titre Exercice
-        tous_corriges.append(f"\n\n## 📝 Exercice {idx}\n\n{corrige_html}")
+        # Préfixe avec le titre réel pour une meilleure organisation
+        titre_affichage = ex_data['titre']
+        if len(titre_affichage) > 50:
+            titre_affichage = f"Exercice {idx}"
+
+        tous_corriges.append(f"\n\n## 📝 {titre_affichage}\n\n{corrige_html}")
 
         # Collecte des graphiques si existants
         if graphs:
@@ -1650,11 +1623,10 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
     return "".join(tous_corriges), tous_graphiques
 
 
-
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
-                                    demande=None, donnees_vision=None):  # ✅ NOUVEAU PARAMÈTRE
+                                    demande=None, donnees_vision=None):
     """
-    Nouvelle version avec support des données vision
+    Nouvelle version avec système unifié d'extraction.
     """
     print("\n[DEBUG] --> generer_corrige_ia_et_graphique called avec demande:",
           getattr(demande, 'id', None), "/",
@@ -1666,11 +1638,11 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         exemples_corriges = []
 
     print("\n" + "=" * 60)
-    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION")
+    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION (SYSTÈME UNIFIÉ)")
     print("=" * 60)
     print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
 
-    # ✅ NOUVEAU : Log des données vision
+    # Données vision
     if donnees_vision:
         print(f"🔬 Données vision disponibles:")
         print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
@@ -1683,10 +1655,60 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
     if tokens_estimes < 1500:  # Épreuve courte
         print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
         return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
-                                      donnees_vision,demande=demande)
+                                      donnees_vision, demande=demande)
     else:  # Épreuve longue
         print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
+        # Utiliser la nouvelle version unifiée
+        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande=demande)
+
+#les fonctions utilitaires , utilisables ou non, donc optionnelles
+def extraire_exercice_par_index(texte_epreuve, index=0):
+    """
+    Fonction utilitaire pour extraire un exercice spécifique par son index.
+    Utile pour les API et le frontend.
+    """
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+
+    if index < 0 or index >= len(exercices_data):
+        return None
+
+    ex_data = exercices_data[index]
+
+    # Ajouter des métadonnées utiles
+    ex_data.update({
+        'index': index,
+        'total_exercices': len(exercices_data),
+        'extraction_date': datetime.now().isoformat()  # ← datetime IMPORTÉ
+    })
+
+    return ex_data
+
+
+def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
+    """
+    Retourne la liste de tous les exercices détectés.
+    Optionnellement avec un aperçu du contenu.
+    """
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+
+    result = []
+    for i, ex in enumerate(exercices_data):
+        item = {
+            'index': i,
+            'titre': ex['titre'],
+            'titre_complet': ex['titre_complet'],
+            'longueur_contenu': len(ex['contenu'])
+        }
+
+        if avec_preview:
+            # Ajouter un aperçu des premières lignes
+            lignes = ex['contenu'].split('\n')[:3]
+            preview_text = ' '.join([l[:100] for l in lignes if l.strip()])
+            item['preview'] = (preview_text[:200] + '...') if len(preview_text) > 200 else preview_text
+
+        result.append(item)
+
+    return result
 
 
 # ============== TÂCHE ASYNCHRONE ==============
@@ -1706,7 +1728,8 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 20
         soumission.save()
 
-        donnees_vision_complete = None  # ✅ NOUVEAU : Stockage des données vision
+        donnees_vision_complete = None
+        texte_brut = ""
 
         if demande.fichier:
             # 1) Sauvegarde locale
@@ -1716,14 +1739,14 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
                 for chunk in demande.fichier.chunks():
                     f.write(chunk)
 
-            # 2) Appel unique d’analyse scientifique
+            # 2) Appel unique d'analyse scientifique
             analyse_complete = analyser_document_scientifique(local_path)
             donnees_vision_complete = {
                 "elements_visuels": analyse_complete.get("elements_visuels", []),
-                "formules_latex":   analyse_complete.get("formules_latex", []),
-                "graphs":           analyse_complete.get("graphs", []),
-                "angles":           analyse_complete.get("angles", []),
-                "numbers":          analyse_complete.get("numbers", []),
+                "formules_latex": analyse_complete.get("formules_latex", []),
+                "graphs": analyse_complete.get("graphs", []),
+                "angles": analyse_complete.get("angles", []),
+                "numbers": analyse_complete.get("numbers", []),
                 "structure_exercices": analyse_complete.get("structure_exercices", [])
             }
             texte_brut = analyse_complete.get("texte_complet", "")
@@ -1733,11 +1756,26 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
                 os.unlink(local_path)
             except:
                 pass
-                #else:
-            #texte_brut = demande.enonce_texte or ""
+        else:
+            texte_brut = demande.enonce_texte or ""
 
-        print("📥 DEBUG – TEXTE BRUT AVEC VISION (premiers 500 chars) :")
+        print("📥 TEXTE BRUT AVEC VISION (premiers 500 chars) :")
         print(texte_brut[:500].replace("\n", "\\n"), "...\n")
+
+        # Étape 1b : Extraire les exercices et stocker les données
+        exercices_data = separer_exercices_avec_titres(texte_brut)
+        print(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
+
+        # Stocker les données des exercices dans la demande
+        demande.exercices_data = json.dumps([
+            {
+                'titre': ex['titre'],
+                'titre_complet': ex['titre_complet'],
+                'contenu': ex['contenu'][:500] + '...' if len(ex['contenu']) > 500 else ex['contenu']
+            }
+            for ex in exercices_data
+        ])
+        demande.save()
 
         # Étape 2 : Texte final pour l'IA
         texte_enonce = texte_brut
@@ -1750,29 +1788,26 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
         contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
 
-        # ETAPE GENERATION GRAPHIQUE
-        # 1️⃣ Récupération du département (direct via la FK de la demande)
+        # Étape 4 : Génération graphique (si département scientifique)
         departement = demande.departement
-
         if is_departement_scientifique(departement):
-            print(f"⚗️ [DEBUG] Département scientifique : {departement.nom}")
+            print(f"⚗️ Département scientifique : {departement.nom}")
             soumission.statut = 'generation_graphiques'
             soumission.progression = 60
             soumission.save()
         else:
-            print(
-                f"⚡ [DEBUG] Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
+            print(f"⚡ Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
 
-        # ✅ APPEL AVEC DONNÉES VISION
+        # APPEL AVEC DONNÉES VISION
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
             texte_enonce,
             contexte,
             matiere=matiere,
             donnees_vision=donnees_vision_complete,
-            demande = demande
+            demande=demande
         )
 
-        # ETAPE GENERATION PDF
+        # Étape 5 : Génération PDF
         soumission.statut = 'formatage_pdf'
         soumission.progression = 80
         soumission.save()
@@ -1782,27 +1817,29 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             {
                 "titre_corrige": contexte,
                 "corrige_html": corrige_txt,
-                "soumission_id": demande_id
+                "soumission_id": demande_id,
+                "exercices_data": exercices_data  # Passer les données des exercices
             },
             demande_id
         )
 
-        # → Maintenant que le PDF existe, on peut débiter 1 crédit
+        # Débit de crédit
         from abonnement.services import debiter_credit_abonnement
         if not debiter_credit_abonnement(demande.user):
-            # en cas d’échec, on signale un statut spécifique et on stoppe
             soumission.statut = 'erreur_credit'
             soumission.save()
             return False
 
-        # Étape 5 : Mise à jour du statut et sauvegarde
+        # Étape 6 : Mise à jour du statut et sauvegarde
         soumission.statut = 'termine'
         soumission.progression = 100
         soumission.resultat_json = {
             'corrige_text': corrige_txt,
             'pdf_url': pdf_path,
             'graphiques': graph_list or [],
-            'analyse_vision': donnees_vision_complete  # ✅ NOUVEAU : Stocker l'analyse
+            'analyse_vision': donnees_vision_complete,
+            'exercices_detectes': len(exercices_data),
+            'exercices_titres': [ex['titre'] for ex in exercices_data]
         }
         soumission.save()
 
@@ -1810,10 +1847,16 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         demande.save()
 
         print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        print(f"   Exercices détectés: {len(exercices_data)}")
+        for i, ex in enumerate(exercices_data, 1):
+            print(f"   {i}. {ex['titre'][:50]}...")
+
         return True
 
     except Exception as e:
         print(f"❌ ERREUR dans la tâche IA: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             soumission.statut = 'erreur'
             soumission.save()
@@ -1826,27 +1869,39 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 def generer_corrige_exercice_async(soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
+    Version mise à jour avec système unifié.
     """
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
 
-        # 1) Préparer le texte complet depuis le fichier d’énoncé
+        # 1) Préparer le texte complet depuis le fichier d'énoncé
         texte = extraire_texte_fichier(dem.fichier)
 
-        # 2) Séparer et extraire le fragment
-        blocs = separer_exercices(texte)
+        # 2) Séparer et extraire le fragment avec la NOUVELLE fonction
+        exercices_data = separer_exercices_avec_titres(texte)
         idx = soum.exercice_index or 0
-        fragment = blocs[idx] if idx < len(blocs) else ""
 
-        # 3) Mise à jour statut ou analyse IA
+        # Vérifier l'index
+        if idx >= len(exercices_data):
+            print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+            idx = len(exercices_data) - 1
+
+        ex_data = exercices_data[idx]
+        fragment = ex_data['contenu']
+
+        print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
+        print(f"   Longueur contenu: {len(fragment)} caractères")
+
+        # 3) Mise à jour statut pour analyse IA
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
 
         # 4) Lancer la génération (IA + graph) sur ce fragment
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
-        contexte = f"Exercice de {mat.nom} – Exercice {idx + 1}"
+        contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
+
         corrige_txt, _ = generer_corrige_ia_et_graphique(
             texte_enonce=fragment,
             contexte=contexte,
@@ -1863,48 +1918,35 @@ def generer_corrige_exercice_async(soumission_id):
             {
                 "titre_corrige": contexte,
                 "corrige_html": corrige_txt,
-                "soumission_id": soum.id
+                "soumission_id": soum.id,
+                "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
             },
             soum.id
         )
 
-        # 6) Débit de crédit : cette fonction ou ce bout de code) peut ètre déplacée à n'importe quelle
-        # étape de la soumission. AInsi, je peux décider de vérifier le crédit plutôt avant l'analyse IA par exple
+        # 6) Débit de crédit
         if not debiter_credit_abonnement(dem.user):
             soum.statut = 'erreur_credit'
             soum.save()
             return False
 
         # 7) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
-        # Récupère le chemin physique du PDF
         pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
         pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
 
-        # DÉTERMINER LE TITRE RÉEL DE L'EXERCICE
-        titre_reel = f"Exercice {idx + 1}"  # Valeur par défaut
+        # Utiliser le titre réel de l'exercice
+        titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
 
-        try:
-            # Vérifier si la demande a des exercices_data stockés
-            if dem.exercices_data:
-                exercices_stockes = json.loads(dem.exercices_data)
-                if idx < len(exercices_stockes):
-                    # Prendre le titre_complet ou le titre
-                    ex_data = exercices_stockes[idx]
-                    titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
-
-                    # Nettoyer un peu le titre si trop long
-                    if len(titre_reel) > 200:
-                        titre_reel = titre_reel[:197] + "..."
-        except Exception as e:
-            print(f"⚠️ Erreur récupération titre réel: {e}")
-            # On garde le titre par défaut
+        # Nettoyer un peu le titre si trop long
+        if len(titre_reel) > 200:
+            titre_reel = titre_reel[:197] + "..."
 
         # Ouvre le fichier PDF
         with open(pdf_absolute_path, 'rb') as f:
             # Crée le CorrigePartiel avec le VRAI titre
             corrige = CorrigePartiel.objects.create(
                 soumission=soum,
-                titre_exercice=titre_reel,  # ← TITRE RÉEL ICI
+                titre_exercice=titre_reel,
             )
             # Attache le fichier PDF
             corrige.fichier_pdf.save(
@@ -1918,8 +1960,10 @@ def generer_corrige_exercice_async(soumission_id):
         soum.progression = 100
         soum.resultat_json = {
             "exercice_index": idx,
+            "exercice_titre": titre_reel,
             "corrige_text": corrige_txt,
-            "pdf_url": pdf_url
+            "pdf_url": pdf_url,
+            "exercice_data": ex_data  # Stocker toutes les données de l'exercice
         }
         soum.save()
 
