@@ -440,7 +440,9 @@ def separer_exercices(texte_epreuve):
 def separer_exercices_avec_titres(texte_epreuve):
     """
     Version améliorée et unifiée qui retourne les exercices avec leurs titres complets.
-    Utilisée par TOUT le système pour garantir la cohérence.
+    - Ne détecte PAS "PARTIE A: EVALUATION DES RESOURCES" comme un exercice séparé
+    - Traite "PARTIE B: EVALUATION DES COMPETENCES" comme un exercice
+    - Garde "SITUATION :" comme partie du contenu de la Partie B
     """
     if not texte_epreuve:
         return []
@@ -448,26 +450,33 @@ def separer_exercices_avec_titres(texte_epreuve):
     lignes = texte_epreuve.splitlines()
 
     # ========== PATTERNS AMÉLIORÉS ==========
-    # Patterns pour les VRAIS exercices/parties pédagogiques
+    # Patterns pour les VRAIS exercices (ce qu'on veut extraire)
     patterns_exercices = [
-        # Exercices avec numéros et points
+        # Exercices avec numéros (EXERCICE 1, EXERCICE 2, etc.)
         re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+[\s\-:\.].*', re.IGNORECASE),
         re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+\s*$', re.IGNORECASE),
 
-        # Parties avec évaluation des compétences (INCLURE)
-        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[A-Z]\s*[:\.]\s*É?VALUATION\s+DES?\s+.*', re.IGNORECASE),
+        # PARTIE B : ÉVALUATION DES COMPÉTENCES (un vrai exercice/situation)
+        re.compile(r'^(?:PARTIE|Partie)[\s\-]*B\s*[:\.]\s*É?VALUATION\s+DES?\s+(?:COMPÉTENCES|COMPETENCES).*',
+                   re.IGNORECASE),
+    ]
 
-        # Parties avec chiffres romains et contexte pédagogique
-        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[IVXLCDM]+\s*[:\.].*', re.IGNORECASE),
+    # Patterns pour les SECTIONS (à NE PAS traiter comme exercices)
+    patterns_sections = [
+        # PARTIE A: ÉVALUATION DES RESOURCES (section, pas un exercice)
+        re.compile(r'^(?:PARTIE|Partie)[\s\-]*A\s*[:\.]\s*É?VALUATION\s+DES?\s+(?:RESOURCES|RESSOURCES).*',
+                   re.IGNORECASE),
 
-        # "SITUATION" comme titre pédagogique
-        re.compile(r'^SITUATION\s*[:\.].*', re.IGNORECASE),
+        # Autres parties d'introduction
+        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[A-Z]\s*[:\.]\s*(?:INTRODUCTION|PRÉSENTATION|PRESENTATION|GÉNÉRALITÉS).*',
+                   re.IGNORECASE),
+    ]
 
-        # Sections avec lettres
-        re.compile(r'^(?:PARTIE|Partie|SECTION)[\s\-]*[A-Z]\s*[:\.].*', re.IGNORECASE),
-
-        # Utiliser aussi les PATTERNS_BLOCS globaux
-        *[re.compile(pattern, re.IGNORECASE) for pattern in PATTERNS_BLOCS],
+    # Patterns pour les sous-parties (à NE PAS séparer)
+    patterns_sous_parties = [
+        re.compile(r'^[A-Z]\)\s+', re.IGNORECASE),  # "A) ...", "B) ..."
+        re.compile(r'^[A-Z]\.\s+', re.IGNORECASE),  # "A. ...", "B. ..."
+        re.compile(r'^SITUATION\s*[:\.]\s*$', re.IGNORECASE),  # "SITUATION :" seul
     ]
 
     # ========== FILTRES D'EXCLUSION ==========
@@ -526,20 +535,50 @@ def separer_exercices_avec_titres(texte_epreuve):
 
         return False
 
-    def est_titre_exercice(ligne):
-        """Détecte si une ligne est un titre d'exercice ou de partie pédagogique"""
+    def est_section_a_exclure(ligne):
+        """Détecte si c'est une section comme PARTIE A (à exclure des exercices)"""
+        ligne_stripped = ligne.strip()
+
+        for pattern in patterns_sections:
+            if pattern.match(ligne_stripped):
+                return True
+
+        return False
+
+    def est_sous_partie(ligne):
+        """Détecte si c'est une sous-partie (à ne pas séparer)"""
+        ligne_stripped = ligne.strip()
+
+        for pattern in patterns_sous_parties:
+            if pattern.match(ligne_stripped):
+                return True
+
+        return False
+
+    def est_debut_exercice(ligne):
+        """
+        Détecte si c'est le début d'un VRAI exercice à extraire
+        """
         ligne_stripped = ligne.strip()
 
         # 1. Exclure les entêtes administratives
         if est_entete_administrative(ligne_stripped):
             return False
 
-        # 2. Vérifier les patterns d'exercice
+        # 2. Exclure les sections comme PARTIE A
+        if est_section_a_exclure(ligne_stripped):
+            return False
+
+        # 3. Exclure les sous-parties
+        if est_sous_partie(ligne_stripped):
+            return False
+
+        # 4. Vérifier les patterns d'exercice
         for pattern in patterns_exercices:
             if pattern.match(ligne_stripped):
                 return True
 
-        # 3. Vérifier les titres avec notation (points)
+        # 5. Vérifier les titres avec notation (points)
         if re.search(r'\(\s*\d+[,\.]\d*\s*(?:point|pt)s?\s*\)', ligne_stripped, re.IGNORECASE):
             return True
 
@@ -551,15 +590,24 @@ def separer_exercices_avec_titres(texte_epreuve):
     titre_courant = None
     in_exercice = False
 
+    # Variable pour gérer le contexte des sections
+    dans_section_a = False  # Pour gérer le contenu après "PARTIE A:..."
+
     for i, ligne in enumerate(lignes):
         ligne_stripped = ligne.strip()
 
-        # Ignorer les lignes vides avant le premier exercice
-        if not ligne_stripped and not in_exercice:
+        # Vérifier si on entre dans une section PARTIE A
+        if est_section_a_exclure(ligne_stripped):
+            dans_section_a = True
+            # On continue sans créer d'exercice
+            continue
+
+        # Ignorer les lignes vides avant le premier exercice (hors section A)
+        if not ligne_stripped and not in_exercice and not dans_section_a:
             continue
 
         # Vérifier si c'est un début d'exercice
-        if est_titre_exercice(ligne_stripped):
+        if est_debut_exercice(ligne_stripped):
             # Enregistrer l'exercice précédent
             if courant:
                 # Trouver un titre significatif
@@ -573,7 +621,7 @@ def separer_exercices_avec_titres(texte_epreuve):
                                 titre_final = ' '.join(mots[:10]) + '...'
                             break
 
-                # Nettoyer le contenu des entêtes administratives
+                # Nettoyer le contenu
                 contenu_nettoye = []
                 for l in courant:
                     l_stripped = l.strip()
@@ -581,20 +629,40 @@ def separer_exercices_avec_titres(texte_epreuve):
                         contenu_nettoye.append(l)
 
                 if contenu_nettoye:
-                    resultats.append({
-                        'titre': titre_final or f"Exercice {len(resultats) + 1}",
-                        'contenu': '\n'.join(contenu_nettoye),
-                        'contenu_brut': '\n'.join(courant),  # Version brute pour compatibilité
-                        'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
-                    })
+                    # Si on était dans la section A, l'exclure du titre
+                    if dans_section_a and titre_final and 'PARTIE A' not in titre_final.upper():
+                        # C'est un exercice de la section A, on le garde
+                        resultats.append({
+                            'titre': titre_final or f"Exercice {len(resultats) + 1}",
+                            'contenu': '\n'.join(contenu_nettoye),
+                            'contenu_brut': '\n'.join(courant),
+                            'titre_complet': titre_final or f"Exercice {len(resultats) + 1}",
+                            'section': 'A' if dans_section_a else None
+                        })
+                    elif not dans_section_a:  # Pas dans la section A
+                        resultats.append({
+                            'titre': titre_final or f"Exercice {len(resultats) + 1}",
+                            'contenu': '\n'.join(contenu_nettoye),
+                            'contenu_brut': '\n'.join(courant),
+                            'titre_complet': titre_final or f"Exercice {len(resultats) + 1}",
+                            'section': None
+                        })
+
                 courant = []
+                # Si on quitte la section A après avoir traité ses exercices
+                if dans_section_a and 'EXERCICE' not in ligne_stripped.upper():
+                    dans_section_a = False
 
             titre_courant = ligne_stripped
             courant.append(ligne)
             in_exercice = True
         else:
-            if in_exercice or i == 0:
-                courant.append(ligne)
+            # Ajouter au contenu si on est dans un exercice
+            # OU si on est dans la section A (pour récupérer les exercices)
+            if in_exercice or dans_section_a:
+                # Ne pas ajouter les sections comme titre
+                if not est_section_a_exclure(ligne_stripped):
+                    courant.append(ligne)
 
     # Dernier exercice
     if courant:
@@ -620,7 +688,8 @@ def separer_exercices_avec_titres(texte_epreuve):
                 'titre': titre_final or f"Exercice {len(resultats) + 1}",
                 'contenu': '\n'.join(contenu_nettoye),
                 'contenu_brut': '\n'.join(courant),
-                'titre_complet': titre_final or f"Exercice {len(resultats) + 1}"
+                'titre_complet': titre_final or f"Exercice {len(resultats) + 1}",
+                'section': 'A' if dans_section_a else None
             })
 
     # Si aucun exercice détecté
@@ -636,14 +705,16 @@ def separer_exercices_avec_titres(texte_epreuve):
                 'titre': "Document complet",
                 'contenu': '\n'.join(contenu_nettoye),
                 'contenu_brut': texte_epreuve,
-                'titre_complet': "Document complet"
+                'titre_complet': "Document complet",
+                'section': None
             })
         else:
             resultats.append({
                 'titre': "Document complet",
                 'contenu': texte_epreuve,
                 'contenu_brut': texte_epreuve,
-                'titre_complet': "Document complet"
+                'titre_complet': "Document complet",
+                'section': None
             })
 
     return resultats
