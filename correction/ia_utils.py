@@ -437,287 +437,311 @@ def separer_exercices(texte_epreuve):
     return [ex['contenu'] for ex in resultats]
 
 
-def separer_exercices_avec_titres(texte_epreuve):
+def separer_exercices_avec_titres_intelligente(texte_epreuve):
     """
-    Version améliorée et unifiée qui retourne les exercices avec leurs titres complets.
-    - Ne détecte PAS "PARTIE A: EVALUATION DES RESOURCES" comme un exercice séparé
-    - Traite "PARTIE B: EVALUATION DES COMPETENCES" comme un exercice
-    - Garde "SITUATION :" comme partie du contenu de la Partie B
+    Fonction intelligente qui détecte les exercices basée sur la structure.
+    Analyse les patterns, la hiérarchie et le contexte pour déterminer
+    ce qui est un titre d'exercice vs sous-titre vs contenu.
     """
     if not texte_epreuve:
         return []
 
     lignes = texte_epreuve.splitlines()
 
-    # ========== PATTERNS AMÉLIORÉS ==========
-    # Patterns pour les VRAIS exercices (ce qu'on veut extraire)
-    patterns_exercices = [
-        # Exercices avec numéros (EXERCICE 1, EXERCICE 2, etc.)
-        re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+[\s\-:\.].*', re.IGNORECASE),
-        re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice)[\s\-]*\d+\s*$', re.IGNORECASE),
+    # ========== CONFIGURATION INTELLIGENTE ==========
+    # Patterns de DÉBUT d'énoncé (ce qui indique vraiment un exercice)
+    PATTERNS_DEBUT_ENONCE = [
+        # Questions numérotées
+        re.compile(r'^\s*\d+[\.\)]\s+.+', re.IGNORECASE),  # "1. ...", "1) ..."
+        re.compile(r'^\s*[a-z][\.\)]\s+.+', re.IGNORECASE),  # "a. ...", "a) ..."
 
-        # PARTIE B : ÉVALUATION DES COMPÉTENCES (un vrai exercice/situation)
-        re.compile(r'^(?:PARTIE|Partie)[\s\-]*B\s*[:\.]\s*É?VALUATION\s+DES?\s+(?:COMPÉTENCES|COMPETENCES).*',
-                   re.IGNORECASE),
+        # Débuts de phrases typiques d'énoncés
+        re.compile(r'^\s*(?:Soit|Soient|On\s+considère|On\s+donne|Détermine|Calculer?|Montrer?|'
+                   r'Démontrer?|Résoudre?|Étudier?|Expliquer?|Justifier?|'
+                   r'Vérifier?|Trouver?|Donner?|Exprimer?)\b', re.IGNORECASE),
+
+        # Équations mathématiques
+        re.compile(r'.*[=≠<>≤≥].*'),  # Contient un signe mathématique
+
+        # Formules LaTeX
+        re.compile(r'.*\\[\(\[\{].*'),  # Contient \(, \[, \{
     ]
 
-    # Patterns pour les SECTIONS (à NE PAS traiter comme exercices)
-    patterns_sections = [
-        # PARTIE A: ÉVALUATION DES RESOURCES (section, pas un exercice)
-        re.compile(r'^(?:PARTIE|Partie)[\s\-]*A\s*[:\.]\s*É?VALUATION\s+DES?\s+(?:RESOURCES|RESSOURCES).*',
-                   re.IGNORECASE),
+    # Patterns de TITRES (niveaux différents)
+    PATTERNS_TITRES = {
+        'SECTION': [
+            re.compile(r'^PARTIE\s+[A-D]\s*[:\.].*', re.IGNORECASE),
+            re.compile(r'^SECTION\s+[A-Z]\s*[:\.].*', re.IGNORECASE),
+        ],
+        'EXERCICE': [
+            re.compile(r'^(?:EXERCICE|Exercice|EXERICE|Exerice|PROBLÈME|Problème)\s+[\dIVXL]+\s*[:\.]?.*',
+                       re.IGNORECASE),
+            re.compile(r'^ACTIVITÉ\s+\d+\s*[:\.].*', re.IGNORECASE),
+        ],
+        'SOUS_TITRE': [
+            re.compile(r'^[IVXLCDM]+[\.\)]\s+.+', re.IGNORECASE),  # I., II., III.
+            re.compile(r'^[A-Z][\.\)]\s+.+', re.IGNORECASE),  # A., B., C.
+        ]
+    }
 
-        # Autres parties d'introduction
-        re.compile(r'^(?:PARTIE|Partie)[\s\-]*[A-Z]\s*[:\.]\s*(?:INTRODUCTION|PRÉSENTATION|PRESENTATION|GÉNÉRALITÉS).*',
-                   re.IGNORECASE),
-    ]
+    # ========== FONCTIONS D'ANALYSE ==========
+    def analyse_ligne_contexte(idx, profondeur=3):
+        """Analyse le contexte autour d'une ligne."""
+        debut = max(0, idx - profondeur)
+        fin = min(len(lignes), idx + profondeur + 1)
+        contexte = lignes[debut:fin]
 
-    # Patterns pour les sous-parties (à NE PAS séparer)
-    patterns_sous_parties = [
-        re.compile(r'^[A-Z]\)\s+', re.IGNORECASE),  # "A) ...", "B) ..."
-        re.compile(r'^[A-Z]\.\s+', re.IGNORECASE),  # "A. ...", "B. ..."
-        re.compile(r'^SITUATION\s*[:\.]\s*$', re.IGNORECASE),  # "SITUATION :" seul
-    ]
+        # Compte les indicateurs d'énoncé dans le contexte
+        indicateurs = 0
+        for ligne in contexte:
+            ligne_stripped = ligne.strip()
+            if not ligne_stripped:
+                continue
 
-    # ========== FILTRES D'EXCLUSION ==========
-    mots_cles_admin = [
-        'MINISTÈRE', 'MINISTERE', 'MINISTRY',
-        'ENSEIGNEMENT', 'EDUCATION', 'SECONDAIRE', 'SECONDARY',
-        'REPUBLIQUE', 'RÉPUBLIQUE', 'REPUBLIC',
-        'ANNÉE', 'ANNEE', 'YEAR',
-        'PROFESSEUR', 'PROFESSOR', 'ENSEIGNANT', 'TEACHER',
-        'NOM', 'NAME', 'PRÉNOM', 'FIRSTNAME',
-        'ÉLÈVE', 'ELEVE', 'STUDENT',
-        'BARÈME', 'BAREME', 'SUJET', 'SUBJECT',
-        'PAGE', 'P\.', 'DIRECTION', 'DIRECTORATE',
-        'ACADÉMIE', 'ACADEMIE', 'ACADEMY',
-        'LYCÉE', 'LYCEE', 'COLLÈGE', 'COLLEGE',
-        'ÉTABLISSEMENT', 'ETABLISSEMENT', 'RECTORAT', 'RECTORATE',
-        'INSPECTION', 'INSPECTORATE', 'ÉCOLE', 'ECOLE', 'SCHOOL',
-    ]
+            # Vérifie les patterns d'énoncé
+            for pattern in PATTERNS_DEBUT_ENONCE:
+                if pattern.match(ligne_stripped):
+                    indicateurs += 1
+                    break
 
-    def est_entete_administrative(ligne):
-        """Détecte si une ligne est une entête administrative pure"""
-        ligne_upper = ligne.upper().strip()
+        return indicateurs, contexte
 
-        # 1. Vérifier les mots-clés administratifs
-        for mot in mots_cles_admin:
-            if mot in ligne_upper:
-                # Vérifier que ce n'est pas dans un contexte pédagogique
-                mots_pedagogiques = ['COMPÉTENCE', 'COMPETENCE', 'ÉVALUATION', 'EVALUATION',
-                                     'SITUATION', 'EXERCICE', 'PARTIE', 'QUESTION']
-                contexte_pedagogique = any(p in ligne_upper for p in mots_pedagogiques)
+    def detecter_type_titre(ligne):
+        """Détecte le type de titre et son niveau."""
+        ligne_stripped = ligne.strip()
 
-                if not contexte_pedagogique:
-                    return True
+        for niveau, patterns in PATTERNS_TITRES.items():
+            for pattern in patterns:
+                if pattern.match(ligne_stripped):
+                    return niveau, ligne_stripped
 
-        # 2. Patterns d'entêtes administratives
-        patterns_admin = [
-            re.compile(r'.*(ministère|ministry).*(enseignement|education).*', re.IGNORECASE),
-            re.compile(r'.*(secondaire|secondary).*', re.IGNORECASE),
-            re.compile(r'.*(république|republique|republic).*', re.IGNORECASE),
-            re.compile(r'^page\s+\d+\s+sur\s+\d+$', re.IGNORECASE),
-            re.compile(r'^\d+\s*/\s*\d+$'),
-            re.compile(r'^\s*\d+\s*$'),
+        return None, ligne_stripped
+
+    def est_ligne_administrative(ligne):
+        """Détecte les lignes administratives à exclure."""
+        ligne_stripped = ligne.strip().upper()
+
+        # Mots-clés administratifs
+        admin_keywords = [
+            'MINISTÈRE', 'MINISTERE', 'MINISTRY',
+            'ENSEIGNEMENT', 'EDUCATION', 'SECONDAIRE',
+            'REPUBLIQUE', 'RÉPUBLIQUE', 'REPUBLIC',
+            'ANNÉE', 'ANNEE', 'SESSION', 'EXAMEN',
+            'PROFESSEUR', 'ENSEIGNANT', 'NOM', 'PRÉNOM',
+            'ÉLÈVE', 'ELEVE', 'BARÈME', 'BAREME',
+            'SUJET', 'PAGE', '/', '\\',
         ]
 
-        for pattern in patterns_admin:
-            if pattern.match(ligne):
+        for mot in admin_keywords:
+            if mot in ligne_stripped:
                 return True
 
-        # 3. Lignes toutes en majuscules très courtes
-        if ligne.isupper() and len(ligne) < 80:
-            mots = ligne.split()
-            if len(mots) <= 5:
-                mots_courts = {'ET', 'OU', 'DE', 'DES', 'DU', 'LE', 'LA', 'LES', 'AU', 'AUX'}
-                if all(m.upper() in mots_courts for m in mots if len(m) <= 3):
-                    return True
-
-        return False
-
-    def est_section_a_exclure(ligne):
-        """Détecte si c'est une section comme PARTIE A (à exclure des exercices)"""
-        ligne_stripped = ligne.strip()
-
-        for pattern in patterns_sections:
-            if pattern.match(ligne_stripped):
-                return True
-
-        return False
-
-    def est_sous_partie(ligne):
-        """Détecte si c'est une sous-partie (à ne pas séparer)"""
-        ligne_stripped = ligne.strip()
-
-        for pattern in patterns_sous_parties:
-            if pattern.match(ligne_stripped):
-                return True
-
-        return False
-
-    def est_debut_exercice(ligne):
-        """
-        Détecte si c'est le début d'un VRAI exercice à extraire
-        """
-        ligne_stripped = ligne.strip()
-
-        # 1. Exclure les entêtes administratives
-        if est_entete_administrative(ligne_stripped):
-            return False
-
-        # 2. Exclure les sections comme PARTIE A
-        if est_section_a_exclure(ligne_stripped):
-            return False
-
-        # 3. Exclure les sous-parties
-        if est_sous_partie(ligne_stripped):
-            return False
-
-        # 4. Vérifier les patterns d'exercice
-        for pattern in patterns_exercices:
-            if pattern.match(ligne_stripped):
-                return True
-
-        # 5. Vérifier les titres avec notation (points)
-        if re.search(r'\(\s*\d+[,\.]\d*\s*(?:point|pt)s?\s*\)', ligne_stripped, re.IGNORECASE):
+        # Lignes très courtes en majuscules
+        if ligne_stripped.isupper() and len(ligne_stripped) < 50:
             return True
 
         return False
 
-    # ========== TRAITEMENT PRINCIPAL ==========
+    def a_suffisamment_de_contenu(bloc, min_lignes=3, min_caracteres=50):
+        """Vérifie si un bloc a suffisamment de contenu pour être un exercice."""
+        if not bloc:
+            return False
+
+        # Compter les lignes non vides
+        lignes_non_vides = sum(1 for l in bloc if l.strip())
+
+        # Compter les caractères
+        caracteres = sum(len(l) for l in bloc)
+
+        return lignes_non_vides >= min_lignes and caracteres >= min_caracteres
+
+    # ========== ALGORITHME PRINCIPAL ==========
     resultats = []
-    courant = []
-    titre_courant = None
-    in_exercice = False
+    blocs_potentiels = []  # (titre, contenu, niveau, score_confiance)
 
-    # Variable pour gérer le contexte des sections
-    dans_section_a = False  # Pour gérer le contenu après "PARTIE A:..."
-
-    for i, ligne in enumerate(lignes):
+    i = 0
+    while i < len(lignes):
+        ligne = lignes[i]
         ligne_stripped = ligne.strip()
 
-        # Vérifier si on entre dans une section PARTIE A
-        if est_section_a_exclure(ligne_stripped):
-            dans_section_a = True
-            # On continue sans créer d'exercice
+        # Ignorer les lignes administratives et vides
+        if not ligne_stripped or est_ligne_administrative(ligne):
+            i += 1
             continue
 
-        # Ignorer les lignes vides avant le premier exercice (hors section A)
-        if not ligne_stripped and not in_exercice and not dans_section_a:
-            continue
+        # Détecter le type de titre
+        niveau_titre, texte_titre = detecter_type_titre(ligne)
 
-        # Vérifier si c'est un début d'exercice
-        if est_debut_exercice(ligne_stripped):
-            # Enregistrer l'exercice précédent
-            if courant:
-                # Trouver un titre significatif
-                titre_final = titre_courant
-                if not titre_final and courant:
-                    for l in courant:
-                        if l.strip():
-                            titre_final = l.strip()
-                            if len(titre_final) > 100:
-                                mots = titre_final.split()
-                                titre_final = ' '.join(mots[:10]) + '...'
-                            break
+        if niveau_titre in ['EXERCICE', 'SECTION']:
+            # C'est un titre potentiel, analyser le contexte
+            indicateurs_contexte, contexte = analyse_ligne_contexte(i)
 
-                # Nettoyer le contenu
-                contenu_nettoye = []
-                for l in courant:
-                    l_stripped = l.strip()
-                    if l_stripped and not est_entete_administrative(l_stripped):
-                        contenu_nettoye.append(l)
+            # Score de confiance basé sur :
+            # 1. Type de titre (EXERCICE > SECTION)
+            # 2. Nombre d'indicateurs d'énoncé dans le contexte
+            # 3. Longueur du titre (pas trop court)
+            score_confiance = 0
 
-                if contenu_nettoye:
-                    # Si on était dans la section A, l'exclure du titre
-                    if dans_section_a and titre_final and 'PARTIE A' not in titre_final.upper():
-                        # C'est un exercice de la section A, on le garde
-                        resultats.append({
-                            'titre': titre_final or f"Exercice {len(resultats) + 1}",
-                            'contenu': '\n'.join(contenu_nettoye),
-                            'contenu_brut': '\n'.join(courant),
-                            'titre_complet': titre_final or f"Exercice {len(resultats) + 1}",
-                            'section': 'A' if dans_section_a else None
-                        })
-                    elif not dans_section_a:  # Pas dans la section A
-                        resultats.append({
-                            'titre': titre_final or f"Exercice {len(resultats) + 1}",
-                            'contenu': '\n'.join(contenu_nettoye),
-                            'contenu_brut': '\n'.join(courant),
-                            'titre_complet': titre_final or f"Exercice {len(resultats) + 1}",
-                            'section': None
-                        })
+            if niveau_titre == 'EXERCICE':
+                score_confiance += 3
+            elif niveau_titre == 'SECTION':
+                score_confiance += 1
 
-                courant = []
-                # Si on quitte la section A après avoir traité ses exercices
-                if dans_section_a and 'EXERCICE' not in ligne_stripped.upper():
-                    dans_section_a = False
+            score_confiance += min(indicateurs_contexte, 3)  # Max 3 points
+            if len(ligne_stripped) > 10:
+                score_confiance += 1
 
-            titre_courant = ligne_stripped
-            courant.append(ligne)
-            in_exercice = True
+            # Collecter le contenu potentiel
+            contenu_potentiel = []
+            j = i + 1
+            while j < len(lignes):
+                ligne_suivante = lignes[j]
+                ligne_suivante_stripped = ligne_suivante.strip()
+
+                # S'arrêter au prochain titre significatif
+                if j < len(lignes) - 1:
+                    niveau_suivant, _ = detecter_type_titre(lignes[j + 1])
+                    if niveau_suivant in ['EXERCICE', 'SECTION'] and j > i + 2:
+                        break
+
+                # Ajouter la ligne au contenu (même si vide pour structure)
+                contenu_potentiel.append(ligne_suivante)
+                j += 1
+
+            # Vérifier si le contenu est suffisant
+            if a_suffisamment_de_contenu(contenu_potentiel):
+                blocs_potentiels.append({
+                    'titre': texte_titre,
+                    'contenu': contenu_potentiel,
+                    'niveau': niveau_titre,
+                    'score': score_confiance,
+                    'position': i
+                })
+
+            i = j  # Avancer à la fin du bloc
         else:
-            # Ajouter au contenu si on est dans un exercice
-            # OU si on est dans la section A (pour récupérer les exercices)
-            if in_exercice or dans_section_a:
-                # Ne pas ajouter les sections comme titre
-                if not est_section_a_exclure(ligne_stripped):
-                    courant.append(ligne)
+            i += 1
 
-    # Dernier exercice
-    if courant:
-        titre_final = titre_courant
-        if not titre_final and courant:
-            for l in courant:
-                if l.strip():
-                    titre_final = l.strip()
-                    if len(titre_final) > 100:
-                        mots = titre_final.split()
-                        titre_final = ' '.join(mots[:10]) + '...'
-                    break
+    # ========== FILTRAGE INTELLIGENT DES BLOCS ==========
+    # Trier par score de confiance (décroissant)
+    blocs_potentiels.sort(key=lambda x: x['score'], reverse=True)
 
-        # Nettoyer le contenu
-        contenu_nettoye = []
-        for l in courant:
-            l_stripped = l.strip()
-            if l_stripped and not est_entete_administrative(l_stripped):
-                contenu_nettoye.append(l)
+    # Sélectionner les meilleurs blocs (éviter les chevauchements)
+    positions_couvertes = set()
 
-        if contenu_nettoye:
-            resultats.append({
-                'titre': titre_final or f"Exercice {len(resultats) + 1}",
-                'contenu': '\n'.join(contenu_nettoye),
-                'contenu_brut': '\n'.join(courant),
-                'titre_complet': titre_final or f"Exercice {len(resultats) + 1}",
-                'section': 'A' if dans_section_a else None
+    for bloc in blocs_potentiels:
+        # Vérifier si ce bloc chevauche un bloc déjà sélectionné
+        debut_bloc = bloc['position']
+        fin_bloc = debut_bloc + len(bloc['contenu'])
+        positions_bloc = set(range(debut_bloc, fin_bloc + 1))
+
+        if not positions_bloc.intersection(positions_couvertes):
+            # Ce bloc est indépendant, l'ajouter aux résultats
+            positions_couvertes.update(positions_bloc)
+
+            # Nettoyer le contenu (retirer lignes vides en début/fin)
+            contenu_nettoye = []
+            for ligne_contenu in bloc['contenu']:
+                if ligne_contenu.strip() or (contenu_nettoye and any(l.strip() for l in contenu_nettoye[-3:])):
+                    contenu_nettoye.append(ligne_contenu)
+
+            # Retirer les lignes vides finales
+            while contenu_nettoye and not contenu_nettoye[-1].strip():
+                contenu_nettoye.pop()
+
+            if contenu_nettoye:
+                resultats.append({
+                    'titre': bloc['titre'],
+                    'contenu': '\n'.join([bloc['titre']] + contenu_nettoye),
+                    'titre_complet': bloc['titre'],
+                    'score_confiance': bloc['score'],
+                    'niveau': bloc['niveau']
+                })
+
+    # ========== FALLBACK : DÉTECTION PAR QUESTIONS ==========
+    if not resultats:
+        # Essayer de détecter les questions numérotées directement
+        questions = []
+        question_courante = []
+        titre_courant = None
+
+        for i, ligne in enumerate(lignes):
+            ligne_stripped = ligne.strip()
+
+            if not ligne_stripped or est_ligne_administrative(ligne):
+                continue
+
+            # Détecter une nouvelle question
+            if re.match(r'^\s*\d+[\.\)]\s+', ligne_stripped):
+                if question_courante and titre_courant:
+                    questions.append({
+                        'titre': titre_courant,
+                        'contenu': '\n'.join(question_courante),
+                        'titre_complet': titre_courant
+                    })
+
+                titre_courant = ligne_stripped
+                question_courante = [ligne]
+            else:
+                if question_courante:
+                    question_courante.append(ligne)
+
+        # Dernière question
+        if question_courante and titre_courant:
+            questions.append({
+                'titre': titre_courant,
+                'contenu': '\n'.join(question_courante),
+                'titre_complet': titre_courant
             })
 
-    # Si aucun exercice détecté
+        if questions:
+            return questions
+
+    # ========== FALLBACK ULTIME : DOCUMENT ENTIER ==========
     if not resultats:
+        # Nettoyer les lignes administratives
         contenu_nettoye = []
         for ligne in lignes:
-            ligne_stripped = ligne.strip()
-            if ligne_stripped and not est_entete_administrative(ligne_stripped):
+            if ligne.strip() and not est_ligne_administrative(ligne):
                 contenu_nettoye.append(ligne)
 
         if contenu_nettoye:
             resultats.append({
                 'titre': "Document complet",
                 'contenu': '\n'.join(contenu_nettoye),
-                'contenu_brut': texte_epreuve,
                 'titre_complet': "Document complet",
-                'section': None
+                'score_confiance': 0,
+                'niveau': 'DOCUMENT'
             })
         else:
             resultats.append({
                 'titre': "Document complet",
                 'contenu': texte_epreuve,
-                'contenu_brut': texte_epreuve,
                 'titre_complet': "Document complet",
-                'section': None
+                'score_confiance': 0,
+                'niveau': 'DOCUMENT'
             })
 
-    return resultats
+    # ========== POST-TRAITEMENT ==========
+    # Fusionner les titres courts avec leur contenu
+    resultats_finales = []
+    for i, resultat in enumerate(resultats):
+        # Si le titre est très court, essayer de l'enrichir
+        if len(resultat['titre']) < 20 and i < len(resultats) - 1:
+            # Regarder la première ligne de contenu significative
+            lignes_contenu = resultat['contenu'].split('\n')
+            for ligne_contenu in lignes_contenu[1:]:  # Skip le titre lui-même
+                if len(ligne_contenu.strip()) > 20:
+                    # Extraire un titre plus significatif
+                    mots = ligne_contenu.strip().split()[:8]
+                    titre_etendu = resultat['titre'] + " - " + ' '.join(mots)
+                    if len(titre_etendu) > len(resultat['titre']):
+                        resultat['titre_complet'] = titre_etendu
+                    break
+
+        resultats_finales.append(resultat)
+
+    return resultats_finales
 
 def estimer_tokens(texte):
     """
