@@ -439,8 +439,7 @@ def separer_exercices(texte_epreuve):
 
 def separer_exercices_avec_titres(texte_epreuve):
     """
-    Version ultra-simple qui fait le minimum vital.
-    Compatible avec l'API existante.
+    Version améliorée mais simple - détecte plus de formats sans exclusion complexe.
     """
     if not texte_epreuve:
         return []
@@ -448,20 +447,58 @@ def separer_exercices_avec_titres(texte_epreuve):
     resultats = []
     lignes = texte_epreuve.splitlines()
 
-    # Recherche simple des exercices
+    # ========== LISTE ÉTENDUE DE MOTS-CLÉS ==========
+    # AJOUTEZ ICI LES NOUVEAUX MOTS-CLÉS D'EXERCICES
+    mots_cles_exercices = [
+        # Français
+        'EXERCICE', 'EXERICE', 'PROBLÈME', 'PROBLEME',
+        'PARTIE.*EVALUATION DES COMPETENCES',
+        'SITUATION PROBLÈME',
+
+        # Anglais - AJOUTÉS ICI
+        'SECTION', 'PART', 'EXERCISE', 'QUESTION',
+        'TASK', 'ACTIVITY',
+
+        # Espagnol
+        'EJERCICIO', 'PRUEBA',
+
+        # Allemand
+        'AUFGABE', 'TEIL',
+
+        # AJOUTEZ D'AUTRES MOTS-CLÉS ICI :
+        # 'DEVOIR', 'TP', 'ÉPREUVE', etc.
+    ]
+
+    # Convertir en regex pour matching flexible
+    patterns = []
+    for mot_cle in mots_cles_exercices:
+        # Créer un pattern qui match le mot-clé au début d'une ligne
+        # avec possibilité d'avoir un numéro/lettre après
+        pattern_str = f'^{mot_cle}[\\s\\-]*[\\dA-ZIVXL]*[\\s\\-:\.]'
+        patterns.append(re.compile(pattern_str, re.IGNORECASE))
+
+    # Algorithme simple (comme l'original)
     exercices_trouves = []
     current_block = []
     current_title = None
 
     for i, ligne in enumerate(lignes):
-        ligne_stripped = ligne.strip().upper()
+        ligne_stripped = ligne.strip()
 
-        # Détecter "EXERCICE" ou "PROBLEME" au début d'une ligne
-        if (ligne_stripped.startswith('EXERCICE') or
-                ligne_stripped.startswith('PROBLEME') or
-                ligne_stripped.startswith('PROBLÈME') or
-                (ligne_stripped.startswith('PARTIE') and 'EVALUATION DES COMPETENCES' in ligne_stripped)):
+        # Vérifier si la ligne commence par un mot-clé d'exercice
+        est_exercice = False
+        for pattern in patterns:
+            if pattern.match(ligne_stripped.upper()):
+                est_exercice = True
+                break
 
+        # Vérifier aussi les titres avec notation (10 MARKS, 3 points)
+        if not est_exercice:
+            if re.search(r'\(\s*\d+[\s,\.]*(?:point|pt|mark|marque|note)s?\s*\)', ligne_stripped.upper()):
+                # C'est probablement un titre avec notation
+                est_exercice = True
+
+        if est_exercice:
             # Sauvegarder le bloc précédent
             if current_block and current_title:
                 exercices_trouves.append({
@@ -470,7 +507,7 @@ def separer_exercices_avec_titres(texte_epreuve):
                 })
 
             # Nouveau bloc
-            current_title = ligne.strip()
+            current_title = ligne_stripped
             current_block = [ligne]
         else:
             if current_block:
@@ -490,8 +527,8 @@ def separer_exercices_avec_titres(texte_epreuve):
         if len(titre) > 100:
             titre = titre[:97] + "..."
 
-        # Prendre les 50 premières lignes max pour éviter les blocs trop longs
-        contenu_lines = ex['lines'][:50]
+        # Prendre les 100 premières lignes max
+        contenu_lines = ex['lines'][:100]
         contenu = '\n'.join(contenu_lines)
 
         resultats.append({
@@ -502,8 +539,15 @@ def separer_exercices_avec_titres(texte_epreuve):
 
     # Si aucun exercice trouvé
     if not resultats:
-        # Prendre les 100 premières lignes
-        contenu = '\n'.join(lignes[:100])
+        # Nettoyer les lignes vides au début
+        lignes_nettoyees = []
+        for ligne in lignes:
+            if ligne.strip():
+                lignes_nettoyees.append(ligne)
+                if len(lignes_nettoyees) >= 50:  # Limiter à 50 lignes
+                    break
+
+        contenu = '\n'.join(lignes_nettoyees[:50])
         resultats.append({
             'titre': "Document complet",
             'contenu': contenu,
