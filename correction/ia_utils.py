@@ -474,10 +474,11 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
 
         # AJOUTEZ D'AUTRES MOTS-CLÉS ICI :
         # 'DEVOIR', 'TP', 'ÉPREUVE', 'TEST', 'INTERROGATION', etc.
-        '[A-D][-\\s]*É?VALUATION DES COMPÉTENCES',      # B-EVALUATION, B ÉVALUATION
-        '[A-D][-\\s]*É?VALUATION DES COMPETENCES',      # B-EVALUATION, B EVALUATION
-        '[IVXL]+[-\\s]*É?VALUATION DES COMPÉTENCES',    # II-ÉVALUATION, II ÉVALUATION
-        '[IVXL]+[-\\s]*É?VALUATION DES COMPETENCES',    # II-EVALUATION, II EVALUATION
+        # Formats pour évaluation des compétences - Lettres A-D et chiffres romains
+        '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',  # B. EVALUATION, B-ÉVALUATION, B: ÉVALUATION
+        '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',  # B. EVALUATION, B-EVALUATION, B: EVALUATION
+        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',# II. ÉVALUATION, II-ÉVALUATION, II: ÉVALUATION
+        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',# II. EVALUATION, II-EVALUATION, II: EVALUATION
     ]
 
     # Convertir en regex pour matching flexible
