@@ -437,9 +437,17 @@ def separer_exercices(texte_epreuve):
     return [ex['contenu'] for ex in resultats]
 
 
-def separer_exercices_avec_titres(texte_epreuve):
+def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
     """
-    Version améliorée mais simple - détecte plus de formats sans exclusion complexe.
+    Version améliorée avec filtre par longueur de contenu.
+    Un titre n'est considéré comme exercice que si son contenu a au moins min_caracteres.
+
+    Args:
+        texte_epreuve (str): Texte complet de l'épreuve
+        min_caracteres (int): Nombre minimum de caractères pour valider un exercice (défaut: 60)
+
+    Returns:
+        list: Liste des exercices avec titre et contenu
     """
     if not texte_epreuve:
         return []
@@ -448,14 +456,13 @@ def separer_exercices_avec_titres(texte_epreuve):
     lignes = texte_epreuve.splitlines()
 
     # ========== LISTE ÉTENDUE DE MOTS-CLÉS ==========
-    # AJOUTEZ ICI LES NOUVEAUX MOTS-CLÉS D'EXERCICES
     mots_cles_exercices = [
         # Français
         'EXERCICE', 'EXERICE', 'PROBLÈME', 'PROBLEME',
         'PARTIE.*EVALUATION DES COMPETENCES',
         'SITUATION PROBLÈME',
 
-        # Anglais - AJOUTÉS ICI
+        # Anglais
         'SECTION', 'PART', 'EXERCISE', 'QUESTION',
         'TASK', 'ACTIVITY',
 
@@ -466,93 +473,161 @@ def separer_exercices_avec_titres(texte_epreuve):
         'AUFGABE', 'TEIL',
 
         # AJOUTEZ D'AUTRES MOTS-CLÉS ICI :
-        # 'DEVOIR', 'TP', 'ÉPREUVE', etc.
+        # 'DEVOIR', 'TP', 'ÉPREUVE', 'TEST', 'INTERROGATION', etc.
     ]
 
     # Convertir en regex pour matching flexible
     patterns = []
     for mot_cle in mots_cles_exercices:
-        # Créer un pattern qui match le mot-clé au début d'une ligne
-        # avec possibilité d'avoir un numéro/lettre après
         pattern_str = f'^{mot_cle}[\\s\\-]*[\\dA-ZIVXL]*[\\s\\-:\.]'
         patterns.append(re.compile(pattern_str, re.IGNORECASE))
 
-    # Algorithme simple (comme l'original)
-    exercices_trouves = []
+    # ========== ALGORITHME AVEC FILTRE LONGUEUR ==========
+    exercices_potentiels = []  # Stocke les exercices avant validation
     current_block = []
     current_title = None
+    current_start_index = 0
 
     for i, ligne in enumerate(lignes):
         ligne_stripped = ligne.strip()
 
         # Vérifier si la ligne commence par un mot-clé d'exercice
-        est_exercice = False
+        est_titre_potentiel = False
         for pattern in patterns:
             if pattern.match(ligne_stripped.upper()):
-                est_exercice = True
+                est_titre_potentiel = True
                 break
 
         # Vérifier aussi les titres avec notation (10 MARKS, 3 points)
-        if not est_exercice:
+        if not est_titre_potentiel:
             if re.search(r'\(\s*\d+[\s,\.]*(?:point|pt|mark|marque|note)s?\s*\)', ligne_stripped.upper()):
-                # C'est probablement un titre avec notation
-                est_exercice = True
+                est_titre_potentiel = True
 
-        if est_exercice:
-            # Sauvegarder le bloc précédent
+        if est_titre_potentiel:
+            # Sauvegarder le bloc précédent SI il a du contenu
             if current_block and current_title:
-                exercices_trouves.append({
+                # Calculer la longueur du contenu (sans le titre)
+                contenu_sans_titre = current_block[1:] if len(current_block) > 1 else []
+                longueur_contenu = sum(len(l) for l in contenu_sans_titre)
+
+                exercices_potentiels.append({
                     'title': current_title,
-                    'lines': current_block.copy()
+                    'lines': current_block.copy(),
+                    'content_length': longueur_contenu,
+                    'start_index': current_start_index,
+                    'end_index': i - 1
                 })
 
-            # Nouveau bloc
+            # Nouveau bloc potentiel
             current_title = ligne_stripped
-            current_block = [ligne]
+            current_block = [ligne]  # Inclure la ligne du titre
+            current_start_index = i
         else:
             if current_block:
                 current_block.append(ligne)
 
     # Dernier bloc
     if current_block and current_title:
-        exercices_trouves.append({
+        contenu_sans_titre = current_block[1:] if len(current_block) > 1 else []
+        longueur_contenu = sum(len(l) for l in contenu_sans_titre)
+
+        exercices_potentiels.append({
             'title': current_title,
-            'lines': current_block.copy()
+            'lines': current_block.copy(),
+            'content_length': longueur_contenu,
+            'start_index': current_start_index,
+            'end_index': len(lignes) - 1
         })
 
-    # Formatage pour l'API
-    for ex in exercices_trouves:
+    # ========== FILTRAGE PAR LONGUEUR ==========
+    # Seulement les exercices avec assez de contenu
+    exercices_valides = []
+    for ex in exercices_potentiels:
+        if ex['content_length'] >= min_caracteres:
+            exercices_valides.append(ex)
+        else:
+            # DEBUG: Afficher les exercices rejetés (optionnel)
+            # print(f"❌ Exercice rejeté (trop court): {ex['title'][:50]}... ({ex['content_length']} chars)")
+            pass
+
+    # ========== FUSION DES EXERCICES TROP COURTS ==========
+    # Si un exercice est trop court, le fusionner avec le suivant (si possible)
+    if len(exercices_valides) > 1:
+        resultats_fusionnes = []
+        i = 0
+
+        while i < len(exercices_valides):
+            current = exercices_valides[i]
+
+            # Si l'exercice est juste au-dessus du minimum (entre 60 et 100 chars)
+            # on peut le fusionner avec le suivant pour un meilleur résultat
+            if (min_caracteres <= current['content_length'] < 100) and i < len(exercices_valides) - 1:
+                next_ex = exercices_valides[i + 1]
+
+                # Fusionner les deux
+                nouveau_titre = f"{current['title']} / {next_ex['title']}"
+                nouvelles_lignes = current['lines'] + ["\n"] + next_ex['lines']
+
+                resultats_fusionnes.append({
+                    'title': nouveau_titre,
+                    'lines': nouvelles_lignes,
+                    'content_length': current['content_length'] + next_ex['content_length']
+                })
+                i += 2  # Sauter le suivant
+            else:
+                resultats_fusionnes.append(current)
+                i += 1
+
+        exercices_valides = resultats_fusionnes
+
+    # ========== FORMATAGE POUR L'API ==========
+    for ex in exercices_valides:
         # Nettoyer un peu le titre
         titre = ex['title']
         if len(titre) > 100:
             titre = titre[:97] + "..."
 
-        # Prendre les 100 premières lignes max
-        contenu_lines = ex['lines'][:100]
+        # Prendre les 200 premières lignes max
+        contenu_lines = ex['lines'][:200]
         contenu = '\n'.join(contenu_lines)
 
         resultats.append({
             'titre': titre,
             'contenu': contenu,
-            'titre_complet': ex['title']
+            'titre_complet': ex['title'],
+            'longueur_contenu': ex['content_length']  # Optionnel, pour debug
         })
 
-    # Si aucun exercice trouvé
+    # ========== FALLBACK SI AUCUN EXERCICE VALIDE ==========
     if not resultats:
-        # Nettoyer les lignes vides au début
-        lignes_nettoyees = []
-        for ligne in lignes:
-            if ligne.strip():
-                lignes_nettoyees.append(ligne)
-                if len(lignes_nettoyees) >= 50:  # Limiter à 50 lignes
-                    break
+        # Chercher le bloc le plus long comme fallback
+        if exercices_potentiels:
+            # Prendre l'exercice avec le plus de contenu
+            plus_long = max(exercices_potentiels, key=lambda x: x['content_length'])
 
-        contenu = '\n'.join(lignes_nettoyees[:50])
-        resultats.append({
-            'titre': "Document complet",
-            'contenu': contenu,
-            'titre_complet': "Document complet"
-        })
+            titre = plus_long['title']
+            if len(titre) > 100:
+                titre = titre[:97] + "..."
+
+            contenu_lines = plus_long['lines'][:200]
+            contenu = '\n'.join(contenu_lines)
+
+            resultats.append({
+                'titre': titre,
+                'contenu': contenu,
+                'titre_complet': plus_long['title'],
+                'longueur_contenu': plus_long['content_length']
+            })
+        else:
+            # Fallback ultime : document complet
+            contenu_lines = lignes[:100]
+            contenu = '\n'.join(contenu_lines)
+            resultats.append({
+                'titre': "Document complet",
+                'contenu': contenu,
+                'titre_complet': "Document complet",
+                'longueur_contenu': len(contenu)
+            })
 
     return resultats
 
