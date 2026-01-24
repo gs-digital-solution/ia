@@ -479,7 +479,9 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
         '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',
         # II. ÉVALUATION, II-ÉVALUATION, II: ÉVALUATION
         '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',# II. EVALUATION, II-EVALUATION, II: EVALUATION
-        'SUJET[\\s\\-]*DE[\\s\\-]*TYPE[\\s\\-]*[IVXL]+',
+        'SUJET[\\s\\-]*DE[\\s\\-]*TYPE[\\s\\-]*[\\dIVXL]+',
+        'SUJET[\\s\\-]*TYPE[\\s\\-]*[\\dIVXL]+',
+        'SUJET[\\s\\-]*[\\dIVXL]+',
     ]
 
     # Convertir en regex pour matching flexible
