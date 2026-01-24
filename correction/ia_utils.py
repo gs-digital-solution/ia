@@ -28,6 +28,7 @@ from resources.models import Matiere
 from abonnement.services import debiter_credit_abonnement
 from .models import CorrigePartiel
 from django.core.files import File
+import pdfplumber  # NOUVEAU IMPORT POUR PDF PAYSAGE
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -478,8 +479,8 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
         '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',  # B. EVALUATION, B-EVALUATION, B: EVALUATION
         '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',
         # II. ÉVALUATION, II-ÉVALUATION, II: ÉVALUATION
-        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',
-        # II. EVALUATION, II-EVALUATION, II: EVALUATION
+        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',# II. EVALUATION, II-EVALUATION, II: EVALUATION
+        'SUJET[\\s\\-]*DE[\\s\\-]*TYPE[\\s\\-]*[IVXL]+',
     ]
 
     # Convertir en regex pour matching flexible
@@ -1157,13 +1158,90 @@ def generate_corrige_html(corrige_text):
 # ============== EXTRACTION TEXTE/FICHIER ==============
 
 def extraire_texte_pdf(fichier_path):
+    """
+    NOUVELLE VERSION avec pdfplumber - Optimisée pour PDF paysage
+    """
+    print(f"🔧 Extraction PDF améliorée: {os.path.basename(fichier_path)}")
+
+    # 1. Essayer avec pdfplumber (meilleur pour les PDF paysage)
     try:
-        texte = extract_text(fichier_path)
-        print(f"📄 PDF extrait: {len(texte)} caractères")
-        return texte.strip() if texte else ""
-    except Exception as e:
-        print(f"❌ Erreur extraction PDF: {e}")
+        return _extraire_avec_pdfplumber(fichier_path)
+    except Exception as e_plumber:
+        print(f"⚠️ pdfplumber échoué: {e_plumber}")
+
+    # 2. Fallback sur pdfminer.six (ancienne méthode)
+    try:
+        return _extraire_avec_pdfminer(fichier_path)
+    except Exception as e_miner:
+        print(f"❌ Les deux méthodes ont échoué: {e_miner}")
         return ""
+
+
+def _extraire_avec_pdfplumber(fichier_path):
+    """
+    NOUVELLE FONCTION : Extraction avec pdfplumber (meilleur pour paysage)
+    """
+    print("   📦 Utilisation de pdfplumber...")
+
+    texte_pages = []
+
+    with pdfplumber.open(fichier_path) as pdf:
+        total_pages = len(pdf.pages)
+        print(f"   📄 PDF détecté: {total_pages} pages")
+
+        for i, page in enumerate(pdf.pages, 1):
+            # Détecter si la page est en paysage
+            is_landscape = page.width > page.height
+
+            if is_landscape:
+                print(f"   📐 Page {i}: PAYSAGE ({int(page.width)}x{int(page.height)})")
+                page_text = _extraire_page_paysage(page)
+            else:
+                print(f"   📄 Page {i}: PORTRAIT")
+                page_text = page.extract_text() or ""
+
+            if page_text:
+                texte_pages.append(page_text)
+
+    texte_complet = "\n\n".join(texte_pages)
+    print(f"✅ pdfplumber: {len(texte_complet)} caractères extraits")
+    return texte_complet.strip()
+
+
+def _extraire_page_paysage(page):
+    """
+    NOUVELLE FONCTION : Stratégie spéciale pour pages paysage
+    """
+    width, height = page.width, page.height
+
+    # Stratégie 1: Extraction normale
+    texte_normal = page.extract_text() or ""
+
+    # Stratégie 2: Par colonnes (idéal pour PDF à 2 colonnes)
+    left_half = page.crop((0, 0, width / 2, height))
+    right_half = page.crop((width / 2, 0, width, height))
+
+    texte_left = left_half.extract_text() or ""
+    texte_right = right_half.extract_text() or ""
+    texte_colonnes = f"{texte_left}\n{texte_right}"
+
+    # Choisir la meilleure méthode
+    if len(texte_colonnes) > len(texte_normal) * 1.2:  # 20% plus de texte
+        print(f"       → Méthode: colonnes")
+        return texte_colonnes
+    else:
+        print(f"       → Méthode: normale")
+        return texte_normal
+
+
+def _extraire_avec_pdfminer(fichier_path):
+    """
+    FONCTION EXISTANTE : Fallback sur pdfminer.six
+    """
+    print("   🔄 Fallback sur pdfminer.six...")
+    texte = extract_text(fichier_path)
+    print(f"   📄 pdfminer: {len(texte)} caractères")
+    return texte.strip() if texte else ""
 
 
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
