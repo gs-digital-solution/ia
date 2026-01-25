@@ -1080,10 +1080,11 @@ def detect_and_format_math_expressions(text):
     return text
 
 
+
 def format_table_markdown(table_text):
     """
     Convertit un tableau markdown en HTML avec support des alignements et séparateurs.
-    Version améliorée pour gérer les tableaux complexes.
+    Version ULTRA-ROBUSTE pour gérer les tableaux mal formatés de l'IA.
 
     Args:
         table_text (str): Tableau au format markdown
@@ -1093,42 +1094,166 @@ def format_table_markdown(table_text):
     """
     print(f"🔄 Formatage tableau : {len(table_text)} caractères")
 
+    # DEBUG: Afficher le tableau original
+    print(f"📋 Tableau original (premiers 200 chars): {table_text[:200].replace(chr(10), '\\n')}...")
+
     # Nettoyer d'abord le texte du tableau
     table_text = clean_table_text(table_text)
+
+    # DEBUG: Afficher le tableau nettoyé
+    print(f"🧹 Tableau nettoyé (premiers 200 chars): {table_text[:200].replace(chr(10), '\\n')}...")
 
     lines = [line.strip() for line in table_text.strip().split('\n') if line.strip()]
 
     if len(lines) < 1:
         print("⚠️ Tableau vide après nettoyage")
-        return f'<div class="table-container">Tableau vide</div>'
+        return f'<div class="table-container"><p class="table-error">Tableau non formatable (vide)</p></div>'
 
-    # Détecter toutes les lignes de séparation
+    print(f"   Lignes après nettoyage: {len(lines)}")
+    for idx, line in enumerate(lines):
+        print(f"   [{idx}] '{line[:80]}'")
+
+    # TENTATIVE DE RÉPARATION SI LE TABLEAU SEMBLE CASSÉ
+    if len(lines) >= 2:  # Assez de lignes pour potentiellement être cassé
+        print("🔧 Tentative de réparation du tableau...")
+        repaired_lines = repair_broken_table(lines)
+        if repaired_lines != lines:
+            print(f"   ✅ Tableau réparé: {len(repaired_lines)} lignes")
+            for idx, line in enumerate(repaired_lines):
+                print(f"   [{idx} réparé] '{line[:80]}'")
+            lines = repaired_lines
+        else:
+            print("   ℹ️  Aucune réparation nécessaire")
+
+    # ANALYSE DÉTAILLÉE DE LA STRUCTURE
+    print("🔍 Analyse de la structure du tableau:")
+
     separator_indices = []
+    header_candidates = []
+    data_lines = []
+
     for i, line in enumerate(lines):
-        # Une ligne de séparation contient principalement des -, :, | et espaces
-        clean_line = re.sub(r'[:\-\s\|]', '', line)
-        if len(clean_line) == 0 and '|' in line:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+
+        # Ligne de séparation
+        if re.match(r'^[\|\s:\-]+$', line_stripped) and '|' in line_stripped:
             separator_indices.append(i)
+            print(f"   Ligne {i}: SÉPARATEUR - '{line_stripped[:50]}...'")
 
-    print(f"   Lignes détectées: {len(lines)}, séparateurs: {separator_indices}")
+        # Ligne avec du texte (potentiel en-tête)
+        elif '|' in line_stripped and re.search(r'[a-zA-ZÀ-ÿ\d]', line_stripped):
+            if re.search(r'[a-zA-ZÀ-ÿ]', line_stripped):  # Contient des lettres
+                header_candidates.append(i)
+                print(f"   Ligne {i}: EN-TÊTE POTENTIEL - '{line_stripped[:50]}...'")
+            else:
+                data_lines.append(i)
+                print(f"   Ligne {i}: DONNÉES - '{line_stripped[:50]}...'")
 
-    # Cas 1: Aucun séparateur explicite
-    if not separator_indices:
-        return format_simple_table(lines)
+        else:
+            print(f"   Ligne {i}: AUTRE - '{line_stripped[:50]}...'")
 
-    # Cas 2: Séparateur unique (cas classique markdown)
-    elif len(separator_indices) == 1:
-        separator_idx = separator_indices[0]
-        return format_markdown_table_with_separator(lines, separator_idx)
+    print(
+        f"   Résumé: {len(separator_indices)} séparateurs, {len(header_candidates)} en-têtes potentiels, {len(data_lines)} lignes de données")
 
-    # Cas 3: Plusieurs séparateurs (tableau complexe)
-    else:
+    # CAS SPÉCIAL : Tableau avec la structure exacte de l'exemple cassé
+    # Format: "| Titre | ... |" suivi de "|---|---|" suivi de "| --- | --- |" suivi de "| Données | ... |"
+    if len(lines) >= 3:
+        # Recherche du pattern spécifique: ligne1=entête, ligne2=séparateur1, ligne3=séparateur2
+        if (len(lines) >= 3 and
+                '|' in lines[0] and
+                re.match(r'^[\|\s:\-]+$', lines[1]) and
+                re.match(r'^[\|\s:\-]+$', lines[2])):
+            print("⚠️ Détecté pattern de tableau cassé (2 séparateurs consécutifs)")
+            # Fusionner les 2 séparateurs en un
+            merged_separator = merge_separator_lines(lines[1], lines[2])
+            lines = [lines[0], merged_separator] + lines[3:]
+            separator_indices = [1]  # Mettre à jour l'indice du séparateur
+            print(f"   Séparateurs fusionnés: '{merged_separator}'")
+
+    # DÉCISION DU FORMATAGE BASÉE SUR LA STRUCTURE ANALYSÉE
+
+    # Cas 1: Structure markdown classique (entête + séparateur + données)
+    if (len(header_candidates) >= 1 and
+            len(separator_indices) >= 1 and
+            min(header_candidates) < min(separator_indices)):
+
+        print("✅ Structure markdown classique détectée")
+        separator_idx = min(separator_indices)
+
+        # Vérifier la cohérence des colonnes
+        if separator_idx > 0:
+            header_line = lines[header_candidates[0]]
+            separator_line = lines[separator_idx]
+
+            header_cols = header_line.count('|') - 1
+            separator_cols = separator_line.count('|') - 1
+
+            print(f"   Colonnes: en-tête={header_cols}, séparateur={separator_cols}")
+
+            if header_cols > 0 and separator_cols > 0:
+                # Standardiser si nécessaire
+                if header_cols != separator_cols:
+                    print(f"   ⚠️ Incohérence de colonnes, tentative d'ajustement")
+                    lines = standardize_table_columns(lines, max(header_cols, separator_cols))
+
+                return format_markdown_table_with_separator(lines, separator_idx)
+
+    # Cas 2: Aucun séparateur explicite mais plusieurs lignes avec pipes
+    elif not separator_indices and len(lines) >= 2:
+        print("ℹ️  Tableau sans séparateur explicite")
+        # Vérifier si toutes les lignes ont à peu près le même nombre de pipes
+        pipe_counts = [line.count('|') - 1 for line in lines if '|' in line]
+        if pipe_counts and max(pipe_counts) - min(pipe_counts) <= 2:
+            print(f"   Structure cohérente: {min(pipe_counts)}-{max(pipe_counts)} colonnes")
+            return format_simple_table(lines)
+
+    # Cas 3: Plusieurs séparateurs (tableau complexe avec sous-sections)
+    elif len(separator_indices) >= 2:
+        print("ℹ️  Tableau complexe avec plusieurs séparateurs")
         return format_complex_table(lines, separator_indices)
+
+    # CAS DE SECOURS : Formatage simple de toute façon
+    print("⚠️ Structure non reconnue, formatage simple de secours")
+
+    # Nettoyer et formater toutes les lignes avec pipes
+    html_lines = ['<div class="table-container"><table><tbody>']
+
+    for line in lines:
+        if '|' not in line:
+            continue
+
+        line_clean = re.sub(r'^\|\s*', '', line)
+        line_clean = re.sub(r'\s*\|$', '', line_clean)
+        cells = [cell.strip() for cell in line_clean.split('|')]
+
+        if cells:
+            html_lines.append('<tr>')
+
+            # Déterminer si c'est probablement un en-tête (première ligne ou ligne avec du texte)
+            is_header = (lines.index(line) == 0 and
+                         any(re.search(r'[a-zA-ZÀ-ÿ]', cell) for cell in cells))
+
+            for cell in cells:
+                if is_header:
+                    html_lines.append(f'<th>{cell}</th>')
+                else:
+                    html_lines.append(f'<td>{cell}</td>')
+
+            html_lines.append('</tr>')
+
+    html_lines.append('</tbody></table></div>')
+
+    result = ''.join(html_lines)
+    print(f"✅ Formatage de secours terminé: {len(result)} caractères HTML")
+    return result
 
 
 def clean_table_text(table_text):
     """
     Nettoie le texte des tableaux avant traitement.
+    Version ULTRA-ROBUSTE pour gérer les tableaux mal formatés de l'IA.
     """
     lines = table_text.strip().split('\n')
     cleaned_lines = []
@@ -1136,38 +1261,228 @@ def clean_table_text(table_text):
     for line in lines:
         line = line.strip()
         if not line:
+            # Garder les lignes vides dans les tableaux (peuvent être des séparateurs)
+            cleaned_lines.append(line)
             continue
 
-        # Normaliser les pipes
+        # CORRECTION CRITIQUE : L'IA génère parfois "|---|---|" sur plusieurs lignes
+        # On doit fusionner ces lignes
+        if re.match(r'^[\|\s:\-]+$', line) and '|' in line:
+            # C'est une ligne de séparation
+            cleaned_lines.append(line)
+            continue
+
+        # Normaliser les pipes - TOUJOURS avoir | au début et à la fin
         if not line.startswith('|'):
             line = '| ' + line
         if not line.endswith('|'):
             line = line + ' |'
 
-        # Supprimer les doubles espaces mais garder les espaces nécessaires
-        line = re.sub(r'\|\s+\|', '| |', line)  # Cellules vides
+        # Remplacer les séparateurs de cellule multiples
+        line = re.sub(r'\|\s*\|\s*\|', '| | |', line)  # Cellules vides consécutives
         line = re.sub(r'\s{2,}', ' ', line)  # Multiples espaces
+
+        # Nettoyer les cellules vides
+        line = re.sub(r'\|\s+\|', '| |', line)
+
         cleaned_lines.append(line)
 
-    return '\n'.join(cleaned_lines)
+    # PHASE 2 : Fusionner les séparateurs brisés sur plusieurs lignes
+    final_lines = []
+    i = 0
+    while i < len(cleaned_lines):
+        line = cleaned_lines[i]
+
+        # Si c'est une ligne de séparation incomplète
+        if re.match(r'^[\|\s:\-]+$', line) and '|' in line:
+            # Regarder si la ligne suivante est aussi un séparateur
+            j = i + 1
+            while j < len(cleaned_lines) and re.match(r'^[\|\s:\-]+$', cleaned_lines[j]) and '|' in cleaned_lines[j]:
+                # Fusionner les séparateurs
+                line = merge_separator_lines(line, cleaned_lines[j])
+                j += 1
+
+            if j > i + 1:
+                print(f"⚠️ Fusionné {j - i} lignes de séparateur en une seule")
+                i = j - 1  # Sauter les lignes fusionnées
+
+        final_lines.append(line)
+        i += 1
+
+    return '\n'.join(final_lines)
+
+
+def merge_separator_lines(line1, line2):
+    """
+    Fusionne deux lignes de séparateur de tableau.
+    Exemple: "|---|---|" + "---|---|---|" → "|---|---|---|---|"
+    """
+    # Extraire les parties entre pipes
+    parts1 = [p.strip() for p in line1.split('|') if p.strip() != '']
+    parts2 = [p.strip() for p in line2.split('|') if p.strip() != '']
+
+    # Combiner, en gardant les plus longs séparateurs
+    combined_parts = []
+    for i in range(max(len(parts1), len(parts2))):
+        p1 = parts1[i] if i < len(parts1) else ''
+        p2 = parts2[i] if i < len(parts2) else ''
+
+        # Prendre le plus long séparateur
+        if len(p2) > len(p1):
+            combined_parts.append(p2)
+        else:
+            combined_parts.append(p1)
+
+    # Reconstruire la ligne
+    separator_line = '|' + '|'.join(combined_parts) + '|'
+    return separator_line
+
+
+def repair_broken_table(table_lines):
+    """
+    Tente de réparer un tableau cassé/mal formaté généré par l'IA.
+    Retourne les lignes réparées.
+    """
+    if not table_lines:
+        return table_lines
+
+    print(f"🛠️  Tentative réparation tableau {len(table_lines)} lignes")
+
+    # 1. Identifier les lignes d'en-tête (celles avec du texte, pas juste des séparateurs)
+    header_candidates = []
+    separator_indices = []
+
+    for idx, line in enumerate(table_lines):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Ligne de séparation
+        if re.match(r'^[\|\s:\-]+$', line) and '|' in line:
+            separator_indices.append(idx)
+        # Ligne avec du texte (potentiel en-tête)
+        elif '|' in line and re.search(r'[a-zA-ZÀ-ÿ\d]', line):
+            header_candidates.append(idx)
+
+    # 2. Si on a une structure typique: en-tête → séparateur → données
+    if len(header_candidates) >= 1 and len(separator_indices) >= 1:
+        # Trier pour avoir l'ordre
+        header_idx = min(header_candidates)
+        separator_idx = min(separator_indices)
+
+        if header_idx < separator_idx:
+            print(f"   Structure détectée: en-tête ligne {header_idx}, séparateur ligne {separator_idx}")
+
+            # Vérifier la cohérence du nombre de colonnes
+            header_line = table_lines[header_idx]
+            separator_line = table_lines[separator_idx]
+
+            header_cols = header_line.count('|') - 1
+            separator_cols = separator_line.count('|') - 1
+
+            if header_cols > 0 and separator_cols > 0:
+                # Standardiser le nombre de colonnes
+                max_cols = max(header_cols, separator_cols)
+
+                repaired_lines = []
+                for idx, line in enumerate(table_lines):
+                    line = line.strip()
+                    if not line:
+                        repaired_lines.append(line)
+                        continue
+
+                    # Compter les colonnes actuelles
+                    current_cols = line.count('|') - 1
+                    if current_cols < max_cols:
+                        # Ajouter des colonnes manquantes
+                        missing = max_cols - current_cols
+                        if '|' in line:
+                            if line.endswith('|'):
+                                line = line + ' |' * missing
+                            else:
+                                line = line + '|' + ' |' * missing
+                        else:
+                            line = '| ' + line + ' |' + ' |' * (missing - 1)
+
+                    repaired_lines.append(line)
+
+                print(f"   Réparé: {max_cols} colonnes standardisées")
+                return repaired_lines
+
+    # 3. Si réparation échoue, retourner les lignes nettoyées mais garder la structure
+    cleaned_lines = []
+    for line in table_lines:
+        line = line.strip()
+        if line:
+            # Assurer au moins un format de tableau valide
+            if '|' not in line:
+                line = '| ' + line + ' |'
+            cleaned_lines.append(line)
+
+    return cleaned_lines
+
+
+def standardize_table_columns(lines, target_cols):
+    """
+    Standardise toutes les lignes du tableau pour avoir le même nombre de colonnes.
+    """
+    print(f"📏 Standardisation à {target_cols} colonnes")
+
+    standardized_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            standardized_lines.append(line)
+            continue
+
+        # Compter les colonnes actuelles
+        current_cols = line.count('|') - 1
+
+        if current_cols < target_cols:
+            # Ajouter des colonnes manquantes
+            missing = target_cols - current_cols
+            if line.endswith('|'):
+                line = line + ' |' * missing
+            else:
+                line = line + '|' + ' |' * missing
+            print(f"   Ligne ajustée: {current_cols} → {target_cols} colonnes")
+
+        standardized_lines.append(line)
+
+    return standardized_lines
 
 
 def format_simple_table(lines):
     """
     Format un tableau simple sans séparateur explicite.
     """
-    html = ['<div class="table-container"><table><tbody>']
+    html = ['<div class="table-container"><table>']
 
-    for line in lines:
-        line = re.sub(r'^\|\s*', '', line)
-        line = re.sub(r'\s*\|$', '', line)
-        cells = [cell.strip() for cell in line.split('|')]
+    for i, line in enumerate(lines):
+        line_clean = re.sub(r'^\|\s*', '', line)
+        line_clean = re.sub(r'\s*\|$', '', line_clean)
+        cells = [cell.strip() for cell in line_clean.split('|')]
 
         if cells:
-            html.append('<tr>')
+            # Déterminer si c'est un en-tête (première ligne avec du texte)
+            is_header = (i == 0 and any(re.search(r'[a-zA-ZÀ-ÿ]', cell) for cell in cells))
+
+            if is_header:
+                html.append('<thead><tr>')
+                tag = 'th'
+            else:
+                if i == (1 if is_header else 0):
+                    html.append('<tbody>')
+                html.append('<tr>')
+                tag = 'td'
+
             for cell in cells:
-                html.append(f'<td>{cell}</td>')
-            html.append('</tr>')
+                html.append(f'<{tag}>{cell}</{tag}>')
+
+            if is_header:
+                html.append('</tr></thead>')
+            else:
+                html.append('</tr>')
 
     html.append('</tbody></table></div>')
     return ''.join(html)
@@ -1177,6 +1492,8 @@ def format_markdown_table_with_separator(lines, separator_idx):
     """
     Format un tableau markdown avec un séparateur explicite.
     """
+    print(f"📊 Formatage tableau markdown avec séparateur à ligne {separator_idx}")
+
     # Lignes avant le séparateur = header
     header_lines = lines[:separator_idx]
     separator_line = lines[separator_idx]
@@ -1230,151 +1547,153 @@ def format_markdown_table_with_separator(lines, separator_idx):
         html.append('</tbody>')
 
     html.append('</table></div>')
-    return ''.join(html)
+
+    result = ''.join(html)
+    print(f"✅ Tableau formaté: {len(header_cells)} colonnes, {len(body_lines)} lignes de données")
+    return result
 
 
 def format_complex_table(lines, separator_indices):
     """
     Format un tableau avec plusieurs séparateurs (plusieurs headers).
     """
+    print(f"📊 Formatage tableau complexe avec {len(separator_indices)} séparateurs")
+
     html = ['<div class="table-container"><table>']
 
-    current_section = 'tbody'
-    in_header = False
+    current_section = None
+    i = 0
 
-    for i, line in enumerate(lines):
-        line = re.sub(r'^\|\s*', '', line)
-        line = re.sub(r'\s*\|$', '', line)
-        cells = [cell.strip() for cell in line.split('|')]
-
-        if not cells:
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
             continue
 
         # Si c'est une ligne de séparation
         if i in separator_indices:
             # Fermer la section précédente si ouverte
-            if in_header:
+            if current_section == 'thead':
                 html.append('</tr></thead>')
-                in_header = False
+                current_section = None
             elif current_section == 'tbody':
                 html.append('</tbody>')
+                current_section = None
 
             # Déterminer la section suivante
-            # Après un séparateur, on commence souvent un nouveau header
             if i + 1 < len(lines) and i + 1 not in separator_indices:
-                # Vérifier si la ligne suivante ressemble à un header
-                next_line = lines[i + 1]
+                next_line = lines[i + 1].strip()
                 if '|' in next_line:
-                    html.append('<thead><tr>')
-                    in_header = True
-                else:
-                    html.append('<tbody>')
-                    current_section = 'tbody'
+                    # Vérifier si la ligne suivante ressemble à un en-tête
+                    has_text = bool(re.search(r'[a-zA-ZÀ-ÿ]', next_line))
+                    if has_text:
+                        html.append('<thead><tr>')
+                        current_section = 'thead'
+                    else:
+                        html.append('<tbody>')
+                        current_section = 'tbody'
+            i += 1
             continue
 
-        # Ajouter les cellules
-        if in_header:
-            # C'est une ligne d'en-tête
-            for cell in cells:
-                html.append(f'<th>{cell}</th>')
-        else:
-            # C'est une ligne du corps
-            if current_section != 'tbody':
-                html.append('<tbody>')
-                current_section = 'tbody'
+        # Traiter la ligne de contenu
+        line_clean = re.sub(r'^\|\s*', '', line)
+        line_clean = re.sub(r'\s*\|$', '', line_clean)
+        cells = [cell.strip() for cell in line_clean.split('|')]
 
-            html.append('<tr>')
-            for cell in cells:
-                html.append(f'<td>{cell}</td>')
-            html.append('</tr>')
+        if cells:
+            if current_section == 'thead':
+                # C'est une ligne d'en-tête
+                for cell in cells:
+                    html.append(f'<th>{cell}</th>')
+            else:
+                # C'est une ligne du corps
+                if current_section != 'tbody':
+                    html.append('<tbody>')
+                    current_section = 'tbody'
+
+                html.append('<tr>')
+                for cell in cells:
+                    html.append(f'<td>{cell}</td>')
+                html.append('</tr>')
+
+        i += 1
 
     # Fermer les sections ouvertes
-    if in_header:
+    if current_section == 'thead':
         html.append('</tr></thead>')
-    if current_section == 'tbody':
+    elif current_section == 'tbody':
         html.append('</tbody>')
 
     html.append('</table></div>')
-    return ''.join(html)
 
+    result = ''.join(html)
+    print(f"✅ Tableau complexe formaté: {len(result)} caractères HTML")
+    return result
 
 def detect_table(lines, start_idx):
     """
     Détecte si un tableau commence à l'index donné.
-    Version améliorée pour mieux détecter les tableaux markdown.
-
-    Args:
-        lines (list): Liste des lignes du texte
-        start_idx (int): Index de départ pour la détection
-
-    Returns:
-        tuple: (is_table, end_idx, table_lines)
+    Version ULTRA-TOLÉRANTE pour les tableaux mal formatés de l'IA.
     """
-    # Vérifier que la ligne actuelle a au moins un '|'
     current_line = lines[start_idx].strip()
-    if '|' not in current_line:
+
+    # CRITÈRE ÉLARGI : Une ligne avec au moins 2 pipes OU une ligne de séparation
+    if '|' not in current_line and not re.match(r'^[\|\s:\-]+$', current_line):
         return False, start_idx, []
 
-    # Vérifier le contexte: les 2 lignes suivantes doivent aussi contenir '|'
-    # ou être une ligne de séparation
-    min_table_lines = 2
-    max_lines_to_check = min(10, len(lines) - start_idx)
+    # Pour debug
+    print(f"🔍 Détection tableau à ligne {start_idx}: '{current_line[:50]}...'")
 
     table_lines = []
+    i = start_idx
+    max_lines = 20  # Limite pour éviter les faux positifs
 
-    for i in range(start_idx, start_idx + max_lines_to_check):
+    while i < len(lines) and i - start_idx < max_lines:
         line = lines[i].strip()
 
-        # Si la ligne est vide, on arrête (sauf si c'est dans un grand tableau)
-        if not line and len(table_lines) > 0:
-            # Vérifier si la ligne suivante continue le tableau
-            if i + 1 < len(lines) and '|' in lines[i + 1].strip():
-                table_lines.append(line)
-                continue
-            else:
-                break
+        # CRITÈRE ÉLARGI : Accepter plus de types de lignes comme faisant partie du tableau
+        is_table_line = False
 
-        # Ligne avec des pipes = partie du tableau
+        # 1. Ligne avec des pipes (même peu)
         if '|' in line:
-            table_lines.append(line)
-            continue
+            is_table_line = True
 
-        # Ligne de séparation markdown (contient surtout des -, :, |)
-        if re.match(r'^[\|\s:\-]+$', line):
-            table_lines.append(line)
-            continue
+        # 2. Ligne de séparation markdown
+        elif re.match(r'^[\|\s:\-]+$', line):
+            is_table_line = True
 
-        # Si on arrive ici et qu'on a déjà au moins 2 lignes, c'est probablement un tableau
-        if len(table_lines) >= min_table_lines:
-            # Vérifier si la prochaine ligne pourrait être une continuation
+        # 3. Ligne vide ENTRE les lignes de tableau (tolérance)
+        elif not line and len(table_lines) > 0:
+            # Vérifier si la ligne suivante continue le tableau
             if i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
-                if '|' not in next_line and not re.match(r'^[\|\s:\-]+$', next_line):
-                    break
-            else:
-                break
+                if '|' in next_line or re.match(r'^[\|\s:\-]+$', next_line):
+                    is_table_line = True
+
+        if is_table_line:
+            table_lines.append(line)
+            i += 1
         else:
-            # Pas assez de lignes pour être un tableau
-            return False, start_idx, []
+            # Vérifier si on a assez de lignes pour former un tableau
+            if len(table_lines) >= 2:
+                # Compter les pipes valides
+                valid_table_lines = [l for l in table_lines if '|' in l or re.match(r'^[\|\s:\-]+$', l)]
+                if len(valid_table_lines) >= 2:
+                    print(f"✅ Tableau détecté: {len(table_lines)} lignes")
+                    return True, i, table_lines
+                else:
+                    return False, start_idx, []
+            else:
+                return False, start_idx, []
 
-    # Un tableau doit avoir au moins 2 lignes non vides
-    non_empty_lines = [l for l in table_lines if l.strip()]
-    if len(non_empty_lines) < 2:
-        return False, start_idx, []
+    # Fin de fichier atteinte
+    if len(table_lines) >= 2:
+        valid_table_lines = [l for l in table_lines if '|' in l or re.match(r'^[\|\s:\-]+$', l)]
+        if len(valid_table_lines) >= 2:
+            print(f"✅ Tableau détecté (fin fichier): {len(table_lines)} lignes")
+            return True, i, table_lines
 
-    # Vérifier qu'il y a une structure cohérente
-    # Compter le nombre moyen de pipes par ligne
-    pipe_counts = [line.count('|') for line in non_empty_lines]
-    avg_pipes = sum(pipe_counts) / len(pipe_counts)
-
-    # Si le nombre de pipes varie trop, ce n'est probablement pas un tableau
-    if max(pipe_counts) - min(pipe_counts) > 3:
-        print(f"⚠️ Structure incohérente: pipes {pipe_counts}")
-        return False, start_idx, []
-
-    print(f"✅ Tableau détecté: {len(table_lines)} lignes, {avg_pipes:.1f} pipes par ligne")
-    return True, start_idx + len(table_lines), table_lines
-
+    return False, start_idx, []
 
 def generate_corrige_html(corrige_text):
     """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
