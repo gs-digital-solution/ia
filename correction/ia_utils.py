@@ -34,6 +34,51 @@ import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
 
+
+def debug_table_detection(corrige_text):
+    """
+    Fonction de debug pour analyser comment les tableaux sont détectés.
+    """
+    print("\n" + "=" * 60)
+    print("🔍 DEBUG DÉTECTION DE TABLEAUX")
+    print("=" * 60)
+
+    lines = corrige_text.strip().split('\n')
+    table_count = 0
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        if '|' in line:
+            is_table, end_idx, table_lines = detect_table(lines, i)
+            if is_table:
+                table_count += 1
+                print(f"\n📋 TABLEAU #{table_count} détecté (lignes {i}-{end_idx - 1})")
+                print(f"   Lignes: {len(table_lines)}")
+                print(f"   Première ligne: {table_lines[0][:80]}...")
+                print(f"   Dernière ligne: {table_lines[-1][:80]}...")
+
+                # Tester le formatage
+                try:
+                    html = format_table_markdown('\n'.join(table_lines))
+                    print(f"   ✅ Formatage réussi: {len(html)} caractères HTML")
+                except Exception as e:
+                    print(f"   ❌ Erreur formatage: {e}")
+
+                i = end_idx
+                continue
+
+        i += 1
+
+    print(f"\n✅ Total tableaux détectés: {table_count}")
+    print("=" * 60 + "\n")
+
+    return table_count
+
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -1036,37 +1081,306 @@ def detect_and_format_math_expressions(text):
 
 
 def format_table_markdown(table_text):
-    lines = table_text.strip().split('\n')
-    html_table = ['<div class="table-container"><table>']
+    """
+    Convertit un tableau markdown en HTML avec support des alignements et séparateurs.
+    Version améliorée pour gérer les tableaux complexes.
 
+    Args:
+        table_text (str): Tableau au format markdown
+
+    Returns:
+        str: HTML du tableau
+    """
+    print(f"🔄 Formatage tableau : {len(table_text)} caractères")
+
+    # Nettoyer d'abord le texte du tableau
+    table_text = clean_table_text(table_text)
+
+    lines = [line.strip() for line in table_text.strip().split('\n') if line.strip()]
+
+    if len(lines) < 1:
+        print("⚠️ Tableau vide après nettoyage")
+        return f'<div class="table-container">Tableau vide</div>'
+
+    # Détecter toutes les lignes de séparation
+    separator_indices = []
     for i, line in enumerate(lines):
+        # Une ligne de séparation contient principalement des -, :, | et espaces
+        clean_line = re.sub(r'[:\-\s\|]', '', line)
+        if len(clean_line) == 0 and '|' in line:
+            separator_indices.append(i)
+
+    print(f"   Lignes détectées: {len(lines)}, séparateurs: {separator_indices}")
+
+    # Cas 1: Aucun séparateur explicite
+    if not separator_indices:
+        return format_simple_table(lines)
+
+    # Cas 2: Séparateur unique (cas classique markdown)
+    elif len(separator_indices) == 1:
+        separator_idx = separator_indices[0]
+        return format_markdown_table_with_separator(lines, separator_idx)
+
+    # Cas 3: Plusieurs séparateurs (tableau complexe)
+    else:
+        return format_complex_table(lines, separator_indices)
+
+
+def clean_table_text(table_text):
+    """
+    Nettoie le texte des tableaux avant traitement.
+    """
+    lines = table_text.strip().split('\n')
+    cleaned_lines = []
+
+    for line in lines:
         line = line.strip()
-        if not line or not line.startswith('|'):
+        if not line:
             continue
 
+        # Normaliser les pipes
+        if not line.startswith('|'):
+            line = '| ' + line
+        if not line.endswith('|'):
+            line = line + ' |'
+
+        # Supprimer les doubles espaces mais garder les espaces nécessaires
+        line = re.sub(r'\|\s+\|', '| |', line)  # Cellules vides
+        line = re.sub(r'\s{2,}', ' ', line)  # Multiples espaces
+        cleaned_lines.append(line)
+
+    return '\n'.join(cleaned_lines)
+
+
+def format_simple_table(lines):
+    """
+    Format un tableau simple sans séparateur explicite.
+    """
+    html = ['<div class="table-container"><table><tbody>']
+
+    for line in lines:
         line = re.sub(r'^\|\s*', '', line)
         line = re.sub(r'\s*\|$', '', line)
         cells = [cell.strip() for cell in line.split('|')]
 
-        if i == 0:
-            html_table.append('<thead><tr>')
+        if cells:
+            html.append('<tr>')
             for cell in cells:
-                html_table.append(f'<th>{cell}</th>')
-            html_table.append('</tr></thead><tbody>')
-        elif all(re.match(r'^[\s:\-]+$', cell) for cell in cells):
-            continue
-        else:
-            html_table.append('<tr>')
-            for cell in cells:
-                html_table.append(f'<td>{cell}</td>')
-            html_table.append('</tr>')
+                html.append(f'<td>{cell}</td>')
+            html.append('</tr>')
 
-    html_table.append('</tbody></table></div>')
-    return ''.join(html_table)
+    html.append('</tbody></table></div>')
+    return ''.join(html)
+
+
+def format_markdown_table_with_separator(lines, separator_idx):
+    """
+    Format un tableau markdown avec un séparateur explicite.
+    """
+    # Lignes avant le séparateur = header
+    header_lines = lines[:separator_idx]
+    separator_line = lines[separator_idx]
+    body_lines = lines[separator_idx + 1:] if separator_idx + 1 < len(lines) else []
+
+    # Parser la première ligne d'en-tête
+    first_header = header_lines[0] if header_lines else ""
+    first_header = re.sub(r'^\|\s*', '', first_header)
+    first_header = re.sub(r'\s*\|$', '', first_header)
+    header_cells = [cell.strip() for cell in first_header.split('|')]
+
+    # Déterminer les alignements depuis la ligne de séparation
+    separator_line = re.sub(r'^\|\s*', '', separator_line)
+    separator_line = re.sub(r'\s*\|$', '', separator_line)
+    separator_cells = [cell.strip() for cell in separator_line.split('|')]
+
+    alignments = ['left'] * len(header_cells)
+    for i, cell in enumerate(separator_cells):
+        if i < len(alignments):
+            if cell.startswith(':') and cell.endswith(':'):
+                alignments[i] = 'center'
+            elif cell.endswith(':'):
+                alignments[i] = 'right'
+            else:
+                alignments[i] = 'left'
+
+    # Construire le HTML
+    html = ['<div class="table-container"><table>']
+
+    # En-tête
+    if header_cells:
+        html.append('<thead><tr>')
+        for i, cell in enumerate(header_cells):
+            align = alignments[i] if i < len(alignments) else 'left'
+            html.append(f'<th style="text-align: {align};">{cell}</th>')
+        html.append('</tr></thead>')
+
+    # Corps
+    if body_lines:
+        html.append('<tbody>')
+        for line in body_lines:
+            line = re.sub(r'^\|\s*', '', line)
+            line = re.sub(r'\s*\|$', '', line)
+            cells = [cell.strip() for cell in line.split('|')]
+            if cells:
+                html.append('<tr>')
+                for i, cell in enumerate(cells):
+                    align = alignments[i] if i < len(alignments) else 'left'
+                    html.append(f'<td style="text-align: {align};">{cell}</td>')
+                html.append('</tr>')
+        html.append('</tbody>')
+
+    html.append('</table></div>')
+    return ''.join(html)
+
+
+def format_complex_table(lines, separator_indices):
+    """
+    Format un tableau avec plusieurs séparateurs (plusieurs headers).
+    """
+    html = ['<div class="table-container"><table>']
+
+    current_section = 'tbody'
+    in_header = False
+
+    for i, line in enumerate(lines):
+        line = re.sub(r'^\|\s*', '', line)
+        line = re.sub(r'\s*\|$', '', line)
+        cells = [cell.strip() for cell in line.split('|')]
+
+        if not cells:
+            continue
+
+        # Si c'est une ligne de séparation
+        if i in separator_indices:
+            # Fermer la section précédente si ouverte
+            if in_header:
+                html.append('</tr></thead>')
+                in_header = False
+            elif current_section == 'tbody':
+                html.append('</tbody>')
+
+            # Déterminer la section suivante
+            # Après un séparateur, on commence souvent un nouveau header
+            if i + 1 < len(lines) and i + 1 not in separator_indices:
+                # Vérifier si la ligne suivante ressemble à un header
+                next_line = lines[i + 1]
+                if '|' in next_line:
+                    html.append('<thead><tr>')
+                    in_header = True
+                else:
+                    html.append('<tbody>')
+                    current_section = 'tbody'
+            continue
+
+        # Ajouter les cellules
+        if in_header:
+            # C'est une ligne d'en-tête
+            for cell in cells:
+                html.append(f'<th>{cell}</th>')
+        else:
+            # C'est une ligne du corps
+            if current_section != 'tbody':
+                html.append('<tbody>')
+                current_section = 'tbody'
+
+            html.append('<tr>')
+            for cell in cells:
+                html.append(f'<td>{cell}</td>')
+            html.append('</tr>')
+
+    # Fermer les sections ouvertes
+    if in_header:
+        html.append('</tr></thead>')
+    if current_section == 'tbody':
+        html.append('</tbody>')
+
+    html.append('</table></div>')
+    return ''.join(html)
+
+
+def detect_table(lines, start_idx):
+    """
+    Détecte si un tableau commence à l'index donné.
+    Version améliorée pour mieux détecter les tableaux markdown.
+
+    Args:
+        lines (list): Liste des lignes du texte
+        start_idx (int): Index de départ pour la détection
+
+    Returns:
+        tuple: (is_table, end_idx, table_lines)
+    """
+    # Vérifier que la ligne actuelle a au moins un '|'
+    current_line = lines[start_idx].strip()
+    if '|' not in current_line:
+        return False, start_idx, []
+
+    # Vérifier le contexte: les 2 lignes suivantes doivent aussi contenir '|'
+    # ou être une ligne de séparation
+    min_table_lines = 2
+    max_lines_to_check = min(10, len(lines) - start_idx)
+
+    table_lines = []
+
+    for i in range(start_idx, start_idx + max_lines_to_check):
+        line = lines[i].strip()
+
+        # Si la ligne est vide, on arrête (sauf si c'est dans un grand tableau)
+        if not line and len(table_lines) > 0:
+            # Vérifier si la ligne suivante continue le tableau
+            if i + 1 < len(lines) and '|' in lines[i + 1].strip():
+                table_lines.append(line)
+                continue
+            else:
+                break
+
+        # Ligne avec des pipes = partie du tableau
+        if '|' in line:
+            table_lines.append(line)
+            continue
+
+        # Ligne de séparation markdown (contient surtout des -, :, |)
+        if re.match(r'^[\|\s:\-]+$', line):
+            table_lines.append(line)
+            continue
+
+        # Si on arrive ici et qu'on a déjà au moins 2 lignes, c'est probablement un tableau
+        if len(table_lines) >= min_table_lines:
+            # Vérifier si la prochaine ligne pourrait être une continuation
+            if i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if '|' not in next_line and not re.match(r'^[\|\s:\-]+$', next_line):
+                    break
+            else:
+                break
+        else:
+            # Pas assez de lignes pour être un tableau
+            return False, start_idx, []
+
+    # Un tableau doit avoir au moins 2 lignes non vides
+    non_empty_lines = [l for l in table_lines if l.strip()]
+    if len(non_empty_lines) < 2:
+        return False, start_idx, []
+
+    # Vérifier qu'il y a une structure cohérente
+    # Compter le nombre moyen de pipes par ligne
+    pipe_counts = [line.count('|') for line in non_empty_lines]
+    avg_pipes = sum(pipe_counts) / len(pipe_counts)
+
+    # Si le nombre de pipes varie trop, ce n'est probablement pas un tableau
+    if max(pipe_counts) - min(pipe_counts) > 3:
+        print(f"⚠️ Structure incohérente: pipes {pipe_counts}")
+        return False, start_idx, []
+
+    print(f"✅ Tableau détecté: {len(table_lines)} lignes, {avg_pipes:.1f} pipes par ligne")
+    return True, start_idx + len(table_lines), table_lines
 
 
 def generate_corrige_html(corrige_text):
     """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
+    if settings.DEBUG:
+        debug_table_detection(corrige_text)
+
     if not corrige_text:
         return ""
 
@@ -1121,22 +1435,18 @@ def generate_corrige_html(corrige_text):
             i += 1
             continue
 
+        # Détection améliorée des tableaux
+        is_table, table_end_idx, table_lines = detect_table(lines, i)
+        if is_table:
+            html_table = format_table_markdown('\n'.join(table_lines))
+            html_output.append(html_table)
+            i = table_end_idx
+            continue
+
         # Listes
         if line.startswith('•') or line.startswith('-'):
             html_output.append(f'<p>{line}</p>')
             i += 1
-            continue
-
-        # Tableaux markdown
-        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
-            table_lines = []
-            j = i
-            while j < len(lines) and lines[j].startswith('|'):
-                table_lines.append(lines[j])
-                j += 1
-            html_table = format_table_markdown('\n'.join(table_lines))
-            html_output.append(html_table)
-            i = j
             continue
 
         # Formules LaTeX
