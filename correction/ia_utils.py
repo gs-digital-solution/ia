@@ -34,51 +34,6 @@ import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
 
-
-def debug_table_detection(corrige_text):
-    """
-    Fonction de debug pour analyser comment les tableaux sont détectés.
-    """
-    print("\n" + "=" * 60)
-    print("🔍 DEBUG DÉTECTION DE TABLEAUX")
-    print("=" * 60)
-
-    lines = corrige_text.strip().split('\n')
-    table_count = 0
-
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line:
-            i += 1
-            continue
-
-        if '|' in line:
-            is_table, end_idx, table_lines = detect_table(lines, i)
-            if is_table:
-                table_count += 1
-                print(f"\n📋 TABLEAU #{table_count} détecté (lignes {i}-{end_idx - 1})")
-                print(f"   Lignes: {len(table_lines)}")
-                print(f"   Première ligne: {table_lines[0][:80]}...")
-                print(f"   Dernière ligne: {table_lines[-1][:80]}...")
-
-                # Tester le formatage
-                try:
-                    html = format_table_markdown('\n'.join(table_lines))
-                    print(f"   ✅ Formatage réussi: {len(html)} caractères HTML")
-                except Exception as e:
-                    print(f"   ❌ Erreur formatage: {e}")
-
-                i = end_idx
-                continue
-
-        i += 1
-
-    print(f"\n✅ Total tableaux détectés: {table_count}")
-    print("=" * 60 + "\n")
-
-    return table_count
-
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -368,27 +323,67 @@ def debug_ocr(fichier_path: str):
     except Exception as e:
         print(f"❌ DEBUG OCR échoué: {e}")
     return ""
-# ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
+
+
+# ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ET TABLEAUX ==========
 def extract_json_blocks(text: str):
-    """Extrait les blocs JSON pour les graphiques"""
+    """
+    Extrait les blocs JSON pour les graphiques ET les tableaux.
+    Retourne une liste de tuples (dict_json, start_index, end_index)
+    """
     decoder = json.JSONDecoder()
     idx = 0
     blocks = []
 
     while True:
-        # Cherche le début d'un bloc JSON (après ```json ou {)
-        start = text.find('{', idx)
-        if start == -1:
+        # Cherche les deux types de blocs
+        # 1. Blocs graphiques : commence par '{' (ancien format)
+        start_graph = text.find('{', idx)
+
+        # 2. Blocs tableaux : cherche ---TABLEAU---
+        start_tableau = text.find('---TABLEAU---', idx)
+
+        # Prendre le prochain bloc le plus tôt
+        starts = []
+        if start_graph != -1:
+            starts.append(('graph', start_graph))
+        if start_tableau != -1:
+            starts.append(('tableau', start_tableau))
+
+        if not starts:
             break
 
-        try:
-            # Vérifie si c'est un bloc graphique
-            obj, end = decoder.raw_decode(text[start:])
-            if isinstance(obj, dict) and 'graphique' in obj:
-                blocks.append((obj, start, start + end))
-            idx = start + end
-        except ValueError:
-            idx = start + 1
+        # Trier par position
+        starts.sort(key=lambda x: x[1])
+        bloc_type, start = starts[0]
+
+        if bloc_type == 'graph':
+            # Ancien format de graphique
+            try:
+                obj, end = decoder.raw_decode(text[start:])
+                if isinstance(obj, dict) and 'graphique' in obj:
+                    blocks.append((obj, start, start + end))
+                idx = start + end
+            except ValueError:
+                idx = start + 1
+
+        elif bloc_type == 'tableau':
+            # Nouveau format de tableau
+            end_tag = text.find('---FIN_TABLEAU---', start)
+            if end_tag == -1:
+                break
+
+            # Extraire le JSON
+            json_start = start + len('---TABLEAU---')
+            json_str = text[json_start:end_tag].strip()
+
+            try:
+                tableau_dict = json.loads(json_str)
+                blocks.append((tableau_dict, start, end_tag + len('---FIN_TABLEAU---')))
+                idx = end_tag + len('---FIN_TABLEAU---')
+            except json.JSONDecodeError as e:
+                print(f"❌ JSON invalide pour tableau: {e}")
+                idx = end_tag + len('---FIN_TABLEAU---')
 
     return blocks
 # ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
@@ -965,58 +960,87 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         return error_msg, None
 
 
-
-
 def extract_and_process_graphs(output: str):
     """
-    Extrait et traite les graphiques d'un corrigé en utilisant extract_json_blocks.
+    Extrait et traite les graphiques ET les tableaux d'un corrigé.
     """
-    print("🖼️ Extraction des graphiques (via JSONDecoder)…")
+    print("🖼️ Extraction des graphiques et tableaux…")
 
-    graphs_data = []
     final_text = output
+    graphs_data = []
+    tableaux_data = []
 
-    # 1) Extractions des blocs JSON
+    # 1) Extraire tous les blocs (graphiques + tableaux)
     json_blocks = extract_json_blocks(output)
-    print(f"🔍 JSON blocks détectés dans extract_and_process_graphs: {len(json_blocks)}")
+    print(f"🔍 {len(json_blocks)} bloc(s) JSON détecté(s) dans extract_and_process_graphs")
 
-    # 2) On parcourt et on insère les images
-    #    Pour gérer les remplacements successifs, on conserve un décalage 'offset'
-    offset = 0
-    for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
+    # 2) Trier par position décroissante pour remplacement sûr
+    json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
+
+    # 3) Traiter chaque bloc
+    for idx, (data_dict, start, end) in enumerate(json_blocks, start=1):
         try:
-            output_name = f"graphique_{idx}.png"
-            img_path = tracer_graphique(graph_dict, output_name)
+            # Déterminer si c'est un graphique ou un tableau
+            is_tableau = '---TABLEAU---' in output[start - 50:start + 50] if start > 50 else '---TABLEAU---' in output[
+                                                                                                                :start + 50]
 
-            if img_path:
-                abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                img_tag = (
-                    f'<img src="/media/{img_path}" alt="Graphique {idx}" '
-                    f'style="max-width:100%;margin:10px 0;" />'
-                )
+            if is_tableau:
+                # C'EST UN TABLEAU
+                print(f"  📊 Traitement tableau {idx}...")
 
-                # Ajuster les indices de remplacement avec l'offset
-                s, e = start + offset, end + offset
-                final_text = final_text[:s] + img_tag + final_text[e:]
-                # Mettre à jour l’offset en fonction de la différence de longueur
-                offset += len(img_tag) - (end - start)
+                # Générer l'image du tableau
+                output_name = f"tableau_{idx}.png"
+                img_path = generer_tableau(data_dict, output_name)
 
-                graphs_data.append(graph_dict)
-                print(f"✅ Graphique {idx} inséré.")
+                if img_path:
+                    abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                    img_tag = (
+                        f'<div class="tableau-container" style="text-align:center; margin:25px 0;">'
+                        f'<img src="/media/{img_path}" alt="Tableau {idx}" '
+                        f'style="max-width:100%; height:auto; border:2px solid #e0e0e0; '
+                        f'border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.1);">'
+                        f'<p style="font-style:italic;color:#666;margin-top:8px;font-size:0.9em;">'
+                        f'{data_dict.get("data", {}).get("titre", "Tableau")}</p>'
+                        f'</div>'
+                    )
+
+                    # Remplacer le bloc JSON par l'image
+                    final_text = final_text[:start] + img_tag + final_text[end:]
+                    tableaux_data.append(data_dict)
+                    print(f"  ✅ Tableau {idx} inséré.")
+                else:
+                    # En cas d'échec, remplacer par un message
+                    error_msg = f"[Échec génération du tableau {idx}]"
+                    final_text = final_text[:start] + error_msg + final_text[end:]
+                    print(f"  ❌ Tableau {idx} : erreur de génération.")
+
             else:
-                # En cas d’échec de tracé, on remplace par un message
-                s, e = start + offset, end + offset
-                final_text = final_text[:s] + "[Erreur génération graphique]" + final_text[e:]
-                offset += len("[Erreur génération graphique]") - (end - start)
-                print(f"❌ Graphique {idx} : erreur de tracé.")
+                # C'EST UN GRAPHIQUE (ancien format)
+                print(f"  📈 Traitement graphique {idx}...")
+
+                output_name = f"graphique_{idx}.png"
+                img_path = tracer_graphique(data_dict, output_name)
+
+                if img_path:
+                    abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                    img_tag = (
+                        f'<img src="/media/{img_path}" alt="Graphique {idx}" '
+                        f'style="max-width:100%;margin:10px 0;" />'
+                    )
+
+                    final_text = final_text[:start] + img_tag + final_text[end:]
+                    graphs_data.append(data_dict)
+                    print(f"  ✅ Graphique {idx} inséré.")
+                else:
+                    final_text = final_text[:start] + "[Erreur génération graphique]" + final_text[end:]
+                    print(f"  ❌ Graphique {idx} : erreur de tracé.")
 
         except Exception as e:
-            print(f"❌ Exception sur bloc graphique {idx}: {e}")
+            print(f"  ❌ Exception sur bloc {idx}: {e}")
             continue
 
-    print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s) traité(s)")
+    print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s), {len(tableaux_data)} tableau(x)")
     return final_text, graphs_data
-
 
 # ============== UTILITAIRES TEXTE / LATEX / TABLEAU ==============
 
@@ -1080,983 +1104,56 @@ def detect_and_format_math_expressions(text):
     return text
 
 
-def format_html_table(table_text):
-    """
-    Convertit un tableau HTML (même mal formaté) en HTML propre.
-    """
-    print(f"🌐 Formatage tableau HTML: {len(table_text)} caractères")
-    print(f"   Texte HTML brut: {table_text[:200]}...")
-
-    # Nettoyer le HTML
-    html_text = table_text.strip()
-
-    # 1. CAS SPÉCIAL: HTML mal formé sans balises fermantes
-    # Exemple: "<table>Notes[0,20[[20,40[[40,60[[60,80[[80,100[Effectifs4625510</table>"
-    if '<table>' in html_text.lower() and '</table>' in html_text.lower():
-        # Extraire le contenu entre <table> et </table>
-        start = html_text.lower().find('<table>')
-        end = html_text.lower().find('</table>') + len('</table>')
-
-        if start != -1 and end != -1:
-            table_html = html_text[start:end]
-            print(f"   Tableau HTML extrait: {table_html[:150]}...")
-
-            # Si le HTML est valide, le retourner tel quel
-            if '<tr>' in table_html or '<td>' in table_html:
-                return f'<div class="table-container">{table_html}</div>'
-
-    # 2. CAS: HTML très mal formaté (comme dans ton exemple)
-    # "<table>Notes[0,20[[20,40[[40,60[[60,80[[80,100[Effectifs4625510</table>"
-    # On va essayer de le parser manuellement
-
-    # Nettoyer les balises
-    html_text = html_text.replace('<table>', '').replace('</table>', '').replace('<TABLE>', '').replace('</TABLE>', '')
-    html_text = html_text.strip()
-
-    print(f"   Contenu nettoyé: {html_text[:150]}...")
-
-    # Essayer de détecter la structure
-    # Exemple: "Notes[0,20[[20,40[[40,60[[60,80[[80,100[Effectifs4625510"
-    # C'est probablement: En-tête: Notes, puis données: Effectifs
-
-    # Chercher des patterns
-    # Pattern 1: "[0,20[", "[20,40[", etc.
-    intervals = re.findall(r'\[[^]]+\]', html_text)
-
-    # Pattern 2: Chiffres consécutifs (effectifs)
-    numbers = re.findall(r'\d+', html_text)
-
-    print(f"   Intervalles détectés: {intervals}")
-    print(f"   Nombres détectés: {numbers}")
-
-    # Si on a des intervalles et des nombres, construire un tableau
-    if intervals and numbers and len(numbers) >= len(intervals):
-        # Construire un tableau HTML
-        html = ['<div class="table-container"><table>']
-
-        # En-tête
-        html.append('<thead><tr>')
-        html.append('<th>Notes</th>')
-        for interval in intervals:
-            html.append(f'<th>{interval}</th>')
-        html.append('</tr></thead>')
-
-        # Corps
-        html.append('<tbody><tr>')
-        html.append('<td>Effectifs</td>')
-        for i in range(len(intervals)):
-            if i < len(numbers):
-                html.append(f'<td>{numbers[i]}</td>')
-        html.append('</tr></tbody></table></div>')
-
-        return ''.join(html)
-
-    # 3. CAS: HTML simple mais mal formaté
-    # Essayer d'ajouter des balises manquantes
-    if '[' in html_text and ']' in html_text:
-        # C'est probablement un tableau de données
-        # Exemple: "[0,20[ [20,40[ [40,60[ ..."
-        html = ['<div class="table-container"><table><tbody>']
-
-        # Diviser par les doubles crochets
-        parts = re.split(r'\]\s*\[', html_text)
-        parts = [p + ']' if not p.endswith(']') else p for p in parts]
-
-        for part in parts:
-            if part.strip():
-                html.append('<tr>')
-                # Essayer de séparer les cellules
-                cells = re.split(r'[,\[\]]+', part)
-                cells = [c for c in cells if c.strip()]
-                for cell in cells:
-                    html.append(f'<td>{cell.strip()}</td>')
-                html.append('</tr>')
-
-        html.append('</tbody></table></div>')
-        return ''.join(html)
-
-    # 4. CAS: Texte brut qu'on va mettre dans un tableau simple
-    print("⚠️ Impossible de parser le HTML, tableau simple de secours")
-    return f'<div class="table-container"><table><tr><td>{html_text}</td></tr></table></div>'
-
-
-
 def format_table_markdown(table_text):
-    """
-    Convertit un tableau markdown en HTML avec support des alignements et séparateurs.
-    Version ULTRA-ROBUSTE pour gérer les tableaux mal formatés de l'IA.
-
-    Args:
-        table_text (str): Tableau au format markdown
-
-    Returns:
-        str: HTML du tableau
-    """
-    print(f"🔄 Formatage tableau : {len(table_text)} caractères")
-
-    # DEBUG: Afficher le tableau original
-    print(f"📋 Tableau original (premiers 200 chars): {table_text[:200].replace(chr(10), '\\n')}...")
-
-    # Nettoyer d'abord le texte du tableau
-    table_text = clean_table_text(table_text)
-
-    # DEBUG: Afficher le tableau nettoyé
-    print(f"🧹 Tableau nettoyé (premiers 200 chars): {table_text[:200].replace(chr(10), '\\n')}...")
-
-    lines = [line.strip() for line in table_text.strip().split('\n') if line.strip()]
-
-    if len(lines) < 1:
-        print("⚠️ Tableau vide après nettoyage")
-        return f'<div class="table-container"><p class="table-error">Tableau non formatable (vide)</p></div>'
-
-    print(f"   Lignes après nettoyage: {len(lines)}")
-    for idx, line in enumerate(lines):
-        print(f"   [{idx}] '{line[:80]}'")
-
-    # TENTATIVE DE RÉPARATION SI LE TABLEAU SEMBLE CASSÉ
-    if len(lines) >= 2:  # Assez de lignes pour potentiellement être cassé
-        print("🔧 Tentative de réparation du tableau...")
-        repaired_lines = repair_broken_table(lines)
-        if repaired_lines != lines:
-            print(f"   ✅ Tableau réparé: {len(repaired_lines)} lignes")
-            for idx, line in enumerate(repaired_lines):
-                print(f"   [{idx} réparé] '{line[:80]}'")
-            lines = repaired_lines
-        else:
-            print("   ℹ️  Aucune réparation nécessaire")
-
-    # ANALYSE DÉTAILLÉE DE LA STRUCTURE
-    print("🔍 Analyse de la structure du tableau:")
-
-    separator_indices = []
-    header_candidates = []
-    data_lines = []
-
-    for i, line in enumerate(lines):
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-
-        # Ligne de séparation
-        if re.match(r'^[\|\s:\-]+$', line_stripped) and '|' in line_stripped:
-            separator_indices.append(i)
-            print(f"   Ligne {i}: SÉPARATEUR - '{line_stripped[:50]}...'")
-
-        # Ligne avec du texte (potentiel en-tête)
-        elif '|' in line_stripped and re.search(r'[a-zA-ZÀ-ÿ\d]', line_stripped):
-            if re.search(r'[a-zA-ZÀ-ÿ]', line_stripped):  # Contient des lettres
-                header_candidates.append(i)
-                print(f"   Ligne {i}: EN-TÊTE POTENTIEL - '{line_stripped[:50]}...'")
-            else:
-                data_lines.append(i)
-                print(f"   Ligne {i}: DONNÉES - '{line_stripped[:50]}...'")
-
-        else:
-            print(f"   Ligne {i}: AUTRE - '{line_stripped[:50]}...'")
-
-    print(
-        f"   Résumé: {len(separator_indices)} séparateurs, {len(header_candidates)} en-têtes potentiels, {len(data_lines)} lignes de données")
-
-    # CAS SPÉCIAL : Tableau avec la structure exacte de l'exemple cassé
-    # Format: "| Titre | ... |" suivi de "|---|---|" suivi de "| --- | --- |" suivi de "| Données | ... |"
-    if len(lines) >= 3:
-        # Recherche du pattern spécifique: ligne1=entête, ligne2=séparateur1, ligne3=séparateur2
-        if (len(lines) >= 3 and
-                '|' in lines[0] and
-                re.match(r'^[\|\s:\-]+$', lines[1]) and
-                re.match(r'^[\|\s:\-]+$', lines[2])):
-            print("⚠️ Détecté pattern de tableau cassé (2 séparateurs consécutifs)")
-            # Fusionner les 2 séparateurs en un
-            merged_separator = merge_separator_lines(lines[1], lines[2])
-            lines = [lines[0], merged_separator] + lines[3:]
-            separator_indices = [1]  # Mettre à jour l'indice du séparateur
-            print(f"   Séparateurs fusionnés: '{merged_separator}'")
-
-    # DÉCISION DU FORMATAGE BASÉE SUR LA STRUCTURE ANALYSÉE
-
-    # Cas 1: Structure markdown classique (entête + séparateur + données)
-    if (len(header_candidates) >= 1 and
-            len(separator_indices) >= 1 and
-            min(header_candidates) < min(separator_indices)):
-
-        print("✅ Structure markdown classique détectée")
-        separator_idx = min(separator_indices)
-
-        # Vérifier la cohérence des colonnes
-        if separator_idx > 0:
-            header_line = lines[header_candidates[0]]
-            separator_line = lines[separator_idx]
-
-            header_cols = header_line.count('|') - 1
-            separator_cols = separator_line.count('|') - 1
-
-            print(f"   Colonnes: en-tête={header_cols}, séparateur={separator_cols}")
-
-            if header_cols > 0 and separator_cols > 0:
-                # Standardiser si nécessaire
-                if header_cols != separator_cols:
-                    print(f"   ⚠️ Incohérence de colonnes, tentative d'ajustement")
-                    lines = standardize_table_columns(lines, max(header_cols, separator_cols))
-
-                return format_markdown_table_with_separator(lines, separator_idx)
-
-    # Cas 2: Aucun séparateur explicite mais plusieurs lignes avec pipes
-    elif not separator_indices and len(lines) >= 2:
-        print("ℹ️  Tableau sans séparateur explicite")
-        # Vérifier si toutes les lignes ont à peu près le même nombre de pipes
-        pipe_counts = [line.count('|') - 1 for line in lines if '|' in line]
-        if pipe_counts and max(pipe_counts) - min(pipe_counts) <= 2:
-            print(f"   Structure cohérente: {min(pipe_counts)}-{max(pipe_counts)} colonnes")
-            return format_simple_table(lines)
-
-    # Cas 3: Plusieurs séparateurs (tableau complexe avec sous-sections)
-    elif len(separator_indices) >= 2:
-        print("ℹ️  Tableau complexe avec plusieurs séparateurs")
-        return format_complex_table(lines, separator_indices)
-
-    # CAS DE SECOURS : Formatage simple de toute façon
-    print("⚠️ Structure non reconnue, formatage simple de secours")
-
-    # Nettoyer et formater toutes les lignes avec pipes
-    html_lines = ['<div class="table-container"><table><tbody>']
-
-    for line in lines:
-        if '|' not in line:
-            continue
-
-        line_clean = re.sub(r'^\|\s*', '', line)
-        line_clean = re.sub(r'\s*\|$', '', line_clean)
-        cells = [cell.strip() for cell in line_clean.split('|')]
-
-        if cells:
-            html_lines.append('<tr>')
-
-            # Déterminer si c'est probablement un en-tête (première ligne ou ligne avec du texte)
-            is_header = (lines.index(line) == 0 and
-                         any(re.search(r'[a-zA-ZÀ-ÿ]', cell) for cell in cells))
-
-            for cell in cells:
-                if is_header:
-                    html_lines.append(f'<th>{cell}</th>')
-                else:
-                    html_lines.append(f'<td>{cell}</td>')
-
-            html_lines.append('</tr>')
-
-    html_lines.append('</tbody></table></div>')
-
-    result = ''.join(html_lines)
-    print(f"✅ Formatage de secours terminé: {len(result)} caractères HTML")
-    return result
-
-
-def clean_table_text(table_text):
-    """
-    Nettoie le texte des tableaux avant traitement.
-    Version ULTRA-ROBUSTE pour gérer les tableaux mal formatés de l'IA.
-    """
     lines = table_text.strip().split('\n')
-    cleaned_lines = []
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            # Garder les lignes vides dans les tableaux (peuvent être des séparateurs)
-            cleaned_lines.append(line)
-            continue
-
-        # CORRECTION CRITIQUE : L'IA génère parfois "|---|---|" sur plusieurs lignes
-        # On doit fusionner ces lignes
-        if re.match(r'^[\|\s:\-]+$', line) and '|' in line:
-            # C'est une ligne de séparation
-            cleaned_lines.append(line)
-            continue
-
-        # Normaliser les pipes - TOUJOURS avoir | au début et à la fin
-        if not line.startswith('|'):
-            line = '| ' + line
-        if not line.endswith('|'):
-            line = line + ' |'
-
-        # Remplacer les séparateurs de cellule multiples
-        line = re.sub(r'\|\s*\|\s*\|', '| | |', line)  # Cellules vides consécutives
-        line = re.sub(r'\s{2,}', ' ', line)  # Multiples espaces
-
-        # Nettoyer les cellules vides
-        line = re.sub(r'\|\s+\|', '| |', line)
-
-        cleaned_lines.append(line)
-
-    # PHASE 2 : Fusionner les séparateurs brisés sur plusieurs lignes
-    final_lines = []
-    i = 0
-    while i < len(cleaned_lines):
-        line = cleaned_lines[i]
-
-        # Si c'est une ligne de séparation incomplète
-        if re.match(r'^[\|\s:\-]+$', line) and '|' in line:
-            # Regarder si la ligne suivante est aussi un séparateur
-            j = i + 1
-            while j < len(cleaned_lines) and re.match(r'^[\|\s:\-]+$', cleaned_lines[j]) and '|' in cleaned_lines[j]:
-                # Fusionner les séparateurs
-                line = merge_separator_lines(line, cleaned_lines[j])
-                j += 1
-
-            if j > i + 1:
-                print(f"⚠️ Fusionné {j - i} lignes de séparateur en une seule")
-                i = j - 1  # Sauter les lignes fusionnées
-
-        final_lines.append(line)
-        i += 1
-
-    return '\n'.join(final_lines)
-
-
-def merge_separator_lines(line1, line2):
-    """
-    Fusionne deux lignes de séparateur de tableau.
-    Exemple: "|---|---|" + "---|---|---|" → "|---|---|---|---|"
-    """
-    # Extraire les parties entre pipes
-    parts1 = [p.strip() for p in line1.split('|') if p.strip() != '']
-    parts2 = [p.strip() for p in line2.split('|') if p.strip() != '']
-
-    # Combiner, en gardant les plus longs séparateurs
-    combined_parts = []
-    for i in range(max(len(parts1), len(parts2))):
-        p1 = parts1[i] if i < len(parts1) else ''
-        p2 = parts2[i] if i < len(parts2) else ''
-
-        # Prendre le plus long séparateur
-        if len(p2) > len(p1):
-            combined_parts.append(p2)
-        else:
-            combined_parts.append(p1)
-
-    # Reconstruire la ligne
-    separator_line = '|' + '|'.join(combined_parts) + '|'
-    return separator_line
-
-
-def repair_broken_table(table_lines):
-    """
-    Tente de réparer un tableau cassé/mal formaté généré par l'IA.
-    Retourne les lignes réparées.
-    """
-    if not table_lines:
-        return table_lines
-
-    print(f"🛠️  Tentative réparation tableau {len(table_lines)} lignes")
-
-    # 1. Identifier les lignes d'en-tête (celles avec du texte, pas juste des séparateurs)
-    header_candidates = []
-    separator_indices = []
-
-    for idx, line in enumerate(table_lines):
-        line = line.strip()
-        if not line:
-            continue
-
-        # Ligne de séparation
-        if re.match(r'^[\|\s:\-]+$', line) and '|' in line:
-            separator_indices.append(idx)
-        # Ligne avec du texte (potentiel en-tête)
-        elif '|' in line and re.search(r'[a-zA-ZÀ-ÿ\d]', line):
-            header_candidates.append(idx)
-
-    # 2. Si on a une structure typique: en-tête → séparateur → données
-    if len(header_candidates) >= 1 and len(separator_indices) >= 1:
-        # Trier pour avoir l'ordre
-        header_idx = min(header_candidates)
-        separator_idx = min(separator_indices)
-
-        if header_idx < separator_idx:
-            print(f"   Structure détectée: en-tête ligne {header_idx}, séparateur ligne {separator_idx}")
-
-            # Vérifier la cohérence du nombre de colonnes
-            header_line = table_lines[header_idx]
-            separator_line = table_lines[separator_idx]
-
-            header_cols = header_line.count('|') - 1
-            separator_cols = separator_line.count('|') - 1
-
-            if header_cols > 0 and separator_cols > 0:
-                # Standardiser le nombre de colonnes
-                max_cols = max(header_cols, separator_cols)
-
-                repaired_lines = []
-                for idx, line in enumerate(table_lines):
-                    line = line.strip()
-                    if not line:
-                        repaired_lines.append(line)
-                        continue
-
-                    # Compter les colonnes actuelles
-                    current_cols = line.count('|') - 1
-                    if current_cols < max_cols:
-                        # Ajouter des colonnes manquantes
-                        missing = max_cols - current_cols
-                        if '|' in line:
-                            if line.endswith('|'):
-                                line = line + ' |' * missing
-                            else:
-                                line = line + '|' + ' |' * missing
-                        else:
-                            line = '| ' + line + ' |' + ' |' * (missing - 1)
-
-                    repaired_lines.append(line)
-
-                print(f"   Réparé: {max_cols} colonnes standardisées")
-                return repaired_lines
-
-    # 3. Si réparation échoue, retourner les lignes nettoyées mais garder la structure
-    cleaned_lines = []
-    for line in table_lines:
-        line = line.strip()
-        if line:
-            # Assurer au moins un format de tableau valide
-            if '|' not in line:
-                line = '| ' + line + ' |'
-            cleaned_lines.append(line)
-
-    return cleaned_lines
-
-
-def standardize_table_columns(lines, target_cols):
-    """
-    Standardise toutes les lignes du tableau pour avoir le même nombre de colonnes.
-    """
-    print(f"📏 Standardisation à {target_cols} colonnes")
-
-    standardized_lines = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            standardized_lines.append(line)
-            continue
-
-        # Compter les colonnes actuelles
-        current_cols = line.count('|') - 1
-
-        if current_cols < target_cols:
-            # Ajouter des colonnes manquantes
-            missing = target_cols - current_cols
-            if line.endswith('|'):
-                line = line + ' |' * missing
-            else:
-                line = line + '|' + ' |' * missing
-            print(f"   Ligne ajustée: {current_cols} → {target_cols} colonnes")
-
-        standardized_lines.append(line)
-
-    return standardized_lines
-
-
-def format_simple_table(lines):
-    """
-    Format un tableau simple sans séparateur explicite.
-    """
-    html = ['<div class="table-container"><table>']
+    html_table = ['<div class="table-container"><table>']
 
     for i, line in enumerate(lines):
-        line_clean = re.sub(r'^\|\s*', '', line)
-        line_clean = re.sub(r'\s*\|$', '', line_clean)
-        cells = [cell.strip() for cell in line_clean.split('|')]
-
-        if cells:
-            # Déterminer si c'est un en-tête (première ligne avec du texte)
-            is_header = (i == 0 and any(re.search(r'[a-zA-ZÀ-ÿ]', cell) for cell in cells))
-
-            if is_header:
-                html.append('<thead><tr>')
-                tag = 'th'
-            else:
-                if i == (1 if is_header else 0):
-                    html.append('<tbody>')
-                html.append('<tr>')
-                tag = 'td'
-
-            for cell in cells:
-                html.append(f'<{tag}>{cell}</{tag}>')
-
-            if is_header:
-                html.append('</tr></thead>')
-            else:
-                html.append('</tr>')
-
-    html.append('</tbody></table></div>')
-    return ''.join(html)
-
-
-def format_markdown_table_with_separator(lines, separator_idx):
-    """
-    Format un tableau markdown avec un séparateur explicite.
-    """
-    print(f"📊 Formatage tableau markdown avec séparateur à ligne {separator_idx}")
-
-    # Lignes avant le séparateur = header
-    header_lines = lines[:separator_idx]
-    separator_line = lines[separator_idx]
-    body_lines = lines[separator_idx + 1:] if separator_idx + 1 < len(lines) else []
-
-    # Parser la première ligne d'en-tête
-    first_header = header_lines[0] if header_lines else ""
-    first_header = re.sub(r'^\|\s*', '', first_header)
-    first_header = re.sub(r'\s*\|$', '', first_header)
-    header_cells = [cell.strip() for cell in first_header.split('|')]
-
-    # Déterminer les alignements depuis la ligne de séparation
-    separator_line = re.sub(r'^\|\s*', '', separator_line)
-    separator_line = re.sub(r'\s*\|$', '', separator_line)
-    separator_cells = [cell.strip() for cell in separator_line.split('|')]
-
-    alignments = ['left'] * len(header_cells)
-    for i, cell in enumerate(separator_cells):
-        if i < len(alignments):
-            if cell.startswith(':') and cell.endswith(':'):
-                alignments[i] = 'center'
-            elif cell.endswith(':'):
-                alignments[i] = 'right'
-            else:
-                alignments[i] = 'left'
-
-    # Construire le HTML
-    html = ['<div class="table-container"><table>']
-
-    # En-tête
-    if header_cells:
-        html.append('<thead><tr>')
-        for i, cell in enumerate(header_cells):
-            align = alignments[i] if i < len(alignments) else 'left'
-            html.append(f'<th style="text-align: {align};">{cell}</th>')
-        html.append('</tr></thead>')
-
-    # Corps
-    if body_lines:
-        html.append('<tbody>')
-        for line in body_lines:
-            line = re.sub(r'^\|\s*', '', line)
-            line = re.sub(r'\s*\|$', '', line)
-            cells = [cell.strip() for cell in line.split('|')]
-            if cells:
-                html.append('<tr>')
-                for i, cell in enumerate(cells):
-                    align = alignments[i] if i < len(alignments) else 'left'
-                    html.append(f'<td style="text-align: {align};">{cell}</td>')
-                html.append('</tr>')
-        html.append('</tbody>')
-
-    html.append('</table></div>')
-
-    result = ''.join(html)
-    print(f"✅ Tableau formaté: {len(header_cells)} colonnes, {len(body_lines)} lignes de données")
-    return result
-
-
-def format_complex_table(lines, separator_indices):
-    """
-    Format un tableau avec plusieurs séparateurs (plusieurs headers).
-    """
-    print(f"📊 Formatage tableau complexe avec {len(separator_indices)} séparateurs")
-
-    html = ['<div class="table-container"><table>']
-
-    current_section = None
-    i = 0
-
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line:
-            i += 1
-            continue
-
-        # Si c'est une ligne de séparation
-        if i in separator_indices:
-            # Fermer la section précédente si ouverte
-            if current_section == 'thead':
-                html.append('</tr></thead>')
-                current_section = None
-            elif current_section == 'tbody':
-                html.append('</tbody>')
-                current_section = None
-
-            # Déterminer la section suivante
-            if i + 1 < len(lines) and i + 1 not in separator_indices:
-                next_line = lines[i + 1].strip()
-                if '|' in next_line:
-                    # Vérifier si la ligne suivante ressemble à un en-tête
-                    has_text = bool(re.search(r'[a-zA-ZÀ-ÿ]', next_line))
-                    if has_text:
-                        html.append('<thead><tr>')
-                        current_section = 'thead'
-                    else:
-                        html.append('<tbody>')
-                        current_section = 'tbody'
-            i += 1
-            continue
-
-        # Traiter la ligne de contenu
-        line_clean = re.sub(r'^\|\s*', '', line)
-        line_clean = re.sub(r'\s*\|$', '', line_clean)
-        cells = [cell.strip() for cell in line_clean.split('|')]
-
-        if cells:
-            if current_section == 'thead':
-                # C'est une ligne d'en-tête
-                for cell in cells:
-                    html.append(f'<th>{cell}</th>')
-            else:
-                # C'est une ligne du corps
-                if current_section != 'tbody':
-                    html.append('<tbody>')
-                    current_section = 'tbody'
-
-                html.append('<tr>')
-                for cell in cells:
-                    html.append(f'<td>{cell}</td>')
-                html.append('</tr>')
-
-        i += 1
-
-    # Fermer les sections ouvertes
-    if current_section == 'thead':
-        html.append('</tr></thead>')
-    elif current_section == 'tbody':
-        html.append('</tbody>')
-
-    html.append('</table></div>')
-
-    result = ''.join(html)
-    print(f"✅ Tableau complexe formaté: {len(result)} caractères HTML")
-    return result
-
-
-def detect_table(lines, start_idx):
-    """
-    Détecte si un tableau commence à l'index donné.
-    Version ULTRA-TOLÉRANTE pour les tableaux mal formatés de l'IA.
-    """
-    current_line = lines[start_idx].strip()
-
-    # CRITÈRE ÉLARGI :
-    # 1. Tableau markdown (pipes)
-    # 2. Tableau HTML (balises <table>)
-    # 3. Ligne de séparation
-    has_pipes = '|' in current_line
-    has_table_tag = '<table>' in current_line.lower() or '</table>' in current_line.lower()
-    is_separator = re.match(r'^[\|\s:\-]+$', current_line)
-
-    if not (has_pipes or has_table_tag or is_separator):
-        return False, start_idx, []
-
-    # Pour debug
-    print(f"🔍 Détection tableau à ligne {start_idx}: '{current_line[:50]}...'")
-    if has_table_tag:
-        print(f"   ⚡ BALISE HTML DÉTECTÉE: {current_line[:100]}")
-
-    table_lines = []
-    i = start_idx
-    max_lines = 20  # Limite pour éviter les faux positifs
-
-    while i < len(lines) and i - start_idx < max_lines:
-        line = lines[i].strip()
-
-        # CRITÈRE ÉLARGI : Accepter plus de types de lignes comme faisant partie du tableau
-        is_table_line = False
-
-        # 1. Ligne avec des pipes (markdown)
-        if '|' in line:
-            is_table_line = True
-
-        # 2. Ligne avec balise HTML table
-        elif '<table>' in line.lower() or '</table>' in line.lower() or '<td>' in line.lower() or '<tr>' in line.lower():
-            is_table_line = True
-            print(f"   ⚡ Ligne {i}: Balise HTML détectée")
-
-        # 3. Ligne de séparation markdown
-        elif re.match(r'^[\|\s:\-]+$', line):
-            is_table_line = True
-
-        # 4. Ligne vide ENTRE les lignes de tableau (tolérance)
-        elif not line and len(table_lines) > 0:
-            # Vérifier si la ligne suivante continue le tableau
-            if i + 1 < len(lines):
-                next_line = lines[i + 1].strip()
-                has_next_pipes = '|' in next_line
-                has_next_html = any(tag in next_line.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
-                is_next_separator = re.match(r'^[\|\s:\-]+$', next_line)
-
-                if has_next_pipes or has_next_html or is_next_separator:
-                    is_table_line = True
-
-        if is_table_line:
-            table_lines.append(line)
-            i += 1
-        else:
-            # Vérifier si on a assez de lignes pour former un tableau
-            if len(table_lines) >= 1:  # Réduit à 1 pour HTML
-                # Compter les lignes valides
-                valid_table_lines = []
-                for l in table_lines:
-                    has_p = '|' in l
-                    has_html = any(tag in l.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
-                    is_sep = re.match(r'^[\|\s:\-]+$', l)
-                    if has_p or has_html or is_sep:
-                        valid_table_lines.append(l)
-
-                if len(valid_table_lines) >= 1:  # Réduit à 1 pour HTML
-                    print(f"✅ Tableau détecté: {len(table_lines)} lignes (HTML: {has_table_tag})")
-                    return True, i, table_lines
-                else:
-                    return False, start_idx, []
-            else:
-                return False, start_idx, []
-
-    # Fin de fichier atteinte
-    if len(table_lines) >= 1:
-        valid_table_lines = []
-        for l in table_lines:
-            has_p = '|' in l
-            has_html = any(tag in l.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
-            is_sep = re.match(r'^[\|\s:\-]+$', l)
-            if has_p or has_html or is_sep:
-                valid_table_lines.append(l)
-
-        if len(valid_table_lines) >= 1:
-            print(f"✅ Tableau détecté (fin fichier): {len(table_lines)} lignes")
-            return True, i, table_lines
-
-    return False, start_idx, []
-
-
-def detect_and_convert_latex_table_to_html(text):
-    """
-    Détecte et convertit les tableaux LaTeX mal formatés en HTML.
-    Exemple:
-    Input: \[ x - \infty - 1 1 3 + \infty \]
-           \[ f'(x) + 0 - || - 0 + \]
-           \[ f(x) - \infty \land -4 \lor -\infty | + \infty \lor 4 \land + \infty \]
-
-    Output: <table> HTML propre
-    """
-    import re
-
-    # Pattern pour détecter les tableaux LaTeX sur plusieurs lignes
-    pattern = r'\\\[(.*?)\\\]'
-    latex_lines = re.findall(pattern, text, re.DOTALL)
-
-    if len(latex_lines) < 2:  # Pas assez de lignes pour un tableau
-        return text
-
-    print(f"🔍 Détection tableau LaTeX: {len(latex_lines)} lignes")
-
-    # Vérifier si c'est un tableau de variation
-    is_variation_table = False
-    for line in latex_lines[:3]:  # Regarder les 3 premières lignes
-        if 'f(' in line or 'f\'' in line or '∞' in line:
-            is_variation_table = True
-            break
-
-    if not is_variation_table:
-        return text
-
-    print("✅ Tableau de variation LaTeX détecté, conversion en HTML...")
-
-    # Nettoyer et parser les lignes
-    cleaned_lines = []
-    for line in latex_lines:
-        # Nettoyer le LaTeX
         line = line.strip()
-        line = re.sub(r'\\[()\[\]]', '', line)  # Enlever les backslashes
-        line = re.sub(r'\s+', ' ', line)  # Normaliser les espaces
-        cleaned_lines.append(line)
-
-    # Convertir en HTML
-    html_table = convert_latex_lines_to_html_table(cleaned_lines)
-
-    # Remplacer dans le texte original
-    # On remplace toutes les lignes LaTeX par le tableau HTML
-    for i, latex_line in enumerate(latex_lines):
-        if i == 0:
-            # Première ligne : remplacer par le tableau complet
-            text = text.replace(f'\\[{latex_line}\\]', html_table)
-        else:
-            # Lignes suivantes : les supprimer
-            text = text.replace(f'\\[{latex_line}\\]', '')
-
-    return text
-
-
-def convert_latex_lines_to_html_table(lines):
-    """
-    Convertit des lignes LaTeX en tableau HTML.
-    """
-    if not lines:
-        return ""
-
-    # Analyser la structure
-    headers = []
-    data_rows = []
-
-    # La première ligne contient généralement les x
-    first_line = lines[0]
-    parts = first_line.split()
-
-    # Extraire les en-têtes (supprimer "x" au début si présent)
-    if parts and parts[0] == 'x':
-        headers = parts[1:]
-    else:
-        headers = parts
-
-    # Pour les lignes suivantes
-    for line in lines[1:]:
-        if not line.strip():
+        if not line or not line.startswith('|'):
             continue
 
-        # Détecter si c'est f'(x) ou f(x)
-        if 'f\'' in line or 'f\'' in line:
-            row_label = "f'(x)"
-            line = line.replace('f\'', '').replace('f\'', '')
-        elif 'f(' in line:
-            row_label = "f(x)"
-            line = line.replace('f(', '').replace(')', '')
+        line = re.sub(r'^\|\s*', '', line)
+        line = re.sub(r'\s*\|$', '', line)
+        cells = [cell.strip() for cell in line.split('|')]
+
+        if i == 0:
+            html_table.append('<thead><tr>')
+            for cell in cells:
+                html_table.append(f'<th>{cell}</th>')
+            html_table.append('</tr></thead><tbody>')
+        elif all(re.match(r'^[\s:\-]+$', cell) for cell in cells):
+            continue
         else:
-            row_label = ""
+            html_table.append('<tr>')
+            for cell in cells:
+                html_table.append(f'<td>{cell}</td>')
+            html_table.append('</tr>')
 
-        # Nettoyer et extraire les cellules
-        cells = line.strip().split()
-        if row_label:
-            cells = [row_label] + cells
-
-        data_rows.append(cells)
-
-    # Construire le HTML
-    html = ['<div class="table-container variation-table"><table>']
-
-    # En-têtes
-    if headers:
-        html.append('<thead><tr>')
-        html.append('<th>x</th>')  # Première cellule vide ou "x"
-        for header in headers:
-            html.append(f'<th>{header}</th>')
-        html.append('</tr></thead>')
-
-    # Corps
-    if data_rows:
-        html.append('<tbody>')
-        for row in data_rows:
-            html.append('<tr>')
-            for i, cell in enumerate(row):
-                # Nettoyer la cellule
-                cell = cell.strip()
-
-                # Convertir les symboles LaTeX
-                if cell == '\\land' or cell == '∧':
-                    cell = '↗'
-                elif cell == '\\lor' or cell == '∨':
-                    cell = '↘'
-                elif cell == '||' or cell == '|':
-                    cell = '<div class="asymptote">||</div>'
-
-                # Style spécial pour la première colonne
-                if i == 0 and (cell == "f'(x)" or cell == "f(x)"):
-                    html.append(f'<td class="function-label">{cell}</td>')
-                else:
-                    html.append(f'<td>{cell}</td>')
-            html.append('</tr>')
-        html.append('</tbody>')
-
-    html.append('</table></div>')
-
-    return ''.join(html)
+    html_table.append('</tbody></table></div>')
+    return ''.join(html_table)
 
 
 def generate_corrige_html(corrige_text):
-    """Transforme le corrigé brut en HTML stylisé en PRÉSERVANT les tableaux déjà formatés."""
+    """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
     if not corrige_text:
         return ""
 
-    print("🔧 Génération HTML - DÉBUT")
-    print(f"   Longueur texte: {len(corrige_text)} caractères")
+    # Formatage des expressions mathématiques (Latex) et tableaux
+    lines = corrige_text.strip().split('\n')
 
-    # ÉTAPE CRITIQUE : Convertir les tableaux LaTeX en HTML
-    print("🔄 Conversion des tableaux LaTeX en HTML...")
-    corrige_text = detect_and_convert_latex_table_to_html(corrige_text)
-
-    # DÉTECTION DES TABLEAUX DÉJÀ FORMATÉS EN HTML
-    import re
-
-    # Pattern pour détecter les tableaux HTML complets
-    table_pattern = r'(<table\b[^>]*>.*?</table>)'
-
-    # Diviser le texte en blocs : tableaux HTML vs texte normal
-    parts = []
-    last_end = 0
-
-    for match in re.finditer(table_pattern, corrige_text, re.DOTALL | re.IGNORECASE):
-        # Texte avant le tableau
-        if match.start() > last_end:
-            text_part = corrige_text[last_end:match.start()]
-            parts.append(('text', text_part))
-
-        # Le tableau HTML
-        table_html = match.group(1)
-
-        # AJOUT CRITIQUE : Détecter si c'est un tableau de variation et ajouter la classe
-        if 'f(' in table_html or '↗' in table_html or '↘' in table_html:
-            # C'est un tableau de variation, on ajoute la classe
-            table_html = table_html.replace('<table', '<table class="variation-table"')
-
-        parts.append(('table', table_html))
-        last_end = match.end()
-
-    # Dernière partie
-    if last_end < len(corrige_text):
-        parts.append(('text', corrige_text[last_end:]))
-
-    print(f"   {len(parts)} parties détectées")
-
-    # Traitement séparé
+    # Pattern pour détecter les débuts d'exercice/partie
+    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
+                                  re.IGNORECASE)
     html_output = []
+    i = 0
 
     # Branding CIS en haut
     html_output.append(
         '<div class="cis-message"><strong>SUJET CORRIGÉ PAR L\'APPLICATION CIS, DISPO SUR PLAYSTORE</strong></div>')
 
-    for part_type, content in parts:
-        if part_type == 'table':
-            # TABLEAU HTML - NE RIEN FAIRE, juste l'encapsuler
-            print(f"   📊 Tableau HTML préservé: {len(content)} caractères")
-
-            # AJOUT : Vérifier si c'est déjà un variation-table
-            if 'class="variation-table"' in content or 'class=\'variation-table\'' in content:
-                html_output.append(f'<div class="table-container variation-table">{content}</div>')
-            else:
-                html_output.append(f'<div class="table-container">{content}</div>')
-
-        else:
-            # TEXTE NORMAL - le traiter comme avant
-            html_output.append(process_text_part(content))
-
-    result = "".join(html_output)
-    print(f"✅ Génération HTML terminée: {len(result)} caractères")
-    return mark_safe(result)
-
-
-def process_text_part(text):
-    """Traite une partie de texte (sans tableaux HTML)."""
-    if not text.strip():
-        return ""
-
-    lines = text.strip().split('\n')
-    html_lines = []
-
-    # Pattern pour détecter les débuts d'exercice/partie
-    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
-                                  re.IGNORECASE)
-
+    # Pour gérer la séparation en blocs
     in_bloc_exercice = False
-    i = 0
 
     while i < len(lines):
         line = lines[i].strip()
@@ -2066,59 +1163,66 @@ def process_text_part(text):
 
         # Début d'un nouvel exercice/partie
         if pattern_exercice.match(line):
+            # Ferme le bloc précédent s'il y en avait un
             if in_bloc_exercice:
-                html_lines.append('</div>')
-            html_lines.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
+                html_output.append('</div>')
+            # Ouvre un nouveau bloc, titre en gros
+            html_output.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
             in_bloc_exercice = True
             i += 1
             continue
 
-        # Détection des tableaux markdown DANS LE TEXTE SEULEMENT
-        is_table, table_end_idx, table_lines = detect_table(lines, i)
-        if is_table:
-            print(f"   📋 Tableau markdown détecté dans texte")
-            html_table = format_table_markdown('\n'.join(table_lines))
-            html_lines.append(html_table)
-            i = table_end_idx
+        # Sous-titre question principale (Question 1, 2, etc.)
+        if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
+            html_output.append(f'<h2 class="titre-question">{line}</h2>')
+            i += 1
             continue
 
-        # Traitement normal des lignes de texte
-        html_lines.append(format_text_line(line))
+        # Sous-titre secondaire (1., 2., etc.)
+        if re.match(r'^\d+\.', line):
+            html_output.append(f'<h3 class="titre-question">{line}</h3>')
+            i += 1
+            continue
+
+        # Sous-question (a), b), etc.)
+        if re.match(r'^[a-z]\)', line):
+            html_output.append(f'<p><strong>{line}</strong></p>')
+            i += 1
+            continue
+
+        # Listes
+        if line.startswith('•') or line.startswith('-'):
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+            continue
+
+        # Tableaux markdown
+        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
+            table_lines = []
+            j = i
+            while j < len(lines) and lines[j].startswith('|'):
+                table_lines.append(lines[j])
+                j += 1
+            html_table = format_table_markdown('\n'.join(table_lines))
+            html_output.append(html_table)
+            i = j
+            continue
+
+        # Formules LaTeX
+        if '\\(' in line or '\\[' in line:
+            html_output.append(f'<p class="reponse-question mathjax">{line}</p>')
+            i += 1
+            continue
+
+        # Cas général : paragraphe de réponse ou explication
+        html_output.append(f'<p class="reponse-question">{line}</p>')
         i += 1
 
+    # Ferme le dernier bloc exercice si ouvert
     if in_bloc_exercice:
-        html_lines.append('</div>')
+        html_output.append('</div>')
 
-    return "".join(html_lines)
-
-
-def format_text_line(line):
-    """Formate une ligne de texte simple."""
-    if not line:
-        return ""
-
-    # Sous-titre question principale
-    if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
-        return f'<h2 class="titre-question">{line}</h2>'
-
-    # Sous-titre secondaire
-    if re.match(r'^\d+\.', line):
-        return f'<h3 class="titre-question">{line}</h3>'
-
-    # Sous-question
-    if re.match(r'^[a-z]\)', line):
-        return f'<p><strong>{line}</strong></p>'
-
-    # Formules LaTeX
-    if '\\(' in line or '\\[' in line:
-        return f'<p class="reponse-question mathjax">{line}</p>'
-
-    # Listes
-    if line.startswith('•') or line.startswith('-'):
-        return f'<p>{line}</p>'
-
-    # Paragraphe normal
-    return f'<p class="reponse-question">{line}</p>'
+    return mark_safe("".join(html_output))
 
 
 # ============== EXTRACTION TEXTE/FICHIER ==============
@@ -2452,64 +1556,242 @@ def tracer_graphique(graphique_dict, output_name):
         return None
 
 
+# ============== GÉNÉRATION DE TABLEAUX MATPLOTLIB ==============
+
+def generer_tableau(tableau_dict, output_name):
+    """
+    Génère un tableau mathématique professionnel avec Matplotlib.
+
+    Args:
+        tableau_dict: {
+            "type": "variation|signe|statistique|frequence",
+            "data": {
+                "x_values": [...],
+                "f_prime": [...],
+                "f_values": [...],
+                "titre": "..."
+            }
+        }
+        output_name: Nom du fichier de sortie
+
+    Returns:
+        Chemin relatif vers l'image générée, ou None en cas d'erreur
+    """
+    try:
+        from django.conf import settings
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.patches import Rectangle, FancyBboxPatch
+
+        # Configuration
+        tableau_type = tableau_dict.get("type", "").lower()
+        data = tableau_dict.get("data", {})
+        titre = data.get("titre", "Tableau")
+
+        # Créer le dossier si nécessaire
+        tableau_dir = os.path.join(settings.MEDIA_ROOT, 'tableaux')
+        os.makedirs(tableau_dir, exist_ok=True)
+        output_path = os.path.join(tableau_dir, output_name)
+
+        print(f">>> Génération tableau {tableau_type}: {output_name}")
+
+        # ========== TABLEAU DE VARIATION ==========
+        if tableau_type == "variation":
+            x_vals = data.get("x_values", [])
+            f_prime = data.get("f_prime", [])
+            f_vals = data.get("f_values", [])
+
+            # Calcul des dimensions
+            n_cols = len(x_vals) + 1
+            fig, ax = plt.subplots(figsize=(max(10, n_cols * 1.5), 4.5))
+            ax.axis('off')
+
+            # Dimensions relatives
+            col_width = 1.0 / n_cols
+            row_height = 0.22
+            y_start = 0.85
+
+            # TITRE
+            ax.text(0.5, 0.95, titre,
+                    ha='center', va='center',
+                    fontsize=14, fontweight='bold',
+                    color='#208060',  # Couleur CIS
+                    fontfamily='DejaVu Sans')
+
+            # ===== EN-TÊTE : Colonne "x" =====
+            rect_x = Rectangle((0, y_start - row_height / 2),
+                               col_width, row_height,
+                               facecolor='#208060', edgecolor='#2c3e50',
+                               linewidth=2)
+            ax.add_patch(rect_x)
+            ax.text(col_width / 2, y_start, '$x$',
+                    ha='center', va='center',
+                    fontsize=12, fontweight='bold', color='white',
+                    fontfamily='DejaVu Sans')
+
+            # ===== VALEURS DE X =====
+            for i, x_val in enumerate(x_vals):
+                x_pos = (i + 1) * col_width + col_width / 2
+                cell_text = f"${x_val}$" if '∞' in str(x_val) else str(x_val)
+
+                rect = Rectangle((x_pos - col_width / 2, y_start - row_height / 2),
+                                 col_width, row_height,
+                                 facecolor='#3498db', edgecolor='#2c3e50',
+                                 linewidth=2)
+                ax.add_patch(rect)
+                ax.text(x_pos, y_start, cell_text,
+                        ha='center', va='center',
+                        fontsize=11, fontweight='bold', color='white',
+                        fontfamily='DejaVu Sans')
+
+            # ===== LIGNE f'(x) =====
+            y_fprime = y_start - row_height
+
+            # Label f'(x)
+            rect_fprime_label = Rectangle((0, y_fprime - row_height / 2),
+                                          col_width, row_height,
+                                          facecolor='#2980b9', edgecolor='#2c3e50',
+                                          linewidth=2)
+            ax.add_patch(rect_fprime_label)
+            ax.text(col_width / 2, y_fprime, "$f'(x)$",
+                    ha='center', va='center',
+                    fontsize=12, fontweight='bold', color='white',
+                    fontfamily='DejaVu Sans')
+
+            # Valeurs f'(x)
+            for i, val in enumerate(f_prime):
+                x_pos = (i + 1) * col_width + col_width / 2
+
+                # Couleur selon valeur
+                if val == '+':
+                    bg_color, text_color = '#d5f4e6', '#27ae60'  # Vert
+                elif val == '-':
+                    bg_color, text_color = '#fadbd8', '#e74c3c'  # Rouge
+                elif val == '0':
+                    bg_color, text_color = '#fef9e7', '#f39c12'  # Orange
+                elif val == '||':
+                    bg_color, text_color = '#f4ecf7', '#9b59b6'  # Violet
+                else:
+                    bg_color, text_color = 'white', 'black'
+
+                rect = Rectangle((x_pos - col_width / 2, y_fprime - row_height / 2),
+                                 col_width, row_height,
+                                 facecolor=bg_color, edgecolor='#95a5a6',
+                                 linewidth=1.5)
+                ax.add_patch(rect)
+                ax.text(x_pos, y_fprime, val,
+                        ha='center', va='center',
+                        fontsize=12, fontweight='bold', color=text_color,
+                        fontfamily='DejaVu Sans')
+
+            # ===== LIGNE f(x) =====
+            y_fx = y_start - 2 * row_height
+
+            # Label f(x)
+            rect_fx_label = Rectangle((0, y_fx - row_height / 2),
+                                      col_width, row_height,
+                                      facecolor='#27ae60', edgecolor='#2c3e50',
+                                      linewidth=2)
+            ax.add_patch(rect_fx_label)
+            ax.text(col_width / 2, y_fx, "$f(x)$",
+                    ha='center', va='center',
+                    fontsize=12, fontweight='bold', color='white',
+                    fontfamily='DejaVu Sans')
+
+            # Valeurs f(x)
+            for i, val in enumerate(f_vals):
+                x_pos = (i + 1) * col_width + col_width / 2
+                val_str = str(val)
+
+                # Couleur selon contenu
+                if '↗' in val_str:
+                    bg_color, text_color = '#e8f6f3', '#27ae60'  # Vert croissance
+                elif '↘' in val_str:
+                    bg_color, text_color = '#fdedec', '#e74c3c'  # Rouge décroissance
+                elif '∞' in val_str:
+                    bg_color, text_color = '#f4ecf7', '#8e44ad'  # Violet infini
+                elif '||' in val_str:
+                    bg_color, text_color = '#fdebd0', '#d35400'  # Orange asymptote
+                else:
+                    bg_color, text_color = 'white', 'black'
+
+                # Gestion spéciale des flèches
+                if '↗' in val_str or '↘' in val_str:
+                    parts = val_str.split()
+                    if len(parts) == 2:
+                        arrow, valeur = parts
+
+                        rect = Rectangle((x_pos - col_width / 2, y_fx - row_height / 2),
+                                         col_width, row_height,
+                                         facecolor=bg_color, edgecolor='#95a5a6',
+                                         linewidth=1.5)
+                        ax.add_patch(rect)
+
+                        # Flèche (plus grande)
+                        ax.text(x_pos, y_fx + 0.01, arrow,
+                                ha='center', va='center',
+                                fontsize=14, fontweight='bold', color=text_color,
+                                fontfamily='DejaVu Sans')
+                        # Valeur (plus petite)
+                        ax.text(x_pos, y_fx - 0.01, valeur,
+                                ha='center', va='center',
+                                fontsize=10, color=text_color,
+                                fontfamily='DejaVu Sans')
+                        continue
+
+                # Valeur normale
+                rect = Rectangle((x_pos - col_width / 2, y_fx - row_height / 2),
+                                 col_width, row_height,
+                                 facecolor=bg_color, edgecolor='#95a5a6',
+                                 linewidth=1.5)
+                ax.add_patch(rect)
+                ax.text(x_pos, y_fx, val_str,
+                        ha='center', va='center',
+                        fontsize=11, color=text_color,
+                        fontfamily='DejaVu Sans')
+
+            # ===== BORDURE FINALE =====
+            border = FancyBboxPatch((0.01, 0.12), 0.98, 0.78,
+                                    boxstyle="round,pad=0.02,rounding_size=0.03",
+                                    facecolor='none',
+                                    edgecolor='#208060',
+                                    linewidth=2.5,
+                                    linestyle='-')
+            ax.add_patch(border)
+
+            plt.savefig(output_path, dpi=300, bbox_inches='tight',
+                        facecolor='white', edgecolor='none')
+            plt.close()
+
+            return "tableaux/" + output_name
+
+        # ========== TABLEAU DE SIGNES (à implémenter après) ==========
+        elif tableau_type == "signe":
+            # Pour l'instant, retourner None et on implémente après
+            print(f"⚠️ Type de tableau non encore implémenté: {tableau_type}")
+            return None
+
+        # ========== TABLEAU STATISTIQUE (à implémenter après) ==========
+        elif tableau_type in ["statistique", "frequence"]:
+            print(f"⚠️ Type de tableau non encore implémenté: {tableau_type}")
+            return None
+
+        else:
+            print(f"❌ Type de tableau non supporté: {tableau_type}")
+            return None
+
+    except Exception as e:
+        print(f"❌ Erreur génération tableau: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 # ===========================
-# PROMPT SYSTÈME AMÉLIORÉ AVEC VISION SCIENTIFIQUE
+# ============== PROMPT SYSTÈME AVEC TABLEAUX ==============
 DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
 géographie...bref, tu es un professeur de l'enseignement secondaire.
 
-TOUTE RÈGLE ABSOLUE - TABLEAUX DE VARIATION :
-
-🚨 JAMAIS, JAMAIS utiliser LaTeX pour les tableaux de variation !
-🚨 TOUJOURS utiliser du HTML avec balises <table> complètes !
-
-EXEMPLE INTERDIT (NE JAMAIS FAIRE) :
-\[ x - \infty - 1 1 3 + \infty \]
-\[ f'(x) + 0 - || - 0 + \]
-\[ f(x) - \infty \land -4 \lor -\infty | + \infty \lor 4 \land + \infty \]
-
-EXEMPLE OBLIGATOIRE (TOUJOURS FAIRE) :
-<table class="variation-table">
-<thead>
-<tr>
-<th>x</th>
-<th>-∞</th>
-<th>-1</th>
-<th>1</th>
-<th>3</th>
-<th>+∞</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>f'(x)</td>
-<td>+</td>
-<td>0</td>
-<td>||</td>
-<td>-</td>
-<td>0</td>
-<td>+</td>
-</tr>
-<tr>
-<td>f(x)</td>
-<td>-∞</td>
-<td>↗</td>
-<td>-4</td>
-<td>||</td>
-<td>↘</td>
-<td>4</td>
-<td>↗</td>
-</tr>
-</tbody>
-</table>
-
-⚠️ ATTENTION : Les flèches doivent être les caractères Unicode :
-- ↗ (U+2197) pour croissante
-- ↘ (U+2198) pour décroissante
-- → (U+2192) pour horizontale si besoin
-
-⚠️ Ne JAMAIS utiliser \land, \lor, | pour les flèches !
-
- **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
+🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
 
 RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
 1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
@@ -2547,6 +1829,86 @@ FORMAT DE RÉPONSE :
 - Références aux schémas quand ils existent ("D'après le schéma...")
 - Justifications détaillées pour chaque étape
 - Ne jamais dire "je pense" ou "c'est ambigu"
+
+RÈGLES ABSOLUES POUR LES TABLEAUX MATHÉMATIQUES :
+1. ✅ Quand un exercice demande un tableau (variation, signes, statistiques),
+   fournis d'abord l'analyse textuelle complète, puis ajoute un bloc JSON structuré
+
+2. ✅ Format JSON OBLIGATOIRE pour les tableaux :
+---TABLEAU---
+{
+  "type": "variation|signe|statistique|frequence",
+  "data": {
+    "x_values": ["-∞", "-1", "1", "+∞"],
+    "f_prime": ["+", "0", "-", "0", "+"],
+    "f_values": ["-∞", "↗ -4", "↘ -8", "↗ +∞"],
+    "titre": "Tableau de variation de f(x) = x³ - 3x + 2",
+    "metadata": {
+      "function": "f(x) = x³ - 3x + 2",
+      "domain": "ℝ"
+    }
+  }
+}
+---FIN_TABLEAU---
+
+3. ✅ SYMBOLES STANDARD :
+   - ↗ (U+2197) : fonction croissante
+   - ↘ (U+2198) : fonction décroissante
+   - → (U+2192) : constante
+   - ± (U+00B1) : signe indéterminé
+   - ∞ (U+221E) : infini
+   - || : asymptote/discontinuité
+
+4. ✅ Types de tableaux supportés :
+   - "variation" : x_values, f_prime, f_values
+   - "signe" : x_values, signes, zeros
+   - "statistique" : classes, effectifs, frequences
+   - "frequence" : intervalles, effectifs, pourcentages
+
+EXEMPLES DE TABLEAUX :
+
+--- Tableau de variation ---
+[...analyse...]
+---TABLEAU---
+{
+  "type": "variation",
+  "data": {
+    "x_values": ["-∞", "-2", "0", "2", "+∞"],
+    "f_prime": ["-", "0", "+", "0", "-"],
+    "f_values": ["+∞", "↘ 0", "↗ 4", "↘ 0", "-∞"],
+    "titre": "Variation de f(x) = -x³/3 + 2x",
+    "metadata": {"function": "f(x) = -x³/3 + 2x"}
+  }
+}
+---FIN_TABLEAU---
+
+--- Tableau de signes ---
+[...analyse...]
+---TABLEAU---
+{
+  "type": "signe",
+  "data": {
+    "x_values": ["-∞", "-3", "1", "+∞"],
+    "signes": ["+", "0", "-", "0", "+"],
+    "zeros": [-3, 1],
+    "titre": "Signe de f(x) = (x+3)(x-1)"
+  }
+}
+---FIN_TABLEAU---
+
+--- Tableau statistique ---
+[...analyse...]
+---TABLEAU---
+{
+  "type": "statistique",
+  "data": {
+    "classes": ["0-10", "10-20", "20-30", "30-40"],
+    "effectifs": [5, 12, 8, 3],
+    "frequences": [0.18, 0.43, 0.29, 0.10],
+    "titre": "Distribution des âges"
+  }
+}
+---FIN_TABLEAU---
 
 POUR LES GRAPHIQUES :
 - Dès qu'un exercice demande un graphique, utilise la balise ---corrigé--- suivie du JSON

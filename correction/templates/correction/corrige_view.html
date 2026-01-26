@@ -126,150 +126,35 @@
       vertical-align: middle;
     }
 
-/* ========== TABLEAUX DE VARIATION PROFESSIONNELS ========== */
-.variation-table {
-    border: 3px solid #2c3e50 !important;
-    background: white;
+/* ===== TABLEAUX MATHÉMATIQUES ===== */
+.tableau-container {
+    text-align: center;
     margin: 30px auto;
-    font-family: 'Segoe UI', 'Arial', sans-serif;
+    max-width: 100%;
+    page-break-inside: avoid; /* Évite la coupure dans les PDF */
 }
 
-.variation-table table {
-    width: 100%;
-    border-collapse: separate !important;
-    border-spacing: 0;
-    border: 2px solid #34495e !important;
+.tableau-container img {
+    max-width: 95%;
+    height: auto;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
 }
 
-/* CELLULES AVEC BORDURES ÉPAISSES */
-.variation-table th,
-.variation-table td {
-    border: 1.5px solid #7f8c8d !important;
-    padding: 14px 12px;
+.tableau-container p {
+    font-style: italic;
+    color: #666;
+    margin-top: 10px;
+    font-size: 0.9em;
     text-align: center;
-    vertical-align: middle;
-    font-size: 16px;
-    position: relative;
 }
 
-/* EN-TÊTES */
-.variation-table th {
-    background: linear-gradient(to bottom, #3498db, #2980b9) !important;
-    color: white !important;
-    font-weight: bold;
-    border-bottom: 3px solid #2c3e50 !important;
-    text-transform: none;
-    font-size: 17px;
-}
-
-/* PREMIÈRE COLONNE (x, f'(x), f(x)) */
-.variation-table td:first-child {
-    background: #ecf0f1 !important;
-    font-weight: 700;
-    color: #2c3e50;
-    border-right: 2px solid #bdc3c7 !important;
-    text-align: center;
-    width: 80px;
-}
-
-/* FLÈCHES GRANDES ET COLORÉES */
-.variation-table .arrow-up {
-    color: #27ae60 !important;
-    font-size: 24px !important;
-    font-weight: bold;
-    position: relative;
-}
-
-.variation-table .arrow-down {
-    color: #e74c3c !important;
-    font-size: 24px !important;
-    font-weight: bold;
-    position: relative;
-}
-
-/* FLÈCHES AVEC DÉGRADÉ */
-.variation-table td:contains("↗") {
-    color: #27ae60 !important;
-    font-size: 22px !important;
-    font-weight: 900;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
-    background: linear-gradient(to bottom, #d5f4e6, #ffffff) !important;
-}
-
-.variation-table td:contains("↘") {
-    color: #e74c3c !important;
-    font-size: 22px !important;
-    font-weight: 900;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
-    background: linear-gradient(to bottom, #fadbd8, #ffffff) !important;
-}
-
-/* INFINIS EN ITALIQUE */
-.variation-table td:contains("∞"),
-.variation-table th:contains("∞") {
-    font-style: italic !important;
-    font-size: 17px;
-    color: #8e44ad !important;
-}
-
-/* SIGNES + ET - */
-.variation-table td:contains("+") {
-    color: #27ae60 !important;
-    font-size: 18px;
-    font-weight: bold;
-    background-color: #eafaf1 !important;
-}
-
-.variation-table td:contains("-") {
-    color: #e74c3c !important;
-    font-size: 18px;
-    font-weight: bold;
-    background-color: #fdedec !important;
-}
-
-/* ZÉROS */
-.variation-table td:contains("0") {
-    font-weight: bold;
-    color: #f39c12 !important;
-    background-color: #fef9e7 !important;
-}
-
-/* ASYMPTOTES VERTICALES */
-.variation-table .asymptote {
-    color: #8e44ad !important;
-    font-weight: bold;
-    font-size: 16px;
-    background: #f4ecf7 !important;
-    border-left: 3px dashed #8e44ad !important;
-    border-right: 3px dashed #8e44ad !important;
-}
-
-/* SURVOL */
-.variation-table td:hover {
-    background-color: #f8f9fa !important;
-    transform: scale(1.02);
-    transition: all 0.2s ease;
-    z-index: 1;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-}
-
-/* BORDURES EXTERNES FORTES */
-.variation-table tr:first-child th {
-    border-top: 3px solid #2c3e50 !important;
-}
-
-.variation-table tr:last-child td {
-    border-bottom: 3px solid #2c3e50 !important;
-}
-
-.variation-table th:first-child,
-.variation-table td:first-child {
-    border-left: 3px solid #2c3e50 !important;
-}
-
-.variation-table th:last-child,
-.variation-table td:last-child {
-    border-right: 3px solid #2c3e50 !important;
+/* Responsive pour mobile */
+@media (max-width: 768px) {
+    .tableau-container img {
+        max-width: 100%;
+    }
 }
     /* GRAPHIQUES */
     .graphique-container {
@@ -450,216 +335,6 @@
       subtree: true
     });
   </script>
-    <!-- NOUVEAU SCRIPT POUR LES TABLEAUX (AJOUTE-LE ICI) -->
-  <script>
-  // ========== AMÉLIORATION DES TABLEAUX ==========
-  document.addEventListener('DOMContentLoaded', function() {
-      console.log('🔧 Initialisation amélioration tableaux...');
-
-      // 1. Ajouter des classes CSS basées sur le contenu
-      document.querySelectorAll('.table-container').forEach(function(tableContainer, index) {
-          const table = tableContainer.querySelector('table');
-          if (!table) return;
-
-          // Détecter le type de tableau
-          const allText = table.textContent.toLowerCase();
-
-          if (allText.includes('variation') || allText.includes('↗') || allText.includes('↘')) {
-              table.classList.add('variation-table');
-              console.log(`📊 Tableau ${index + 1}: Type "variation" détecté`);
-          }
-          else if (allText.includes('signe') || (table.textContent.includes('+') && table.textContent.includes('-'))) {
-              table.classList.add('sign-table');
-              console.log(`📊 Tableau ${index + 1}: Type "signe" détecté`);
-          }
-
-          // 2. Indicateur visuel pour défilement horizontal
-          if (table.scrollWidth > tableContainer.clientWidth) {
-              const scrollHint = document.createElement('div');
-              scrollHint.className = 'scroll-hint';
-              scrollHint.innerHTML = '↔ Défilement disponible';
-              scrollHint.style.cssText = `
-                  position: absolute;
-                  top: -25px;
-                  right: 10px;
-                  background: #208060;
-                  color: white;
-                  padding: 3px 10px;
-                  border-radius: 12px;
-                  font-size: 11px;
-                  font-weight: bold;
-              `;
-              tableContainer.style.position = 'relative';
-              tableContainer.appendChild(scrollHint);
-          }
-
-          // 3. Améliorer les flèches de variation
-          const arrows = table.querySelectorAll('td');
-          arrows.forEach(function(td) {
-              const text = td.textContent.trim();
-              if (text === '↗') {
-                  td.style.color = '#208060';
-                  td.style.fontWeight = 'bold';
-                  td.style.fontSize = '1.2em';
-                  td.title = 'Croissante';
-              }
-              else if (text === '↘') {
-                  td.style.color = '#e74c3c';
-                  td.style.fontWeight = 'bold';
-                  td.style.fontSize = '1.2em';
-                  td.title = 'Décroissante';
-              }
-              else if (text === '+' || text === 'positif') {
-                  td.style.color = '#208060';
-                  td.style.fontWeight = 'bold';
-              }
-              else if (text === '-' || text === 'négatif') {
-                  td.style.color = '#e74c3c';
-                  td.style.fontWeight = 'bold';
-              }
-          });
-      });
-
-      // 4. Ajouter le CSS dynamique pour les tableaux
-      const dynamicStyles = `
-          /* Styles dynamiques pour les tableaux */
-          .table-container.dragging {
-              cursor: grabbing !important;
-          }
-
-          .scroll-hint {
-              animation: pulse 2s infinite;
-          }
-
-          @keyframes pulse {
-              0% { opacity: 0.7; }
-              50% { opacity: 1; }
-              100% { opacity: 0.7; }
-          }
-
-          /* Surligner les cellules au survol */
-          .table-container td:hover {
-              background-color: #e8f4f1 !important;
-              transition: background-color 0.2s;
-          }
-
-          /* Style pour les infinis */
-          .table-container th:contains("∞"),
-          .table-container td:contains("∞") {
-              font-style: italic;
-              font-weight: bold;
-          }
-      `;
-
-      const styleSheet = document.createElement('style');
-      styleSheet.textContent = dynamicStyles;
-      document.head.appendChild(styleSheet);
-
-      console.log('✅ Amélioration tableaux terminée');
-  });
-
-  // 5. Gestion du défilement horizontal au glisser
-  let isDragging = false;
-  let startX, scrollLeft;
-
-  document.addEventListener('mousedown', function(e) {
-      const tableContainer = e.target.closest('.table-container');
-      if (tableContainer && tableContainer.scrollWidth > tableContainer.clientWidth) {
-          isDragging = true;
-          tableContainer.classList.add('dragging');
-          startX = e.pageX - tableContainer.offsetLeft;
-          scrollLeft = tableContainer.scrollLeft;
-      }
-  });
-
-  document.addEventListener('mousemove', function(e) {
-      if (!isDragging) return;
-      e.preventDefault();
-
-      const tableContainer = e.target.closest('.table-container');
-      if (!tableContainer) return;
-
-      const x = e.pageX - tableContainer.offsetLeft;
-      const walk = (x - startX) * 2;
-      tableContainer.scrollLeft = scrollLeft - walk;
-  });
-
-  document.addEventListener('mouseup', function() {
-      isDragging = false;
-      document.querySelectorAll('.table-container').forEach(function(container) {
-          container.classList.remove('dragging');
-      });
-  });
-  </script>
-  <script>
-// ========== AMÉLIORATION DES FLÈCHES DANS LES TABLEAUX ==========
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('🎯 Amélioration des flèches dans les tableaux...');
-
-    document.querySelectorAll('.variation-table td').forEach(function(cell) {
-        const text = cell.textContent.trim();
-
-        // Remplacer les mauvais symboles par de vraies flèches
-        if (text === '∧' || text === '\\land' || text === '&uarr;') {
-            cell.innerHTML = '<span class="arrow-up">↗</span>';
-            cell.title = 'Croissante';
-        }
-        else if (text === '∨' || text === '\\lor' || text === '&darr;') {
-            cell.innerHTML = '<span class="arrow-down">↘</span>';
-            cell.title = 'Décroissante';
-        }
-        else if (text === '->' || text === '→') {
-            cell.innerHTML = '→';
-            cell.title = 'Constant';
-        }
-
-        // Ajouter des tooltips pour les signes
-        if (text === '+') {
-            cell.title = 'Positif';
-        }
-        else if (text === '-') {
-            cell.title = 'Négatif';
-        }
-        else if (text === '0') {
-            cell.title = 'Zéro';
-        }
-        else if (text.includes('∞')) {
-            cell.title = 'Infini';
-        }
-    });
-
-    // Ajouter un effet visuel pour les flèches
-    const style = document.createElement('style');
-    style.textContent = `
-        .arrow-up, .arrow-down {
-            display: inline-block;
-            animation: pulse 1.5s infinite;
-        }
-
-        @keyframes pulse {
-            0% { opacity: 0.8; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.1); }
-            100% { opacity: 0.8; transform: scale(1); }
-        }
-
-        .variation-table td:hover .arrow-up {
-            animation: bounce 0.5s;
-        }
-
-        .variation-table td:hover .arrow-down {
-            animation: bounce 0.5s;
-        }
-
-        @keyframes bounce {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-3px); }
-        }
-    `;
-    document.head.appendChild(style);
-
-    console.log('✅ Flèches améliorées avec animations');
-});
-</script>
 
 </body>
 </html>
