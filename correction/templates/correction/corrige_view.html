@@ -126,143 +126,150 @@
       vertical-align: middle;
     }
 
-/* ========== SYSTÈME DE BORDURES VISIBLES POUR TOUS LES TABLEAUX ========== */
-.table-container {
-    margin: 25px 0;
-    overflow-x: auto;
-    border: 2px solid #208060 !important;
-    border-radius: 8px;
+/* ========== TABLEAUX DE VARIATION PROFESSIONNELS ========== */
+.variation-table {
+    border: 3px solid #2c3e50 !important;
     background: white;
-    box-shadow: 0 4px 12px rgba(32, 128, 96, 0.15);
-    position: relative;
+    margin: 30px auto;
+    font-family: 'Segoe UI', 'Arial', sans-serif;
 }
 
-/* BORDURES FORTES POUR LE TABLEAU */
-.table-container table {
+.variation-table table {
     width: 100%;
-    border-collapse: collapse !important;
+    border-collapse: separate !important;
     border-spacing: 0;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    font-size: 15px;
-    table-layout: fixed;
+    border: 2px solid #34495e !important;
 }
 
-/* BORDURES VISIBLES POUR TOUTES LES CELLULES */
-.table-container th,
-.table-container td {
-    border: 1px solid #ddd !important;
-    padding: 12px 10px;
+/* CELLULES AVEC BORDURES ÉPAISSES */
+.variation-table th,
+.variation-table td {
+    border: 1.5px solid #7f8c8d !important;
+    padding: 14px 12px;
     text-align: center;
     vertical-align: middle;
+    font-size: 16px;
     position: relative;
 }
 
-/* BORDURES ÉPAISSES POUR LES EN-TÊTES */
-.table-container th {
-    border-bottom: 2px solid #208060 !important;
-    border-top: 1px solid #208060 !important;
-    background: linear-gradient(135deg, #f8fcfb, #e8f4f1);
-    color: #208060;
+/* EN-TÊTES */
+.variation-table th {
+    background: linear-gradient(to bottom, #3498db, #2980b9) !important;
+    color: white !important;
+    font-weight: bold;
+    border-bottom: 3px solid #2c3e50 !important;
+    text-transform: none;
+    font-size: 17px;
+}
+
+/* PREMIÈRE COLONNE (x, f'(x), f(x)) */
+.variation-table td:first-child {
+    background: #ecf0f1 !important;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+    color: #2c3e50;
+    border-right: 2px solid #bdc3c7 !important;
+    text-align: center;
+    width: 80px;
 }
 
-/* BORDURES LATÉRALES VISIBLES */
-.table-container tr th:first-child,
-.table-container tr td:first-child {
-    border-left: 2px solid #208060 !important;
-}
-
-.table-container tr th:last-child,
-.table-container tr td:last-child {
-    border-right: 2px solid #208060 !important;
-}
-
-/* BORDURE DU BAS POUR LA DERNIÈRE LIGNE */
-.table-container tr:last-child td {
-    border-bottom: 2px solid #208060 !important;
-}
-
-/* COULEURS SPÉCIFIQUES POUR LES TABLEAUX DE VARIATION */
-.table-container.variation-table th,
-.table-container.variation-table td {
-    min-width: 60px;
-    border-color: #aaa !important;
-}
-
-/* STYLE POUR LA PREMIÈRE COLONNE (x, f'(x), f(x)) */
-.table-container tr td:first-child {
-    background-color: #f8fcfb !important;
-    font-weight: 600;
-    text-align: left;
-    padding-left: 15px;
-    border-right: 2px solid #bbb !important;
-}
-
-/* STYLE POUR LES INFINIS */
-.table-container td:contains("∞"),
-.table-container th:contains("∞") {
-    font-style: italic;
-    color: #555;
-}
-
-/* STYLE POUR LES FLÈCHES */
-.table-container td:contains("↗") {
-    color: #208060;
+/* FLÈCHES GRANDES ET COLORÉES */
+.variation-table .arrow-up {
+    color: #27ae60 !important;
+    font-size: 24px !important;
     font-weight: bold;
-    font-size: 1.2em;
+    position: relative;
 }
 
-.table-container td:contains("↘") {
-    color: #e74c3c;
+.variation-table .arrow-down {
+    color: #e74c3c !important;
+    font-size: 24px !important;
     font-weight: bold;
-    font-size: 1.2em;
+    position: relative;
 }
 
-/* STYLE POUR LES SIGNES + et - */
-.table-container td:contains("+") {
-    color: #208060;
+/* FLÈCHES AVEC DÉGRADÉ */
+.variation-table td:contains("↗") {
+    color: #27ae60 !important;
+    font-size: 22px !important;
+    font-weight: 900;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+    background: linear-gradient(to bottom, #d5f4e6, #ffffff) !important;
+}
+
+.variation-table td:contains("↘") {
+    color: #e74c3c !important;
+    font-size: 22px !important;
+    font-weight: 900;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+    background: linear-gradient(to bottom, #fadbd8, #ffffff) !important;
+}
+
+/* INFINIS EN ITALIQUE */
+.variation-table td:contains("∞"),
+.variation-table th:contains("∞") {
+    font-style: italic !important;
+    font-size: 17px;
+    color: #8e44ad !important;
+}
+
+/* SIGNES + ET - */
+.variation-table td:contains("+") {
+    color: #27ae60 !important;
+    font-size: 18px;
     font-weight: bold;
+    background-color: #eafaf1 !important;
 }
 
-.table-container td:contains("-") {
-    color: #e74c3c;
+.variation-table td:contains("-") {
+    color: #e74c3c !important;
+    font-size: 18px;
     font-weight: bold;
+    background-color: #fdedec !important;
 }
 
-/* STYLE POUR LES VERTICALES || (asymptotes) */
-.table-container td:contains("||") {
-    color: #ff6b6b;
+/* ZÉROS */
+.variation-table td:contains("0") {
     font-weight: bold;
-    background-color: #fff5f5;
-    border-left: 2px dashed #ff6b6b !important;
-    border-right: 2px dashed #ff6b6b !important;
+    color: #f39c12 !important;
+    background-color: #fef9e7 !important;
 }
 
-/* SURVOL DES CELLULES */
-.table-container td:hover {
-    background-color: #e8f4f1 !important;
-    transition: background-color 0.2s;
+/* ASYMPTOTES VERTICALES */
+.variation-table .asymptote {
+    color: #8e44ad !important;
+    font-weight: bold;
+    font-size: 16px;
+    background: #f4ecf7 !important;
+    border-left: 3px dashed #8e44ad !important;
+    border-right: 3px dashed #8e44ad !important;
 }
 
-/* RESPONSIVE */
-@media (max-width: 768px) {
-    .table-container {
-        margin: 20px -10px;
-        border-radius: 0;
-        border-left: none;
-        border-right: none;
-    }
+/* SURVOL */
+.variation-table td:hover {
+    background-color: #f8f9fa !important;
+    transform: scale(1.02);
+    transition: all 0.2s ease;
+    z-index: 1;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
 
-    .table-container table {
-        font-size: 14px;
-    }
+/* BORDURES EXTERNES FORTES */
+.variation-table tr:first-child th {
+    border-top: 3px solid #2c3e50 !important;
+}
 
-    .table-container th,
-    .table-container td {
-        padding: 10px 8px;
-    }
+.variation-table tr:last-child td {
+    border-bottom: 3px solid #2c3e50 !important;
+}
+
+.variation-table th:first-child,
+.variation-table td:first-child {
+    border-left: 3px solid #2c3e50 !important;
+}
+
+.variation-table th:last-child,
+.variation-table td:last-child {
+    border-right: 3px solid #2c3e50 !important;
 }
     /* GRAPHIQUES */
     .graphique-container {
@@ -584,6 +591,75 @@
       });
   });
   </script>
+  <script>
+// ========== AMÉLIORATION DES FLÈCHES DANS LES TABLEAUX ==========
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🎯 Amélioration des flèches dans les tableaux...');
+
+    document.querySelectorAll('.variation-table td').forEach(function(cell) {
+        const text = cell.textContent.trim();
+
+        // Remplacer les mauvais symboles par de vraies flèches
+        if (text === '∧' || text === '\\land' || text === '&uarr;') {
+            cell.innerHTML = '<span class="arrow-up">↗</span>';
+            cell.title = 'Croissante';
+        }
+        else if (text === '∨' || text === '\\lor' || text === '&darr;') {
+            cell.innerHTML = '<span class="arrow-down">↘</span>';
+            cell.title = 'Décroissante';
+        }
+        else if (text === '->' || text === '→') {
+            cell.innerHTML = '→';
+            cell.title = 'Constant';
+        }
+
+        // Ajouter des tooltips pour les signes
+        if (text === '+') {
+            cell.title = 'Positif';
+        }
+        else if (text === '-') {
+            cell.title = 'Négatif';
+        }
+        else if (text === '0') {
+            cell.title = 'Zéro';
+        }
+        else if (text.includes('∞')) {
+            cell.title = 'Infini';
+        }
+    });
+
+    // Ajouter un effet visuel pour les flèches
+    const style = document.createElement('style');
+    style.textContent = `
+        .arrow-up, .arrow-down {
+            display: inline-block;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.8; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.1); }
+            100% { opacity: 0.8; transform: scale(1); }
+        }
+
+        .variation-table td:hover .arrow-up {
+            animation: bounce 0.5s;
+        }
+
+        .variation-table td:hover .arrow-down {
+            animation: bounce 0.5s;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
+        }
+    `;
+    document.head.appendChild(style);
+
+    console.log('✅ Flèches améliorées avec animations');
+});
+</script>
 
 </body>
 </html>

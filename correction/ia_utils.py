@@ -1829,6 +1829,148 @@ def detect_table(lines, start_idx):
     return False, start_idx, []
 
 
+def detect_and_convert_latex_table_to_html(text):
+    """
+    Détecte et convertit les tableaux LaTeX mal formatés en HTML.
+    Exemple:
+    Input: \[ x - \infty - 1 1 3 + \infty \]
+           \[ f'(x) + 0 - || - 0 + \]
+           \[ f(x) - \infty \land -4 \lor -\infty | + \infty \lor 4 \land + \infty \]
+
+    Output: <table> HTML propre
+    """
+    import re
+
+    # Pattern pour détecter les tableaux LaTeX sur plusieurs lignes
+    pattern = r'\\\[(.*?)\\\]'
+    latex_lines = re.findall(pattern, text, re.DOTALL)
+
+    if len(latex_lines) < 2:  # Pas assez de lignes pour un tableau
+        return text
+
+    print(f"🔍 Détection tableau LaTeX: {len(latex_lines)} lignes")
+
+    # Vérifier si c'est un tableau de variation
+    is_variation_table = False
+    for line in latex_lines[:3]:  # Regarder les 3 premières lignes
+        if 'f(' in line or 'f\'' in line or '∞' in line:
+            is_variation_table = True
+            break
+
+    if not is_variation_table:
+        return text
+
+    print("✅ Tableau de variation LaTeX détecté, conversion en HTML...")
+
+    # Nettoyer et parser les lignes
+    cleaned_lines = []
+    for line in latex_lines:
+        # Nettoyer le LaTeX
+        line = line.strip()
+        line = re.sub(r'\\[()\[\]]', '', line)  # Enlever les backslashes
+        line = re.sub(r'\s+', ' ', line)  # Normaliser les espaces
+        cleaned_lines.append(line)
+
+    # Convertir en HTML
+    html_table = convert_latex_lines_to_html_table(cleaned_lines)
+
+    # Remplacer dans le texte original
+    # On remplace toutes les lignes LaTeX par le tableau HTML
+    for i, latex_line in enumerate(latex_lines):
+        if i == 0:
+            # Première ligne : remplacer par le tableau complet
+            text = text.replace(f'\\[{latex_line}\\]', html_table)
+        else:
+            # Lignes suivantes : les supprimer
+            text = text.replace(f'\\[{latex_line}\\]', '')
+
+    return text
+
+
+def convert_latex_lines_to_html_table(lines):
+    """
+    Convertit des lignes LaTeX en tableau HTML.
+    """
+    if not lines:
+        return ""
+
+    # Analyser la structure
+    headers = []
+    data_rows = []
+
+    # La première ligne contient généralement les x
+    first_line = lines[0]
+    parts = first_line.split()
+
+    # Extraire les en-têtes (supprimer "x" au début si présent)
+    if parts and parts[0] == 'x':
+        headers = parts[1:]
+    else:
+        headers = parts
+
+    # Pour les lignes suivantes
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+
+        # Détecter si c'est f'(x) ou f(x)
+        if 'f\'' in line or 'f\'' in line:
+            row_label = "f'(x)"
+            line = line.replace('f\'', '').replace('f\'', '')
+        elif 'f(' in line:
+            row_label = "f(x)"
+            line = line.replace('f(', '').replace(')', '')
+        else:
+            row_label = ""
+
+        # Nettoyer et extraire les cellules
+        cells = line.strip().split()
+        if row_label:
+            cells = [row_label] + cells
+
+        data_rows.append(cells)
+
+    # Construire le HTML
+    html = ['<div class="table-container variation-table"><table>']
+
+    # En-têtes
+    if headers:
+        html.append('<thead><tr>')
+        html.append('<th>x</th>')  # Première cellule vide ou "x"
+        for header in headers:
+            html.append(f'<th>{header}</th>')
+        html.append('</tr></thead>')
+
+    # Corps
+    if data_rows:
+        html.append('<tbody>')
+        for row in data_rows:
+            html.append('<tr>')
+            for i, cell in enumerate(row):
+                # Nettoyer la cellule
+                cell = cell.strip()
+
+                # Convertir les symboles LaTeX
+                if cell == '\\land' or cell == '∧':
+                    cell = '↗'
+                elif cell == '\\lor' or cell == '∨':
+                    cell = '↘'
+                elif cell == '||' or cell == '|':
+                    cell = '<div class="asymptote">||</div>'
+
+                # Style spécial pour la première colonne
+                if i == 0 and (cell == "f'(x)" or cell == "f(x)"):
+                    html.append(f'<td class="function-label">{cell}</td>')
+                else:
+                    html.append(f'<td>{cell}</td>')
+            html.append('</tr>')
+        html.append('</tbody>')
+
+    html.append('</table></div>')
+
+    return ''.join(html)
+
+
 def generate_corrige_html(corrige_text):
     """Transforme le corrigé brut en HTML stylisé en PRÉSERVANT les tableaux déjà formatés."""
     if not corrige_text:
@@ -1837,7 +1979,12 @@ def generate_corrige_html(corrige_text):
     print("🔧 Génération HTML - DÉBUT")
     print(f"   Longueur texte: {len(corrige_text)} caractères")
 
+    # ÉTAPE CRITIQUE : Convertir les tableaux LaTeX en HTML
+    print("🔄 Conversion des tableaux LaTeX en HTML...")
+    corrige_text = detect_and_convert_latex_table_to_html(corrige_text)
+
     # DÉTECTION DES TABLEAUX DÉJÀ FORMATÉS EN HTML
+    import re
 
     # Pattern pour détecter les tableaux HTML complets
     table_pattern = r'(<table\b[^>]*>.*?</table>)'
@@ -2310,51 +2457,57 @@ def tracer_graphique(graphique_dict, output_name):
 DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
 géographie...bref, tu es un professeur de l'enseignement secondaire.
 
-RÈGLES ABSOLUES POUR LES TABLEAUX :
+TOUTE RÈGLE ABSOLUE - TABLEAUX DE VARIATION :
 
-1. ✅ TOUS les tableaux doivent être en HTML COMPLET, pas en markdown !
-2. ✅ TOUS les tableaux DOIVENT avoir des bordures visibles !
+🚨 JAMAIS, JAMAIS utiliser LaTeX pour les tableaux de variation !
+🚨 TOUJOURS utiliser du HTML avec balises <table> complètes !
 
-3. ✅ Pour les tableaux de variation : OBLIGATOIREMENT avec la classe "variation-table"
-   <table class="variation-table">
-   <thead>
-   <tr>
-     <th>x</th>
-     <th>-∞</th>
-     <th>-1</th>
-     <th>1</th>
-     <th>3</th>
-     <th>+∞</th>
-   </tr>
-   </thead>
-   <tbody>
-   <tr>
-     <td>f'(x)</td>
-     <td>+</td>
-     <td>0</td>
-     <td>||</td>
-     <td>-</td>
-     <td>0</td>
-     <td>+</td>
-   </tr>
-   <tr>
-     <td>f(x)</td>
-     <td>-∞</td>
-     <td>↗</td>
-     <td>4</td>
-     <td>||</td>
-     <td>-∞</td>
-     <td>↘</td>
-     <td>4</td>
-     <td>-∞</td>
-   </tr>
-   </tbody>
-   </table>
+EXEMPLE INTERDIT (NE JAMAIS FAIRE) :
+\[ x - \infty - 1 1 3 + \infty \]
+\[ f'(x) + 0 - || - 0 + \]
+\[ f(x) - \infty \land -4 \lor -\infty | + \infty \lor 4 \land + \infty \]
 
-4. ✅ IMPORTANT : Toutes les cellules doivent avoir du contenu
-   - Pas de cellules vides
-   - Les bordures seront ajoutées par le CSS
+EXEMPLE OBLIGATOIRE (TOUJOURS FAIRE) :
+<table class="variation-table">
+<thead>
+<tr>
+<th>x</th>
+<th>-∞</th>
+<th>-1</th>
+<th>1</th>
+<th>3</th>
+<th>+∞</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>f'(x)</td>
+<td>+</td>
+<td>0</td>
+<td>||</td>
+<td>-</td>
+<td>0</td>
+<td>+</td>
+</tr>
+<tr>
+<td>f(x)</td>
+<td>-∞</td>
+<td>↗</td>
+<td>-4</td>
+<td>||</td>
+<td>↘</td>
+<td>4</td>
+<td>↗</td>
+</tr>
+</tbody>
+</table>
 
+⚠️ ATTENTION : Les flèches doivent être les caractères Unicode :
+- ↗ (U+2197) pour croissante
+- ↘ (U+2198) pour décroissante
+- → (U+2192) pour horizontale si besoin
+
+⚠️ Ne JAMAIS utiliser \land, \lor, | pour les flèches !
 
  **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
 
