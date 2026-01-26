@@ -1838,8 +1838,6 @@ def generate_corrige_html(corrige_text):
     print(f"   Longueur texte: {len(corrige_text)} caractères")
 
     # DÉTECTION DES TABLEAUX DÉJÀ FORMATÉS EN HTML
-    # Chercher les blocs HTML complets <table>...</table>
-    import re
 
     # Pattern pour détecter les tableaux HTML complets
     table_pattern = r'(<table\b[^>]*>.*?</table>)'
@@ -1856,6 +1854,12 @@ def generate_corrige_html(corrige_text):
 
         # Le tableau HTML
         table_html = match.group(1)
+
+        # AJOUT CRITIQUE : Détecter si c'est un tableau de variation et ajouter la classe
+        if 'f(' in table_html or '↗' in table_html or '↘' in table_html:
+            # C'est un tableau de variation, on ajoute la classe
+            table_html = table_html.replace('<table', '<table class="variation-table"')
+
         parts.append(('table', table_html))
         last_end = match.end()
 
@@ -1876,7 +1880,12 @@ def generate_corrige_html(corrige_text):
         if part_type == 'table':
             # TABLEAU HTML - NE RIEN FAIRE, juste l'encapsuler
             print(f"   📊 Tableau HTML préservé: {len(content)} caractères")
-            html_output.append(f'<div class="table-container">{content}</div>')
+
+            # AJOUT : Vérifier si c'est déjà un variation-table
+            if 'class="variation-table"' in content or 'class=\'variation-table\'' in content:
+                html_output.append(f'<div class="table-container variation-table">{content}</div>')
+            else:
+                html_output.append(f'<div class="table-container">{content}</div>')
 
         else:
             # TEXTE NORMAL - le traiter comme avant
@@ -2304,24 +2313,17 @@ géographie...bref, tu es un professeur de l'enseignement secondaire.
 RÈGLES ABSOLUES POUR LES TABLEAUX :
 
 1. ✅ TOUS les tableaux doivent être en HTML COMPLET, pas en markdown !
-2. ✅ Format : 
-   <table>
-   <thead>
-   <tr><th>Colonne1</th><th>Colonne2</th></tr>
-   </thead>
-   <tbody>
-   <tr><td>Donnée1</td><td>Donnée2</td></tr>
-   </tbody>
-   </table>
+2. ✅ TOUS les tableaux DOIVENT avoir des bordures visibles !
 
-3. ✅ Pour les tableaux de variation :
-   <table>
+3. ✅ Pour les tableaux de variation : OBLIGATOIREMENT avec la classe "variation-table"
+   <table class="variation-table">
    <thead>
    <tr>
      <th>x</th>
      <th>-∞</th>
-     <th>x₁</th>
-     <th>x₂</th>
+     <th>-1</th>
+     <th>1</th>
+     <th>3</th>
      <th>+∞</th>
    </tr>
    </thead>
@@ -2330,107 +2332,31 @@ RÈGLES ABSOLUES POUR LES TABLEAUX :
      <td>f'(x)</td>
      <td>+</td>
      <td>0</td>
+     <td>||</td>
      <td>-</td>
-     <td>+</td>
-   </tr>
-   <tr>
-     <td>f(x)</td>
-     <td>↗</td>
-     <td>max</td>
-     <td>↘</td>
-     <td>↗</td>
-   </tr>
-   </tbody>
-   </table>
-
-4. ✅ Pour les tableaux de signes :
-   <table class="sign-table">
-   <thead>
-   <tr>
-     <th>x</th>
-     <th>-∞</th>
-     <th>racine</th>
-     <th>+∞</th>
-   </tr>
-   </thead>
-   <tbody>
-   <tr>
-     <td>f(x)</td>
-     <td>+</td>
      <td>0</td>
-     <td>-</td>
+     <td>+</td>
+   </tr>
+   <tr>
+     <td>f(x)</td>
+     <td>-∞</td>
+     <td>↗</td>
+     <td>4</td>
+     <td>||</td>
+     <td>-∞</td>
+     <td>↘</td>
+     <td>4</td>
+     <td>-∞</td>
    </tr>
    </tbody>
    </table>
 
-EXEMPLES CORRECTS :
-
---- TABLEAU STATISTIQUE ---
-<table>
-<thead>
-<tr>
-<th>Notes</th>
-<th>[0,20[</th>
-<th>[20,40[</th>
-<th>[40,60[</th>
-<th>[60,80[</th>
-<th>[80,100]</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Effectifs</td>
-<td>4</td>
-<td>6</td>
-<td>25</td>
-<td>5</td>
-<td>10</td>
-</tr>
-</tbody>
-</table>
-
---- TABLEAU DE VARIATION ---
-<table class="variation-table">
-<thead>
-<tr>
-<th>x</th>
-<th>-∞</th>
-<th>-1</th>
-<th>3</th>
-<th>+∞</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>f'(x)</td>
-<td>+</td>
-<td>0</td>
-<td>-</td>
-<td>0</td>
-</tr>
-<tr>
-<td>f(x)</td>
-<td>↗</td>
-<td>4</td>
-<td>↘</td>
-<td>-2</td>
-</tr>
-</tbody>
-</table>
-
-NE JAMAIS UTILISER :
-- ❌ Markdown (| --- | --- |)
-- ❌ Pipes simples
-- ❌ Séparateurs incomplets
-
-TOUJOURS UTILISER :
-- ✅ Balises HTML complètes
-- ✅ <thead> pour les en-têtes
-- ✅ <tbody> pour les données
-- ✅ Classes CSS pour le style
+4. ✅ IMPORTANT : Toutes les cellules doivent avoir du contenu
+   - Pas de cellules vides
+   - Les bordures seront ajoutées par le CSS
 
 
-🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
+ **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
 
 RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
 1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
