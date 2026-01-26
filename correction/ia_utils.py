@@ -1080,6 +1080,106 @@ def detect_and_format_math_expressions(text):
     return text
 
 
+def format_html_table(table_text):
+    """
+    Convertit un tableau HTML (même mal formaté) en HTML propre.
+    """
+    print(f"🌐 Formatage tableau HTML: {len(table_text)} caractères")
+    print(f"   Texte HTML brut: {table_text[:200]}...")
+
+    # Nettoyer le HTML
+    html_text = table_text.strip()
+
+    # 1. CAS SPÉCIAL: HTML mal formé sans balises fermantes
+    # Exemple: "<table>Notes[0,20[[20,40[[40,60[[60,80[[80,100[Effectifs4625510</table>"
+    if '<table>' in html_text.lower() and '</table>' in html_text.lower():
+        # Extraire le contenu entre <table> et </table>
+        start = html_text.lower().find('<table>')
+        end = html_text.lower().find('</table>') + len('</table>')
+
+        if start != -1 and end != -1:
+            table_html = html_text[start:end]
+            print(f"   Tableau HTML extrait: {table_html[:150]}...")
+
+            # Si le HTML est valide, le retourner tel quel
+            if '<tr>' in table_html or '<td>' in table_html:
+                return f'<div class="table-container">{table_html}</div>'
+
+    # 2. CAS: HTML très mal formaté (comme dans ton exemple)
+    # "<table>Notes[0,20[[20,40[[40,60[[60,80[[80,100[Effectifs4625510</table>"
+    # On va essayer de le parser manuellement
+
+    # Nettoyer les balises
+    html_text = html_text.replace('<table>', '').replace('</table>', '').replace('<TABLE>', '').replace('</TABLE>', '')
+    html_text = html_text.strip()
+
+    print(f"   Contenu nettoyé: {html_text[:150]}...")
+
+    # Essayer de détecter la structure
+    # Exemple: "Notes[0,20[[20,40[[40,60[[60,80[[80,100[Effectifs4625510"
+    # C'est probablement: En-tête: Notes, puis données: Effectifs
+
+    # Chercher des patterns
+    # Pattern 1: "[0,20[", "[20,40[", etc.
+    intervals = re.findall(r'\[[^]]+\]', html_text)
+
+    # Pattern 2: Chiffres consécutifs (effectifs)
+    numbers = re.findall(r'\d+', html_text)
+
+    print(f"   Intervalles détectés: {intervals}")
+    print(f"   Nombres détectés: {numbers}")
+
+    # Si on a des intervalles et des nombres, construire un tableau
+    if intervals and numbers and len(numbers) >= len(intervals):
+        # Construire un tableau HTML
+        html = ['<div class="table-container"><table>']
+
+        # En-tête
+        html.append('<thead><tr>')
+        html.append('<th>Notes</th>')
+        for interval in intervals:
+            html.append(f'<th>{interval}</th>')
+        html.append('</tr></thead>')
+
+        # Corps
+        html.append('<tbody><tr>')
+        html.append('<td>Effectifs</td>')
+        for i in range(len(intervals)):
+            if i < len(numbers):
+                html.append(f'<td>{numbers[i]}</td>')
+        html.append('</tr></tbody></table></div>')
+
+        return ''.join(html)
+
+    # 3. CAS: HTML simple mais mal formaté
+    # Essayer d'ajouter des balises manquantes
+    if '[' in html_text and ']' in html_text:
+        # C'est probablement un tableau de données
+        # Exemple: "[0,20[ [20,40[ [40,60[ ..."
+        html = ['<div class="table-container"><table><tbody>']
+
+        # Diviser par les doubles crochets
+        parts = re.split(r'\]\s*\[', html_text)
+        parts = [p + ']' if not p.endswith(']') else p for p in parts]
+
+        for part in parts:
+            if part.strip():
+                html.append('<tr>')
+                # Essayer de séparer les cellules
+                cells = re.split(r'[,\[\]]+', part)
+                cells = [c for c in cells if c.strip()]
+                for cell in cells:
+                    html.append(f'<td>{cell.strip()}</td>')
+                html.append('</tr>')
+
+        html.append('</tbody></table></div>')
+        return ''.join(html)
+
+    # 4. CAS: Texte brut qu'on va mettre dans un tableau simple
+    print("⚠️ Impossible de parser le HTML, tableau simple de secours")
+    return f'<div class="table-container"><table><tr><td>{html_text}</td></tr></table></div>'
+
+
 
 def format_table_markdown(table_text):
     """
@@ -1630,6 +1730,7 @@ def format_complex_table(lines, separator_indices):
     print(f"✅ Tableau complexe formaté: {len(result)} caractères HTML")
     return result
 
+
 def detect_table(lines, start_idx):
     """
     Détecte si un tableau commence à l'index donné.
@@ -1637,12 +1738,21 @@ def detect_table(lines, start_idx):
     """
     current_line = lines[start_idx].strip()
 
-    # CRITÈRE ÉLARGI : Une ligne avec au moins 2 pipes OU une ligne de séparation
-    if '|' not in current_line and not re.match(r'^[\|\s:\-]+$', current_line):
+    # CRITÈRE ÉLARGI :
+    # 1. Tableau markdown (pipes)
+    # 2. Tableau HTML (balises <table>)
+    # 3. Ligne de séparation
+    has_pipes = '|' in current_line
+    has_table_tag = '<table>' in current_line.lower() or '</table>' in current_line.lower()
+    is_separator = re.match(r'^[\|\s:\-]+$', current_line)
+
+    if not (has_pipes or has_table_tag or is_separator):
         return False, start_idx, []
 
     # Pour debug
     print(f"🔍 Détection tableau à ligne {start_idx}: '{current_line[:50]}...'")
+    if has_table_tag:
+        print(f"   ⚡ BALISE HTML DÉTECTÉE: {current_line[:100]}")
 
     table_lines = []
     i = start_idx
@@ -1654,20 +1764,29 @@ def detect_table(lines, start_idx):
         # CRITÈRE ÉLARGI : Accepter plus de types de lignes comme faisant partie du tableau
         is_table_line = False
 
-        # 1. Ligne avec des pipes (même peu)
+        # 1. Ligne avec des pipes (markdown)
         if '|' in line:
             is_table_line = True
 
-        # 2. Ligne de séparation markdown
+        # 2. Ligne avec balise HTML table
+        elif '<table>' in line.lower() or '</table>' in line.lower() or '<td>' in line.lower() or '<tr>' in line.lower():
+            is_table_line = True
+            print(f"   ⚡ Ligne {i}: Balise HTML détectée")
+
+        # 3. Ligne de séparation markdown
         elif re.match(r'^[\|\s:\-]+$', line):
             is_table_line = True
 
-        # 3. Ligne vide ENTRE les lignes de tableau (tolérance)
+        # 4. Ligne vide ENTRE les lignes de tableau (tolérance)
         elif not line and len(table_lines) > 0:
             # Vérifier si la ligne suivante continue le tableau
             if i + 1 < len(lines):
                 next_line = lines[i + 1].strip()
-                if '|' in next_line or re.match(r'^[\|\s:\-]+$', next_line):
+                has_next_pipes = '|' in next_line
+                has_next_html = any(tag in next_line.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
+                is_next_separator = re.match(r'^[\|\s:\-]+$', next_line)
+
+                if has_next_pipes or has_next_html or is_next_separator:
                     is_table_line = True
 
         if is_table_line:
@@ -1675,11 +1794,18 @@ def detect_table(lines, start_idx):
             i += 1
         else:
             # Vérifier si on a assez de lignes pour former un tableau
-            if len(table_lines) >= 2:
-                # Compter les pipes valides
-                valid_table_lines = [l for l in table_lines if '|' in l or re.match(r'^[\|\s:\-]+$', l)]
-                if len(valid_table_lines) >= 2:
-                    print(f"✅ Tableau détecté: {len(table_lines)} lignes")
+            if len(table_lines) >= 1:  # Réduit à 1 pour HTML
+                # Compter les lignes valides
+                valid_table_lines = []
+                for l in table_lines:
+                    has_p = '|' in l
+                    has_html = any(tag in l.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
+                    is_sep = re.match(r'^[\|\s:\-]+$', l)
+                    if has_p or has_html or is_sep:
+                        valid_table_lines.append(l)
+
+                if len(valid_table_lines) >= 1:  # Réduit à 1 pour HTML
+                    print(f"✅ Tableau détecté: {len(table_lines)} lignes (HTML: {has_table_tag})")
                     return True, i, table_lines
                 else:
                     return False, start_idx, []
@@ -1687,9 +1813,16 @@ def detect_table(lines, start_idx):
                 return False, start_idx, []
 
     # Fin de fichier atteinte
-    if len(table_lines) >= 2:
-        valid_table_lines = [l for l in table_lines if '|' in l or re.match(r'^[\|\s:\-]+$', l)]
-        if len(valid_table_lines) >= 2:
+    if len(table_lines) >= 1:
+        valid_table_lines = []
+        for l in table_lines:
+            has_p = '|' in l
+            has_html = any(tag in l.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
+            is_sep = re.match(r'^[\|\s:\-]+$', l)
+            if has_p or has_html or is_sep:
+                valid_table_lines.append(l)
+
+        if len(valid_table_lines) >= 1:
             print(f"✅ Tableau détecté (fin fichier): {len(table_lines)} lignes")
             return True, i, table_lines
 
@@ -1757,7 +1890,19 @@ def generate_corrige_html(corrige_text):
         # Détection améliorée des tableaux
         is_table, table_end_idx, table_lines = detect_table(lines, i)
         if is_table:
-            html_table = format_table_markdown('\n'.join(table_lines))
+            print(f"📋 Tableau détecté lignes {i}-{table_end_idx - 1}, {len(table_lines)} lignes")
+
+            # Vérifier si c'est un tableau HTML
+            table_text = '\n'.join(table_lines)
+            is_html_table = any(tag in table_text.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
+
+            if is_html_table:
+                print("🌐 Tableau HTML détecté, traitement spécial...")
+                html_table = format_html_table(table_text)
+            else:
+                print("📊 Tableau markdown détecté...")
+                html_table = format_table_markdown(table_text)
+
             html_output.append(html_table)
             i = table_end_idx
             continue
