@@ -1828,29 +1828,79 @@ def detect_table(lines, start_idx):
 
     return False, start_idx, []
 
-def generate_corrige_html(corrige_text):
-    """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
-    if settings.DEBUG:
-        debug_table_detection(corrige_text)
 
+def generate_corrige_html(corrige_text):
+    """Transforme le corrigé brut en HTML stylisé en PRÉSERVANT les tableaux déjà formatés."""
     if not corrige_text:
         return ""
 
-    # Formatage des expressions mathématiques (Latex) et tableaux
-    lines = corrige_text.strip().split('\n')
+    print("🔧 Génération HTML - DÉBUT")
+    print(f"   Longueur texte: {len(corrige_text)} caractères")
 
-    # Pattern pour détecter les débuts d'exercice/partie
-    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
-                                  re.IGNORECASE)
+    # DÉTECTION DES TABLEAUX DÉJÀ FORMATÉS EN HTML
+    # Chercher les blocs HTML complets <table>...</table>
+    import re
+
+    # Pattern pour détecter les tableaux HTML complets
+    table_pattern = r'(<table\b[^>]*>.*?</table>)'
+
+    # Diviser le texte en blocs : tableaux HTML vs texte normal
+    parts = []
+    last_end = 0
+
+    for match in re.finditer(table_pattern, corrige_text, re.DOTALL | re.IGNORECASE):
+        # Texte avant le tableau
+        if match.start() > last_end:
+            text_part = corrige_text[last_end:match.start()]
+            parts.append(('text', text_part))
+
+        # Le tableau HTML
+        table_html = match.group(1)
+        parts.append(('table', table_html))
+        last_end = match.end()
+
+    # Dernière partie
+    if last_end < len(corrige_text):
+        parts.append(('text', corrige_text[last_end:]))
+
+    print(f"   {len(parts)} parties détectées")
+
+    # Traitement séparé
     html_output = []
-    i = 0
 
     # Branding CIS en haut
     html_output.append(
         '<div class="cis-message"><strong>SUJET CORRIGÉ PAR L\'APPLICATION CIS, DISPO SUR PLAYSTORE</strong></div>')
 
-    # Pour gérer la séparation en blocs
+    for part_type, content in parts:
+        if part_type == 'table':
+            # TABLEAU HTML - NE RIEN FAIRE, juste l'encapsuler
+            print(f"   📊 Tableau HTML préservé: {len(content)} caractères")
+            html_output.append(f'<div class="table-container">{content}</div>')
+
+        else:
+            # TEXTE NORMAL - le traiter comme avant
+            html_output.append(process_text_part(content))
+
+    result = "".join(html_output)
+    print(f"✅ Génération HTML terminée: {len(result)} caractères")
+    return mark_safe(result)
+
+
+def process_text_part(text):
+    """Traite une partie de texte (sans tableaux HTML)."""
+    if not text.strip():
+        return ""
+
+    lines = text.strip().split('\n')
+    html_lines = []
+
+    # Pattern pour détecter les débuts d'exercice/partie
+    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
+                                  re.IGNORECASE)
+
     in_bloc_exercice = False
+    i = 0
 
     while i < len(lines):
         line = lines[i].strip()
@@ -1860,74 +1910,59 @@ def generate_corrige_html(corrige_text):
 
         # Début d'un nouvel exercice/partie
         if pattern_exercice.match(line):
-            # Ferme le bloc précédent s'il y en avait un
             if in_bloc_exercice:
-                html_output.append('</div>')
-            # Ouvre un nouveau bloc, titre en gros
-            html_output.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
+                html_lines.append('</div>')
+            html_lines.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
             in_bloc_exercice = True
             i += 1
             continue
 
-        # Sous-titre question principale (Question 1, 2, etc.)
-        if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
-            html_output.append(f'<h2 class="titre-question">{line}</h2>')
-            i += 1
-            continue
-
-        # Sous-titre secondaire (1., 2., etc.)
-        if re.match(r'^\d+\.', line):
-            html_output.append(f'<h3 class="titre-question">{line}</h3>')
-            i += 1
-            continue
-
-        # Sous-question (a), b), etc.)
-        if re.match(r'^[a-z]\)', line):
-            html_output.append(f'<p><strong>{line}</strong></p>')
-            i += 1
-            continue
-
-        # Détection améliorée des tableaux
+        # Détection des tableaux markdown DANS LE TEXTE SEULEMENT
         is_table, table_end_idx, table_lines = detect_table(lines, i)
         if is_table:
-            print(f"📋 Tableau détecté lignes {i}-{table_end_idx - 1}, {len(table_lines)} lignes")
-
-            # Vérifier si c'est un tableau HTML
-            table_text = '\n'.join(table_lines)
-            is_html_table = any(tag in table_text.lower() for tag in ['<table>', '</table>', '<td>', '<tr>'])
-
-            if is_html_table:
-                print("🌐 Tableau HTML détecté, traitement spécial...")
-                html_table = format_html_table(table_text)
-            else:
-                print("📊 Tableau markdown détecté...")
-                html_table = format_table_markdown(table_text)
-
-            html_output.append(html_table)
+            print(f"   📋 Tableau markdown détecté dans texte")
+            html_table = format_table_markdown('\n'.join(table_lines))
+            html_lines.append(html_table)
             i = table_end_idx
             continue
 
-        # Listes
-        if line.startswith('•') or line.startswith('-'):
-            html_output.append(f'<p>{line}</p>')
-            i += 1
-            continue
-
-        # Formules LaTeX
-        if '\\(' in line or '\\[' in line:
-            html_output.append(f'<p class="reponse-question mathjax">{line}</p>')
-            i += 1
-            continue
-
-        # Cas général : paragraphe de réponse ou explication
-        html_output.append(f'<p class="reponse-question">{line}</p>')
+        # Traitement normal des lignes de texte
+        html_lines.append(format_text_line(line))
         i += 1
 
-    # Ferme le dernier bloc exercice si ouvert
     if in_bloc_exercice:
-        html_output.append('</div>')
+        html_lines.append('</div>')
 
-    return mark_safe("".join(html_output))
+    return "".join(html_lines)
+
+
+def format_text_line(line):
+    """Formate une ligne de texte simple."""
+    if not line:
+        return ""
+
+    # Sous-titre question principale
+    if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
+        return f'<h2 class="titre-question">{line}</h2>'
+
+    # Sous-titre secondaire
+    if re.match(r'^\d+\.', line):
+        return f'<h3 class="titre-question">{line}</h3>'
+
+    # Sous-question
+    if re.match(r'^[a-z]\)', line):
+        return f'<p><strong>{line}</strong></p>'
+
+    # Formules LaTeX
+    if '\\(' in line or '\\[' in line:
+        return f'<p class="reponse-question mathjax">{line}</p>'
+
+    # Listes
+    if line.startswith('•') or line.startswith('-'):
+        return f'<p>{line}</p>'
+
+    # Paragraphe normal
+    return f'<p class="reponse-question">{line}</p>'
 
 
 # ============== EXTRACTION TEXTE/FICHIER ==============
@@ -2265,6 +2300,135 @@ def tracer_graphique(graphique_dict, output_name):
 # PROMPT SYSTÈME AMÉLIORÉ AVEC VISION SCIENTIFIQUE
 DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
 géographie...bref, tu es un professeur de l'enseignement secondaire.
+
+RÈGLES ABSOLUES POUR LES TABLEAUX :
+
+1. ✅ TOUS les tableaux doivent être en HTML COMPLET, pas en markdown !
+2. ✅ Format : 
+   <table>
+   <thead>
+   <tr><th>Colonne1</th><th>Colonne2</th></tr>
+   </thead>
+   <tbody>
+   <tr><td>Donnée1</td><td>Donnée2</td></tr>
+   </tbody>
+   </table>
+
+3. ✅ Pour les tableaux de variation :
+   <table>
+   <thead>
+   <tr>
+     <th>x</th>
+     <th>-∞</th>
+     <th>x₁</th>
+     <th>x₂</th>
+     <th>+∞</th>
+   </tr>
+   </thead>
+   <tbody>
+   <tr>
+     <td>f'(x)</td>
+     <td>+</td>
+     <td>0</td>
+     <td>-</td>
+     <td>+</td>
+   </tr>
+   <tr>
+     <td>f(x)</td>
+     <td>↗</td>
+     <td>max</td>
+     <td>↘</td>
+     <td>↗</td>
+   </tr>
+   </tbody>
+   </table>
+
+4. ✅ Pour les tableaux de signes :
+   <table class="sign-table">
+   <thead>
+   <tr>
+     <th>x</th>
+     <th>-∞</th>
+     <th>racine</th>
+     <th>+∞</th>
+   </tr>
+   </thead>
+   <tbody>
+   <tr>
+     <td>f(x)</td>
+     <td>+</td>
+     <td>0</td>
+     <td>-</td>
+   </tr>
+   </tbody>
+   </table>
+
+EXEMPLES CORRECTS :
+
+--- TABLEAU STATISTIQUE ---
+<table>
+<thead>
+<tr>
+<th>Notes</th>
+<th>[0,20[</th>
+<th>[20,40[</th>
+<th>[40,60[</th>
+<th>[60,80[</th>
+<th>[80,100]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Effectifs</td>
+<td>4</td>
+<td>6</td>
+<td>25</td>
+<td>5</td>
+<td>10</td>
+</tr>
+</tbody>
+</table>
+
+--- TABLEAU DE VARIATION ---
+<table class="variation-table">
+<thead>
+<tr>
+<th>x</th>
+<th>-∞</th>
+<th>-1</th>
+<th>3</th>
+<th>+∞</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>f'(x)</td>
+<td>+</td>
+<td>0</td>
+<td>-</td>
+<td>0</td>
+</tr>
+<tr>
+<td>f(x)</td>
+<td>↗</td>
+<td>4</td>
+<td>↘</td>
+<td>-2</td>
+</tr>
+</tbody>
+</table>
+
+NE JAMAIS UTILISER :
+- ❌ Markdown (| --- | --- |)
+- ❌ Pipes simples
+- ❌ Séparateurs incomplets
+
+TOUJOURS UTILISER :
+- ✅ Balises HTML complètes
+- ✅ <thead> pour les en-têtes
+- ✅ <tbody> pour les données
+- ✅ Classes CSS pour le style
+
 
 🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
 

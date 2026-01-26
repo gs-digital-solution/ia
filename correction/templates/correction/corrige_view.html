@@ -126,150 +126,209 @@
       vertical-align: middle;
     }
 
-    /* ========== TABLEAUX AMÉLIORÉS ========== */
+/* ========== SYSTEME UNIFIÉ POUR TOUS LES TABLEAUX ========== */
 .table-container {
     margin: 30px 0;
     overflow-x: auto;
-    border-radius: 10px;
-    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    border: 2px solid #e0e7ff;
     background: white;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+    box-shadow: 0 4px 20px rgba(32, 128, 96, 0.1);
     position: relative;
 }
 
 .table-container::before {
-    content: "📊";
+    content: "";
     position: absolute;
-    top: -12px;
-    left: 15px;
-    background: white;
-    padding: 0 8px;
-    font-size: 0.9em;
-    color: #208060;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #208060, #2b8074);
+    border-radius: 12px 12px 0 0;
 }
 
-table {
+/* TOUS les tableaux (HTML natif ET générés) */
+.table-container table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.95em;
-    min-width: 100%;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 15px;
+    min-width: 100%;
 }
 
-table thead {
-    background: linear-gradient(135deg, #208060, #2b8074);
+/* En-têtes unifiés */
+.table-container thead {
+    background: linear-gradient(135deg, #f0f7f4, #e8f4f1);
 }
 
-table th {
-    color: white;
-    padding: 16px 20px;
-    text-align: left;
-    font-weight: 600;
-    border-bottom: 3px solid #1a6b55;
-    border-right: 1px solid rgba(255,255,255,0.2);
+.table-container th {
+    color: #208060;
+    padding: 18px 15px;
+    text-align: center;
+    font-weight: 700;
+    border-bottom: 3px solid #208060;
+    border-right: 1px solid #e0e7ff;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     font-size: 0.95em;
 }
 
-table th:last-child {
+.table-container th:first-child {
+    text-align: left;
+    padding-left: 20px;
+}
+
+.table-container th:last-child {
     border-right: none;
 }
 
-table td {
-    padding: 14px 20px;
-    border-bottom: 1px solid #f0f0f0;
-    border-right: 1px solid #f0f0f0;
+/* Cellules unifiées */
+.table-container td {
+    padding: 16px 15px;
+    border-bottom: 1px solid #f0f7ff;
+    border-right: 1px solid #f0f7ff;
+    text-align: center;
+    vertical-align: middle;
     line-height: 1.5;
 }
 
-table td:last-child {
+.table-container td:first-child {
+    text-align: left;
+    padding-left: 20px;
+    font-weight: 600;
+    background: #f8fcfb;
+}
+
+.table-container td:last-child {
     border-right: none;
 }
 
-table tbody tr {
-    transition: background-color 0.2s ease;
-}
-
-table tbody tr:hover {
+/* Lignes alternées pour lisibilité */
+.table-container tbody tr:nth-child(even) {
     background-color: #f8fcfb;
 }
 
-table tbody tr:nth-child(even) {
-    background-color: #f9f9f9;
+.table-container tbody tr:hover {
+    background-color: #e8f4f1;
+    transition: background-color 0.2s ease;
 }
 
-table tbody tr:nth-child(even):hover {
-    background-color: #f0f8f5;
+/* Dernière ligne */
+.table-container tbody tr:last-child td {
+    border-bottom: 2px solid #e0e7ff;
 }
 
-/* Alignements spécifiques */
-table th[style*="center"],
-table td[style*="center"] {
+/* ========== STYLES SPÉCIFIQUES ========== */
+
+/* Tableaux de variation */
+.table-container .variation-table {
+    font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.table-container .variation-table th,
+.table-container .variation-table td {
+    min-width: 70px;
     text-align: center;
 }
 
-table th[style*="right"],
-table td[style*="right"] {
-    text-align: right;
+.table-container .variation-table td:first-child {
+    font-family: 'Segoe UI', sans-serif;
+    font-weight: bold;
+    background: #e8f4f1;
 }
 
-table th[style*="left"],
-table td[style*="left"] {
-    text-align: left;
+/* Flèches de variation */
+.table-container .variation-table td:contains("↗"),
+.table-container .variation-table td:contains("↘") {
+    font-size: 1.2em;
+    font-weight: bold;
 }
 
-/* Bordure du dernier élément */
-table tbody tr:last-child td {
-    border-bottom: 2px solid #e0e0e0;
+.table-container .variation-table td:contains("↗") {
+    color: #208060;
 }
 
-/* Responsive */
+.table-container .variation-table td:contains("↘") {
+    color: #e74c3c;
+}
+
+/* Tableaux de signes */
+.table-container .sign-table th,
+.table-container .sign-table td {
+    min-width: 60px;
+}
+
+.table-container .sign-table td[style*="color:green"],
+.table-container .sign-table td:contains("+") {
+    color: #208060 !important;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.table-container .sign-table td[style*="color:red"],
+.table-container .sign-table td:contains("-") {
+    color: #e74c3c !important;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.table-container .sign-table td:contains("0") {
+    font-weight: bold;
+    color: #555 !important;
+}
+
+/* Tableaux statistiques */
+.table-container td:contains("[") {
+    font-family: 'Consolas', monospace;
+    background: #f8f9fa;
+}
+
+/* ========== RESPONSIVE ========== */
 @media (max-width: 768px) {
     .table-container {
-        margin: 20px -10px;
+        margin: 25px -15px;
         border-radius: 0;
         border-left: none;
         border-right: none;
         box-shadow: none;
     }
 
-    .table-container::before {
-        left: 10px;
-        font-size: 0.8em;
+    .table-container table {
+        font-size: 14px;
     }
 
-    table {
-        font-size: 0.85em;
+    .table-container th,
+    .table-container td {
+        padding: 14px 10px;
     }
 
-    table th,
-    table td {
-        padding: 12px 15px;
+    .table-container th:first-child,
+    .table-container td:first-child {
+        padding-left: 15px;
     }
 
-    table th {
+    .table-container th {
         font-size: 0.9em;
-        padding: 14px 15px;
-    }
-}
-
-/* Pour les petits écrans très étroits */
-@media (max-width: 480px) {
-    .table-container {
-        font-size: 0.8em;
-    }
-
-    table th,
-    table td {
-        padding: 10px 12px;
-    }
-
-    table th {
         white-space: nowrap;
     }
 }
 
+@media (max-width: 480px) {
+    .table-container {
+        font-size: 13px;
+    }
+
+    .table-container th,
+    .table-container td {
+        padding: 12px 8px;
+    }
+
+    .table-container th:first-child,
+    .table-container td:first-child {
+        padding-left: 12px;
+    }
+}
     /* GRAPHIQUES */
     .graphique-container {
       text-align: center;
@@ -448,6 +507,147 @@ table tbody tr:last-child td {
       childList: true,
       subtree: true
     });
+  </script>
+    <!-- NOUVEAU SCRIPT POUR LES TABLEAUX (AJOUTE-LE ICI) -->
+  <script>
+  // ========== AMÉLIORATION DES TABLEAUX ==========
+  document.addEventListener('DOMContentLoaded', function() {
+      console.log('🔧 Initialisation amélioration tableaux...');
+
+      // 1. Ajouter des classes CSS basées sur le contenu
+      document.querySelectorAll('.table-container').forEach(function(tableContainer, index) {
+          const table = tableContainer.querySelector('table');
+          if (!table) return;
+
+          // Détecter le type de tableau
+          const allText = table.textContent.toLowerCase();
+
+          if (allText.includes('variation') || allText.includes('↗') || allText.includes('↘')) {
+              table.classList.add('variation-table');
+              console.log(`📊 Tableau ${index + 1}: Type "variation" détecté`);
+          }
+          else if (allText.includes('signe') || (table.textContent.includes('+') && table.textContent.includes('-'))) {
+              table.classList.add('sign-table');
+              console.log(`📊 Tableau ${index + 1}: Type "signe" détecté`);
+          }
+
+          // 2. Indicateur visuel pour défilement horizontal
+          if (table.scrollWidth > tableContainer.clientWidth) {
+              const scrollHint = document.createElement('div');
+              scrollHint.className = 'scroll-hint';
+              scrollHint.innerHTML = '↔ Défilement disponible';
+              scrollHint.style.cssText = `
+                  position: absolute;
+                  top: -25px;
+                  right: 10px;
+                  background: #208060;
+                  color: white;
+                  padding: 3px 10px;
+                  border-radius: 12px;
+                  font-size: 11px;
+                  font-weight: bold;
+              `;
+              tableContainer.style.position = 'relative';
+              tableContainer.appendChild(scrollHint);
+          }
+
+          // 3. Améliorer les flèches de variation
+          const arrows = table.querySelectorAll('td');
+          arrows.forEach(function(td) {
+              const text = td.textContent.trim();
+              if (text === '↗') {
+                  td.style.color = '#208060';
+                  td.style.fontWeight = 'bold';
+                  td.style.fontSize = '1.2em';
+                  td.title = 'Croissante';
+              }
+              else if (text === '↘') {
+                  td.style.color = '#e74c3c';
+                  td.style.fontWeight = 'bold';
+                  td.style.fontSize = '1.2em';
+                  td.title = 'Décroissante';
+              }
+              else if (text === '+' || text === 'positif') {
+                  td.style.color = '#208060';
+                  td.style.fontWeight = 'bold';
+              }
+              else if (text === '-' || text === 'négatif') {
+                  td.style.color = '#e74c3c';
+                  td.style.fontWeight = 'bold';
+              }
+          });
+      });
+
+      // 4. Ajouter le CSS dynamique pour les tableaux
+      const dynamicStyles = `
+          /* Styles dynamiques pour les tableaux */
+          .table-container.dragging {
+              cursor: grabbing !important;
+          }
+
+          .scroll-hint {
+              animation: pulse 2s infinite;
+          }
+
+          @keyframes pulse {
+              0% { opacity: 0.7; }
+              50% { opacity: 1; }
+              100% { opacity: 0.7; }
+          }
+
+          /* Surligner les cellules au survol */
+          .table-container td:hover {
+              background-color: #e8f4f1 !important;
+              transition: background-color 0.2s;
+          }
+
+          /* Style pour les infinis */
+          .table-container th:contains("∞"),
+          .table-container td:contains("∞") {
+              font-style: italic;
+              font-weight: bold;
+          }
+      `;
+
+      const styleSheet = document.createElement('style');
+      styleSheet.textContent = dynamicStyles;
+      document.head.appendChild(styleSheet);
+
+      console.log('✅ Amélioration tableaux terminée');
+  });
+
+  // 5. Gestion du défilement horizontal au glisser
+  let isDragging = false;
+  let startX, scrollLeft;
+
+  document.addEventListener('mousedown', function(e) {
+      const tableContainer = e.target.closest('.table-container');
+      if (tableContainer && tableContainer.scrollWidth > tableContainer.clientWidth) {
+          isDragging = true;
+          tableContainer.classList.add('dragging');
+          startX = e.pageX - tableContainer.offsetLeft;
+          scrollLeft = tableContainer.scrollLeft;
+      }
+  });
+
+  document.addEventListener('mousemove', function(e) {
+      if (!isDragging) return;
+      e.preventDefault();
+
+      const tableContainer = e.target.closest('.table-container');
+      if (!tableContainer) return;
+
+      const x = e.pageX - tableContainer.offsetLeft;
+      const walk = (x - startX) * 2;
+      tableContainer.scrollLeft = scrollLeft - walk;
+  });
+
+  document.addEventListener('mouseup', function() {
+      isDragging = false;
+      document.querySelectorAll('.table-container').forEach(function(container) {
+          container.classList.remove('dragging');
+      });
+  });
   </script>
 
 </body>
