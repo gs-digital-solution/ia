@@ -1134,8 +1134,60 @@ def format_table_markdown(table_text):
     return ''.join(html_table)
 
 
+def format_table_statistique(table_data, title=None):
+    """
+    Formate un tableau statistique en HTML à partir de données structurées.
+
+    Args:
+        table_data: dict ou list avec les données du tableau
+        title: titre optionnel du tableau
+
+    Returns:
+        str: HTML formaté du tableau
+    """
+    if not table_data:
+        return ""
+
+    # Si c'est un dict avec des listes
+    if isinstance(table_data, dict):
+        headers = list(table_data.keys())
+        # Trouver la longueur maximale des listes
+        max_len = max(len(v) if isinstance(v, list) else 1 for v in table_data.values())
+
+        html = ['<div class="stat-table-container">']
+        if title:
+            html.append(f'<h4 class="table-title">{title}</h4>')
+
+        html.append('<table class="stat-table">')
+        html.append('<thead><tr>')
+        for header in headers:
+            html.append(f'<th>{header}</th>')
+        html.append('</tr></thead>')
+        html.append('<tbody>')
+
+        for i in range(max_len):
+            html.append('<tr>')
+            for header in headers:
+                value = table_data[header]
+                if isinstance(value, list) and i < len(value):
+                    cell = str(value[i])
+                elif not isinstance(value, list):
+                    cell = str(value)
+                else:
+                    cell = ""
+                html.append(f'<td>{cell}</td>')
+            html.append('</tr>')
+
+        html.append('</tbody></table></div>')
+        return "".join(html)
+
+    # Si c'est déjà du HTML ou du markdown, le renvoyer tel quel
+    return str(table_data)
+
+
 def generate_corrige_html(corrige_text):
-    """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
+    """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices,
+    titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
     if not corrige_text:
         return ""
 
@@ -1148,15 +1200,83 @@ def generate_corrige_html(corrige_text):
     html_output = []
     i = 0
 
+    # Variables d'état
+    in_bloc_exercice = False
+    in_stat_table = False
+    in_variation_block = False
+    table_lines = []
+    variation_lines = []
+
     # Branding CIS en haut
     html_output.append(
         '<div class="cis-message"><strong>SUJET CORRIGÉ PAR L\'APPLICATION CIS, DISPO SUR PLAYSTORE</strong></div>')
 
-    # Pour gérer la séparation en blocs
-    in_bloc_exercice = False
-
     while i < len(lines):
         line = lines[i].strip()
+
+        # ========== GESTION DES TABLEAUX STATISTIQUES ==========
+        # Détecter le début d'un tableau statistique
+        if line.startswith('|') and ('Classes' in line or 'Effectif' in line or 'Fréquence' in line
+                                     or 'ECC' in line or 'ECD' in line or 'Centre' in line):
+            in_stat_table = True
+            table_lines = [line]
+            i += 1
+            continue
+
+        # Collecter les lignes du tableau
+        if in_stat_table:
+            if line.startswith('|') or (line.replace('-', '').replace(':', '').strip() == ''):
+                table_lines.append(line)
+                i += 1
+                continue
+            else:
+                # Fin du tableau - le formater
+                if table_lines:
+                    html_table = format_table_markdown('\n'.join(table_lines))
+                    html_output.append('<div class="statistical-table">')
+                    html_output.append('<p class="table-caption"><strong>📊 Tableau statistique :</strong></p>')
+                    html_output.append(html_table)
+                    html_output.append('</div>')
+                in_stat_table = False
+                table_lines = []
+                # Ne pas incrémenter i, traiter cette ligne normalement
+                continue
+
+        # ========== GESTION DES DESCRIPTIONS DE VARIATIONS ==========
+        # Détecter le début d'une description de variations/signe
+        variation_keywords = ['croissant', 'décroissant', 'signe', 'variation', 'monotonie',
+                              'positive', 'négative', 's\'annule', 'minimum', 'maximum', 'extremum']
+
+        if (any(keyword in line.lower() for keyword in variation_keywords) and
+                not line.startswith('|') and
+                not line.startswith('\\') and
+                len(line) > 20):  # Éviter les très courtes lignes
+            in_variation_block = True
+            variation_lines = [line]
+            i += 1
+            continue
+
+        # Collecter les lignes de description de variations
+        if in_variation_block:
+            # Continuer tant que la ligne n'est pas vide ou ne commence pas un nouveau bloc
+            if line and not pattern_exercice.match(line) and not line.startswith('Question'):
+                variation_lines.append(line)
+                i += 1
+                continue
+            else:
+                # Fin du bloc de variations - le formater
+                if variation_lines:
+                    variation_text = ' '.join(variation_lines)
+                    html_output.append('<div class="variation-description">')
+                    html_output.append('<p class="variation-title"><strong>📈 Variations et signe :</strong></p>')
+                    html_output.append(f'<p class="variation-content">{variation_text}</p>')
+                    html_output.append('</div>')
+                in_variation_block = False
+                variation_lines = []
+                # Ne pas incrémenter i, traiter cette ligne normalement
+                continue
+
+        # ========== TRAITEMENT NORMAL DES LIGNES ==========
         if not line:
             i += 1
             continue
@@ -1196,15 +1316,17 @@ def generate_corrige_html(corrige_text):
             i += 1
             continue
 
-        # Tableaux markdown
-        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
-            table_lines = []
+        # Tableaux markdown généraux (non statistiques)
+        if line.startswith('|') and i + 1 < len(lines) and '|' in lines[i + 1]:
+            table_lines_general = []
             j = i
             while j < len(lines) and lines[j].startswith('|'):
-                table_lines.append(lines[j])
+                table_lines_general.append(lines[j])
                 j += 1
-            html_table = format_table_markdown('\n'.join(table_lines))
+            html_table = format_table_markdown('\n'.join(table_lines_general))
+            html_output.append('<div class="general-table">')
             html_output.append(html_table)
+            html_output.append('</div>')
             i = j
             continue
 
@@ -1218,12 +1340,28 @@ def generate_corrige_html(corrige_text):
         html_output.append(f'<p class="reponse-question">{line}</p>')
         i += 1
 
+    # ========== FERMETURE DES BLOCS EN COURS ==========
+    # Fermer le dernier bloc de variations si toujours ouvert
+    if in_variation_block and variation_lines:
+        variation_text = ' '.join(variation_lines)
+        html_output.append('<div class="variation-description">')
+        html_output.append('<p class="variation-title"><strong>📈 Variations et signe :</strong></p>')
+        html_output.append(f'<p class="variation-content">{variation_text}</p>')
+        html_output.append('</div>')
+
+    # Fermer le dernier tableau statistique si toujours ouvert
+    if in_stat_table and table_lines:
+        html_table = format_table_markdown('\n'.join(table_lines))
+        html_output.append('<div class="statistical-table">')
+        html_output.append('<p class="table-caption"><strong>📊 Tableau statistique :</strong></p>')
+        html_output.append(html_table)
+        html_output.append('</div>')
+
     # Ferme le dernier bloc exercice si ouvert
     if in_bloc_exercice:
         html_output.append('</div>')
 
     return mark_safe("".join(html_output))
-
 
 # ============== EXTRACTION TEXTE/FICHIER ==============
 
@@ -1791,14 +1929,47 @@ def generer_tableau(tableau_dict, output_name):
 DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
 géographie...bref, tu es un professeur de l'enseignement secondaire.
 
-🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
+🔬 **NOUVELLES CONSIGNES POUR LES TABLEAUX :**
 
-RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
-1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
-2. ✅ Extrait les DONNÉES NUMÉRIQUES (angles, masses, distances, forces, tensions)
-3. ✅ Décris les RELATIONS SPATIALES entre les éléments
-4. ✅ Explique le CONCEPT SCIENTIFIQUE illustré
+### POUR LES VARIATIONS ET SIGNE DE FONCTIONS :
+- NE JAMAIS produire de tableau de variations ou de signe
+- À la place, DÉCRIRE clairement les variations et signes par intervalles
+- Utiliser un langage naturel et pédagogique
 
+**EXEMPLE DE DESCRIPTION AU LIEU D'UN TABLEAU :**
+"La fonction f est définie sur [-2, 4]. Elle est :
+- Strictement croissante sur [-2, 1] avec f(-2)=3 et f(1)=8
+- Strictement décroissante sur [1, 4] avec f(4)=2
+Le signe de f(x) est :
+- Positif sur [-2, 3] car f(x) > 0
+- Négatif sur [3, 4] car f(x) < 0
+- S'annule en x=3 (f(3)=0)"
+
+### POUR LES TABLEAUX STATISTIQUES :
+- Toujours présenter les tableaux statistiques de façon CLAIRE et LISIBLE
+- Utiliser le format Markdown pour les tableaux avec | et -
+- Inclure TOUTES les colonnes nécessaires : classes, effectifs, fréquences, ECC, ECD, etc.
+- Ajouter une brève explication au-dessus du tableau
+
+**EXEMPLE DE TABLEAU STATISTIQUE :**
+"Voici le tableau statistique complet :
+
+| Classes (en €) | Centre classe | Effectif | Fréquence (%) | ECC   | ECD   |
+|----------------|---------------|----------|---------------|-------|-------|
+| [20, 40[       | 30            | 4        | 8%            | 4     | 50    |
+| [40, 60[       | 50            | 6        | 12%           | 10    | 46    |
+| [60, 80[       | 70            | 25       | 50%           | 35    | 40    |
+| [80, 100[      | 90            | 5        | 10%           | 40    | 15    |
+| [100, 120[     | 110           | 10       | 20%           | 50    | 10    |
+
+*ECC = Effectifs Cumulés Croissants, ECD = Effectifs Cumulés Décroissants*"
+
+### RÈGLES ABSOLUES :
+1. ✅ Pour variations/signes : TOUJOURS une description textuelle, JAMAIS de tableau
+2. ✅ Pour statistiques : TOUJOURS un tableau Markdown clair avec explications
+3. ✅ Les descriptions doivent être PÉDAGOGIQUES et EXPLICITES
+4. ✅ Inclure les valeurs aux bornes quand elles sont importantes
+5. ✅ Mentionner les annulations et extremums
 EXEMPLES D'ANALYSE DE SCHÉMAS SCIENTIFIQUES :
 
 --- PLAN INCLINÉ ---
