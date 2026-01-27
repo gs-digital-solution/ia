@@ -6,24 +6,24 @@
   <title>{{ titre_corrige }}</title>
 
   <!-- MathJax Configuration CORRECTE + mhchem pour chimie -->
-     <script>
-       window.MathJax = {
-         loader: {
-           load: ['[tex]/mhchem']      // on charge l’extension mhchem
-         },
-         tex: {
-           packages: ['base','mhchem'],// on inclut base + mhchem
-           inlineMath: [['\\(','\\)']],
-           displayMath: [['\\[','\\]']]
-         },
-         svg: {
-           fontCache: 'global'
-         }
-       };
-     </script>
-     <script id="MathJax-script" async
-             src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
-     </script>
+  <script>
+    window.MathJax = {
+      loader: {
+        load: ['[tex]/mhchem']      // on charge l'extension mhchem
+      },
+      tex: {
+        packages: ['base','mhchem'],// on inclut base + mhchem
+        inlineMath: [['\\(','\\)']],
+        displayMath: [['\\[','\\]']]
+      },
+      svg: {
+        fontCache: 'global'
+      }
+    };
+  </script>
+  <script id="MathJax-script" async
+          src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+  </script>
 
   <style>
     /* RESET ET BASE */
@@ -42,7 +42,8 @@
       color: #333;
       padding-bottom: 60px;
     }
-* { font-size: inherit !important; }
+
+    * { font-size: inherit !important; }
 
     /* HEADER PROFESSIONNEL */
     .header {
@@ -126,36 +127,37 @@
       vertical-align: middle;
     }
 
-/* ===== TABLEAUX MATHÉMATIQUES ===== */
-.tableau-container {
-    text-align: center;
-    margin: 30px auto;
-    max-width: 100%;
-    page-break-inside: avoid; /* Évite la coupure dans les PDF */
-}
-
-.tableau-container img {
-    max-width: 95%;
-    height: auto;
-    border: 2px solid #e0e0e0;
-    border-radius: 8px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-}
-
-.tableau-container p {
-    font-style: italic;
-    color: #666;
-    margin-top: 10px;
-    font-size: 0.9em;
-    text-align: center;
-}
-
-/* Responsive pour mobile */
-@media (max-width: 768px) {
-    .tableau-container img {
-        max-width: 100%;
+    /* TABLEAUX AMÉLIORÉS */
+    .table-container {
+      margin: 25px 0;
+      overflow-x: auto;
     }
-}
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 70px;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    th {
+      background: #208060;
+      color: white;
+      padding: 12px 15px;
+      text-align: left;
+      font-weight: 600;
+    }
+
+    td {
+      padding: 10px 15px;
+      border-bottom: 1px solid #e9ecef;
+    }
+
+    tr:nth-child(even) {
+      background: #f8f9fa;
+    }
+
     /* GRAPHIQUES */
     .graphique-container {
       text-align: center;
@@ -225,6 +227,246 @@
       transform: translateY(-2px);
     }
 
+    /* ========== CLASSES GÉNÉRÉES PAR generate_corrige_html ========== */
+
+    /* Branding CIS */
+    .cis-message {
+      color: #208060;
+      font-weight: 900;
+      font-size: 2.3em !important;
+      text-align: center;
+      margin-bottom: 35px;
+      padding: 20px;
+      background: linear-gradient(135deg, #f0f9f6, #e6f4f1);
+      border-radius: 12px;
+      border-left: 6px solid #208060;
+      box-shadow: 0 4px 15px rgba(32, 128, 96, 0.1);
+    }
+
+    /* Blocs d'exercices */
+    .bloc-exercice {
+      padding: 40px 25px !important;
+      margin-bottom: 60px !important;
+      font-size: 80px !important;
+      background: white !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08) !important;
+      border: 1px solid #e9ecef !important;
+      page-break-inside: avoid !important;
+    }
+
+    .titre-exercice {
+      font-size: 70px !important;
+      color: #208060 !important;
+      font-weight: 800 !important;
+      margin-bottom: 30px !important;
+      margin-top: 0 !important;
+      padding-bottom: 15px !important;
+      border-bottom: 3px solid #208060 !important;
+      text-align: center !important;
+    }
+
+    .titre-question {
+      font-size: 70px !important;
+      color: #319980 !important;
+      font-weight: 700 !important;
+      margin: 40px 0 20px 0 !important;
+      padding-left: 20px !important;
+      border-left: 5px solid #319980 !important;
+    }
+
+    .reponse-question {
+      font-size: 70px !important;
+      margin: 20px 0 !important;
+      line-height: 1.8 !important;
+      text-align: justify !important;
+      padding: 10px 0 !important;
+    }
+
+    /* ========== TABLEAUX STATISTIQUES ========== */
+    .statistical-table-wrapper {
+      margin: 40px 0 !important;
+      padding: 30px !important;
+      background-color: #f8fafc !important;
+      border-radius: 12px !important;
+      border-left: 6px solid #4a6fa5 !important;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08) !important;
+      page-break-inside: avoid !important;
+      overflow-x: auto !important;
+    }
+
+    .stat-table-title {
+      font-size: 65px !important;
+      font-weight: 700 !important;
+      color: #2c3e50 !important;
+      margin-bottom: 25px !important;
+      padding-bottom: 15px !important;
+      border-bottom: 2px solid #e8edf2 !important;
+      text-align: center !important;
+    }
+
+    .statistical-table {
+      width: 100% !important;
+      border-collapse: collapse !important;
+      font-size: 60px !important;
+      background: white !important;
+      border-radius: 8px !important;
+      overflow: hidden !important;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05) !important;
+      margin: 0 auto !important;
+    }
+
+    .statistical-table th {
+      background-color: #4a6fa5 !important;
+      color: white !important;
+      padding: 25px 20px !important;
+      text-align: center !important;
+      font-weight: 700 !important;
+      border: 2px solid #3a5a85 !important;
+      font-size: 62px !important;
+    }
+
+    .statistical-table td {
+      padding: 20px 15px !important;
+      text-align: center !important;
+      border: 2px solid #e1e8f0 !important;
+      font-size: 58px !important;
+    }
+
+    .statistical-table tr:nth-child(even) {
+      background-color: #f8fafc !important;
+    }
+
+    .statistical-table tr:hover {
+      background-color: #e8f4fd !important;
+    }
+
+    /* ========== DESCRIPTIONS DE VARIATIONS ========== */
+    .variation-description-wrapper {
+      margin: 35px 0 !important;
+      padding: 30px !important;
+      background-color: #fff8e6 !important;
+      border-left: 6px solid #ff9800 !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 12px rgba(255, 152, 0, 0.1) !important;
+      page-break-inside: avoid !important;
+    }
+
+    .variation-title {
+      font-size: 65px !important;
+      font-weight: 700 !important;
+      color: #e65100 !important;
+      margin-bottom: 20px !important;
+      padding-bottom: 12px !important;
+      border-bottom: 2px solid #ffb74d !important;
+    }
+
+    .variation-content {
+      font-size: 60px !important;
+      line-height: 1.7 !important;
+      color: #5d4037 !important;
+      margin-bottom: 10px !important;
+    }
+
+    /* ========== TABLEAUX GÉNÉRAUX ========== */
+    .general-table-wrapper {
+      margin: 30px 0 !important;
+      overflow-x: auto !important;
+      page-break-inside: avoid !important;
+    }
+
+    .general-table-wrapper table {
+      width: 100% !important;
+      border-collapse: collapse !important;
+      font-size: 58px !important;
+      background: white !important;
+      border: 2px solid #e0e0e0 !important;
+      border-radius: 8px !important;
+    }
+
+    .general-table-wrapper th {
+      background-color: #f1f5f9 !important;
+      color: #334155 !important;
+      padding: 20px 15px !important;
+      text-align: left !important;
+      border: 2px solid #cbd5e1 !important;
+      font-weight: 700 !important;
+      font-size: 60px !important;
+    }
+
+    .general-table-wrapper td {
+      padding: 18px 15px !important;
+      border: 2px solid #e2e8f0 !important;
+      font-size: 58px !important;
+    }
+
+    /* ========== ÉLÉMENTS SPÉCIFIQUES ========== */
+    .list-item {
+      margin: 15px 0 15px 40px !important;
+      padding-left: 15px !important;
+      font-size: 65px !important;
+      line-height: 1.7 !important;
+      list-style-type: disc !important;
+    }
+
+    .numbered-item {
+      margin: 15px 0 15px 50px !important;
+      padding-left: 15px !important;
+      font-size: 65px !important;
+      line-height: 1.7 !important;
+      list-style-type: decimal !important;
+    }
+
+    .section-title {
+      margin: 25px 0 20px 0 !important;
+      color: #2c3e50 !important;
+      font-size: 66px !important;
+      font-weight: 700 !important;
+      padding-bottom: 10px !important;
+      border-bottom: 2px solid #e0e0e0 !important;
+    }
+
+    /* ========== MATHJAX SPÉCIFIQUE ========== */
+    .mathjax-inline {
+      font-family: "CMU Serif", "Latin Modern Math", "STIX Two Math", serif !important;
+      background-color: #f9f9f9 !important;
+      padding: 5px 12px !important;
+      border-radius: 6px !important;
+      display: inline-block !important;
+      font-size: 68px !important;
+      color: #d63384 !important;
+      margin: 0 5px !important;
+      vertical-align: middle !important;
+    }
+
+    .mathjax-display {
+      text-align: center !important;
+      margin: 30px 0 !important;
+      padding: 25px !important;
+      background-color: #f5f5f5 !important;
+      border-radius: 10px !important;
+      border-left: 5px solid #208060 !important;
+      overflow-x: auto !important;
+      font-size: 70px !important;
+    }
+
+    /* ========== OVERRIDES POUR LA CARTE ========== */
+    .card .bloc-exercice {
+      margin: 0 !important;
+      padding: 40px 25px !important;
+      box-shadow: none !important;
+      background: transparent !important;
+      border: none !important;
+      border-radius: 0 !important;
+    }
+
+    .card .statistical-table-wrapper,
+    .card .variation-description-wrapper,
+    .card .general-table-wrapper {
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+    }
+
     /* RESPONSIVE */
     @media (max-width: 768px) {
       .container {
@@ -246,51 +488,144 @@
       .card h3 { font-size: 16px; }
       .card p { font-size: 14px; }
 
+      /* Styles spécifiques pour mobile */
       .cis-message {
-  color: #208060;
-  font-weight: 900;
-  font-size: 2.3em;
-  text-align: center;
-  margin-bottom: 35px;
-}
+        font-size: 90px !important;
+        margin-bottom: 25px !important;
+        padding: 15px !important;
+      }
 
-.bloc-exercice { padding: 40px 25px; margin-bottom: 60px; font-size: 80px; }
-.titre-exercice { font-size: 38px; }
-.titre-question { font-size: 33px; }
-.reponse-question { font-size: 30px; }
-.code-block { font-size: 27px; }
+      .bloc-exercice {
+        padding: 20px 15px !important;
+        margin-bottom: 40px !important;
+      }
 
-.titre-exercice {
-  font-size: 70px;
-  color: #208060;
-  font-weight: 800;
-  margin-bottom: 15px;
-  margin-top: 8px;
-  letter-spacing: 1px;
-}
+      .titre-exercice {
+        font-size: 85px !important;
+        margin-bottom: 25px !important;
+      }
 
-.titre-question {
-  font-size: 70px;
-  color: #319980;
-  font-weight: 700;
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
+      .titre-question {
+        font-size: 75px !important;
+        margin: 30px 0 20px 0 !important;
+      }
 
-.reponse-question {
-  font-size: 70px;
-  margin-top: 10px;
-  margin-bottom: 10px;
-  line-height: 1.8;
-}
+      .reponse-question {
+        font-size: 65px !important;
+        line-height: 1.6 !important;
+      }
 
-@media (max-width: 768px) {
-  .cis-message { font-size: 90px; }
-  .bloc-exercice { padding: 10px 4px; }
-  .titre-exercice { font-size: 1.2em; }
-  .titre-question { font-size: 1em; }
-  .reponse-question { font-size: 1em; }
-}
+      /* Tableaux statistiques sur mobile */
+      .statistical-table-wrapper {
+        padding: 20px 15px !important;
+        margin: 30px 0 !important;
+      }
+
+      .stat-table-title {
+        font-size: 75px !important;
+        margin-bottom: 20px !important;
+      }
+
+      .statistical-table {
+        font-size: 65px !important;
+      }
+
+      .statistical-table th {
+        padding: 18px 12px !important;
+        font-size: 67px !important;
+      }
+
+      .statistical-table td {
+        padding: 15px 10px !important;
+        font-size: 63px !important;
+      }
+
+      /* Descriptions de variations sur mobile */
+      .variation-description-wrapper {
+        padding: 25px 20px !important;
+        margin: 30px 0 !important;
+      }
+
+      .variation-title {
+        font-size: 75px !important;
+      }
+
+      .variation-content {
+        font-size: 65px !important;
+      }
+
+      /* Tableaux généraux sur mobile */
+      .general-table-wrapper table {
+        font-size: 63px !important;
+      }
+
+      .general-table-wrapper th {
+        font-size: 65px !important;
+        padding: 15px 10px !important;
+      }
+
+      .general-table-wrapper td {
+        font-size: 63px !important;
+        padding: 12px 8px !important;
+      }
+
+      /* Autres éléments sur mobile */
+      .list-item,
+      .numbered-item {
+        font-size: 65px !important;
+        margin-left: 25px !important;
+      }
+
+      .section-title {
+        font-size: 70px !important;
+      }
+
+      .mathjax-inline {
+        font-size: 65px !important;
+        padding: 3px 8px !important;
+      }
+
+      .mathjax-display {
+        padding: 20px 15px !important;
+        font-size: 68px !important;
+      }
+    }
+
+    /* ========== IMPRESSION / PDF ========== */
+    @media print {
+      .statistical-table-wrapper,
+      .variation-description-wrapper,
+      .bloc-exercice {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+      }
+
+      .statistical-table th {
+        background-color: #4a6fa5 !important;
+        -webkit-print-color-adjust: exact !important;
+        color-adjust: exact !important;
+        color: white !important;
+      }
+
+      .variation-description-wrapper {
+        background-color: #fff8e6 !important;
+        -webkit-print-color-adjust: exact !important;
+        color-adjust: exact !important;
+      }
+
+      .cis-message {
+        background: linear-gradient(135deg, #f0f9f6, #e6f4f1) !important;
+        -webkit-print-color-adjust: exact !important;
+        color-adjust: exact !important;
+      }
+
+      .header {
+        position: static !important;
+      }
+
+      .pdf-footer {
+        display: none !important;
+      }
     }
   </style>
 </head>
@@ -338,4 +673,3 @@
 
 </body>
 </html>
-
