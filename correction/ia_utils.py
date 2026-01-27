@@ -323,67 +323,27 @@ def debug_ocr(fichier_path: str):
     except Exception as e:
         print(f"❌ DEBUG OCR échoué: {e}")
     return ""
-
-
-# ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ET TABLEAUX ==========
+# ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
 def extract_json_blocks(text: str):
-    """
-    Extrait les blocs JSON pour les graphiques ET les tableaux.
-    Retourne une liste de tuples (dict_json, start_index, end_index)
-    """
+    """Extrait les blocs JSON pour les graphiques"""
     decoder = json.JSONDecoder()
     idx = 0
     blocks = []
 
     while True:
-        # Cherche les deux types de blocs
-        # 1. Blocs graphiques : commence par '{' (ancien format)
-        start_graph = text.find('{', idx)
-
-        # 2. Blocs tableaux : cherche ---TABLEAU---
-        start_tableau = text.find('---TABLEAU---', idx)
-
-        # Prendre le prochain bloc le plus tôt
-        starts = []
-        if start_graph != -1:
-            starts.append(('graph', start_graph))
-        if start_tableau != -1:
-            starts.append(('tableau', start_tableau))
-
-        if not starts:
+        # Cherche le début d'un bloc JSON (après ```json ou {)
+        start = text.find('{', idx)
+        if start == -1:
             break
 
-        # Trier par position
-        starts.sort(key=lambda x: x[1])
-        bloc_type, start = starts[0]
-
-        if bloc_type == 'graph':
-            # Ancien format de graphique
-            try:
-                obj, end = decoder.raw_decode(text[start:])
-                if isinstance(obj, dict) and 'graphique' in obj:
-                    blocks.append((obj, start, start + end))
-                idx = start + end
-            except ValueError:
-                idx = start + 1
-
-        elif bloc_type == 'tableau':
-            # Nouveau format de tableau
-            end_tag = text.find('---FIN_TABLEAU---', start)
-            if end_tag == -1:
-                break
-
-            # Extraire le JSON
-            json_start = start + len('---TABLEAU---')
-            json_str = text[json_start:end_tag].strip()
-
-            try:
-                tableau_dict = json.loads(json_str)
-                blocks.append((tableau_dict, start, end_tag + len('---FIN_TABLEAU---')))
-                idx = end_tag + len('---FIN_TABLEAU---')
-            except json.JSONDecodeError as e:
-                print(f"❌ JSON invalide pour tableau: {e}")
-                idx = end_tag + len('---FIN_TABLEAU---')
+        try:
+            # Vérifie si c'est un bloc graphique
+            obj, end = decoder.raw_decode(text[start:])
+            if isinstance(obj, dict) and 'graphique' in obj:
+                blocks.append((obj, start, start + end))
+            idx = start + end
+        except ValueError:
+            idx = start + 1
 
     return blocks
 # ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
@@ -960,87 +920,58 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         return error_msg, None
 
 
+
+
 def extract_and_process_graphs(output: str):
     """
-    Extrait et traite les graphiques ET les tableaux d'un corrigé.
+    Extrait et traite les graphiques d'un corrigé en utilisant extract_json_blocks.
     """
-    print("🖼️ Extraction des graphiques et tableaux…")
+    print("🖼️ Extraction des graphiques (via JSONDecoder)…")
 
-    final_text = output
     graphs_data = []
-    tableaux_data = []
+    final_text = output
 
-    # 1) Extraire tous les blocs (graphiques + tableaux)
+    # 1) Extractions des blocs JSON
     json_blocks = extract_json_blocks(output)
-    print(f"🔍 {len(json_blocks)} bloc(s) JSON détecté(s) dans extract_and_process_graphs")
+    print(f"🔍 JSON blocks détectés dans extract_and_process_graphs: {len(json_blocks)}")
 
-    # 2) Trier par position décroissante pour remplacement sûr
-    json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
-
-    # 3) Traiter chaque bloc
-    for idx, (data_dict, start, end) in enumerate(json_blocks, start=1):
+    # 2) On parcourt et on insère les images
+    #    Pour gérer les remplacements successifs, on conserve un décalage 'offset'
+    offset = 0
+    for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
         try:
-            # Déterminer si c'est un graphique ou un tableau
-            is_tableau = '---TABLEAU---' in output[start - 50:start + 50] if start > 50 else '---TABLEAU---' in output[
-                                                                                                                :start + 50]
+            output_name = f"graphique_{idx}.png"
+            img_path = tracer_graphique(graph_dict, output_name)
 
-            if is_tableau:
-                # C'EST UN TABLEAU
-                print(f"  📊 Traitement tableau {idx}...")
+            if img_path:
+                abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                img_tag = (
+                    f'<img src="/media/{img_path}" alt="Graphique {idx}" '
+                    f'style="max-width:100%;margin:10px 0;" />'
+                )
 
-                # Générer l'image du tableau
-                output_name = f"tableau_{idx}.png"
-                img_path = generer_tableau(data_dict, output_name)
+                # Ajuster les indices de remplacement avec l'offset
+                s, e = start + offset, end + offset
+                final_text = final_text[:s] + img_tag + final_text[e:]
+                # Mettre à jour l’offset en fonction de la différence de longueur
+                offset += len(img_tag) - (end - start)
 
-                if img_path:
-                    abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                    img_tag = (
-                        f'<div class="tableau-container" style="text-align:center; margin:25px 0;">'
-                        f'<img src="/media/{img_path}" alt="Tableau {idx}" '
-                        f'style="max-width:100%; height:auto; border:2px solid #e0e0e0; '
-                        f'border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.1);">'
-                        f'<p style="font-style:italic;color:#666;margin-top:8px;font-size:0.9em;">'
-                        f'{data_dict.get("data", {}).get("titre", "Tableau")}</p>'
-                        f'</div>'
-                    )
-
-                    # Remplacer le bloc JSON par l'image
-                    final_text = final_text[:start] + img_tag + final_text[end:]
-                    tableaux_data.append(data_dict)
-                    print(f"  ✅ Tableau {idx} inséré.")
-                else:
-                    # En cas d'échec, remplacer par un message
-                    error_msg = f"[Échec génération du tableau {idx}]"
-                    final_text = final_text[:start] + error_msg + final_text[end:]
-                    print(f"  ❌ Tableau {idx} : erreur de génération.")
-
+                graphs_data.append(graph_dict)
+                print(f"✅ Graphique {idx} inséré.")
             else:
-                # C'EST UN GRAPHIQUE (ancien format)
-                print(f"  📈 Traitement graphique {idx}...")
-
-                output_name = f"graphique_{idx}.png"
-                img_path = tracer_graphique(data_dict, output_name)
-
-                if img_path:
-                    abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                    img_tag = (
-                        f'<img src="/media/{img_path}" alt="Graphique {idx}" '
-                        f'style="max-width:100%;margin:10px 0;" />'
-                    )
-
-                    final_text = final_text[:start] + img_tag + final_text[end:]
-                    graphs_data.append(data_dict)
-                    print(f"  ✅ Graphique {idx} inséré.")
-                else:
-                    final_text = final_text[:start] + "[Erreur génération graphique]" + final_text[end:]
-                    print(f"  ❌ Graphique {idx} : erreur de tracé.")
+                # En cas d’échec de tracé, on remplace par un message
+                s, e = start + offset, end + offset
+                final_text = final_text[:s] + "[Erreur génération graphique]" + final_text[e:]
+                offset += len("[Erreur génération graphique]") - (end - start)
+                print(f"❌ Graphique {idx} : erreur de tracé.")
 
         except Exception as e:
-            print(f"  ❌ Exception sur bloc {idx}: {e}")
+            print(f"❌ Exception sur bloc graphique {idx}: {e}")
             continue
 
-    print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s), {len(tableaux_data)} tableau(x)")
+    print(f"🎯 Extraction terminée: {len(graphs_data)} graphique(s) traité(s)")
     return final_text, graphs_data
+
 
 # ============== UTILITAIRES TEXTE / LATEX / TABLEAU ==============
 
@@ -1694,238 +1625,8 @@ def tracer_graphique(graphique_dict, output_name):
         return None
 
 
-# ============== GÉNÉRATION DE TABLEAUX MATPLOTLIB ==============
-
-def generer_tableau(tableau_dict, output_name):
-    """
-    Génère un tableau mathématique professionnel avec Matplotlib.
-
-    Args:
-        tableau_dict: {
-            "type": "variation|signe|statistique|frequence",
-            "data": {
-                "x_values": [...],
-                "f_prime": [...],
-                "f_values": [...],
-                "titre": "..."
-            }
-        }
-        output_name: Nom du fichier de sortie
-
-    Returns:
-        Chemin relatif vers l'image générée, ou None en cas d'erreur
-    """
-    try:
-        from django.conf import settings
-        import matplotlib.pyplot as plt
-        import numpy as np
-        from matplotlib.patches import Rectangle, FancyBboxPatch
-
-        # Configuration
-        tableau_type = tableau_dict.get("type", "").lower()
-        data = tableau_dict.get("data", {})
-        titre = data.get("titre", "Tableau")
-
-        # Créer le dossier si nécessaire
-        tableau_dir = os.path.join(settings.MEDIA_ROOT, 'tableaux')
-        os.makedirs(tableau_dir, exist_ok=True)
-        output_path = os.path.join(tableau_dir, output_name)
-
-        print(f">>> Génération tableau {tableau_type}: {output_name}")
-
-        # ========== TABLEAU DE VARIATION ==========
-        if tableau_type == "variation":
-            x_vals = data.get("x_values", [])
-            f_prime = data.get("f_prime", [])
-            f_vals = data.get("f_values", [])
-
-            # Calcul des dimensions
-            n_cols = len(x_vals) + 1
-            fig, ax = plt.subplots(figsize=(max(10, n_cols * 1.5), 4.5))
-            ax.axis('off')
-
-            # Dimensions relatives
-            col_width = 1.0 / n_cols
-            row_height = 0.22
-            y_start = 0.85
-
-            # TITRE
-            ax.text(0.5, 0.95, titre,
-                    ha='center', va='center',
-                    fontsize=14, fontweight='bold',
-                    color='#208060',  # Couleur CIS
-                    fontfamily='DejaVu Sans')
-
-            # ===== EN-TÊTE : Colonne "x" =====
-            rect_x = Rectangle((0, y_start - row_height / 2),
-                               col_width, row_height,
-                               facecolor='#208060', edgecolor='#2c3e50',
-                               linewidth=2)
-            ax.add_patch(rect_x)
-            ax.text(col_width / 2, y_start, '$x$',
-                    ha='center', va='center',
-                    fontsize=12, fontweight='bold', color='white',
-                    fontfamily='DejaVu Sans')
-
-            # ===== VALEURS DE X =====
-            for i, x_val in enumerate(x_vals):
-                x_pos = (i + 1) * col_width + col_width / 2
-                cell_text = f"${x_val}$" if '∞' in str(x_val) else str(x_val)
-
-                rect = Rectangle((x_pos - col_width / 2, y_start - row_height / 2),
-                                 col_width, row_height,
-                                 facecolor='#3498db', edgecolor='#2c3e50',
-                                 linewidth=2)
-                ax.add_patch(rect)
-                ax.text(x_pos, y_start, cell_text,
-                        ha='center', va='center',
-                        fontsize=11, fontweight='bold', color='white',
-                        fontfamily='DejaVu Sans')
-
-            # ===== LIGNE f'(x) =====
-            y_fprime = y_start - row_height
-
-            # Label f'(x)
-            rect_fprime_label = Rectangle((0, y_fprime - row_height / 2),
-                                          col_width, row_height,
-                                          facecolor='#2980b9', edgecolor='#2c3e50',
-                                          linewidth=2)
-            ax.add_patch(rect_fprime_label)
-            ax.text(col_width / 2, y_fprime, "$f'(x)$",
-                    ha='center', va='center',
-                    fontsize=12, fontweight='bold', color='white',
-                    fontfamily='DejaVu Sans')
-
-            # Valeurs f'(x)
-            for i, val in enumerate(f_prime):
-                x_pos = (i + 1) * col_width + col_width / 2
-
-                # Couleur selon valeur
-                if val == '+':
-                    bg_color, text_color = '#d5f4e6', '#27ae60'  # Vert
-                elif val == '-':
-                    bg_color, text_color = '#fadbd8', '#e74c3c'  # Rouge
-                elif val == '0':
-                    bg_color, text_color = '#fef9e7', '#f39c12'  # Orange
-                elif val == '||':
-                    bg_color, text_color = '#f4ecf7', '#9b59b6'  # Violet
-                else:
-                    bg_color, text_color = 'white', 'black'
-
-                rect = Rectangle((x_pos - col_width / 2, y_fprime - row_height / 2),
-                                 col_width, row_height,
-                                 facecolor=bg_color, edgecolor='#95a5a6',
-                                 linewidth=1.5)
-                ax.add_patch(rect)
-                ax.text(x_pos, y_fprime, val,
-                        ha='center', va='center',
-                        fontsize=12, fontweight='bold', color=text_color,
-                        fontfamily='DejaVu Sans')
-
-            # ===== LIGNE f(x) =====
-            y_fx = y_start - 2 * row_height
-
-            # Label f(x)
-            rect_fx_label = Rectangle((0, y_fx - row_height / 2),
-                                      col_width, row_height,
-                                      facecolor='#27ae60', edgecolor='#2c3e50',
-                                      linewidth=2)
-            ax.add_patch(rect_fx_label)
-            ax.text(col_width / 2, y_fx, "$f(x)$",
-                    ha='center', va='center',
-                    fontsize=12, fontweight='bold', color='white',
-                    fontfamily='DejaVu Sans')
-
-            # Valeurs f(x)
-            for i, val in enumerate(f_vals):
-                x_pos = (i + 1) * col_width + col_width / 2
-                val_str = str(val)
-
-                # Couleur selon contenu
-                if '↗' in val_str:
-                    bg_color, text_color = '#e8f6f3', '#27ae60'  # Vert croissance
-                elif '↘' in val_str:
-                    bg_color, text_color = '#fdedec', '#e74c3c'  # Rouge décroissance
-                elif '∞' in val_str:
-                    bg_color, text_color = '#f4ecf7', '#8e44ad'  # Violet infini
-                elif '||' in val_str:
-                    bg_color, text_color = '#fdebd0', '#d35400'  # Orange asymptote
-                else:
-                    bg_color, text_color = 'white', 'black'
-
-                # Gestion spéciale des flèches
-                if '↗' in val_str or '↘' in val_str:
-                    parts = val_str.split()
-                    if len(parts) == 2:
-                        arrow, valeur = parts
-
-                        rect = Rectangle((x_pos - col_width / 2, y_fx - row_height / 2),
-                                         col_width, row_height,
-                                         facecolor=bg_color, edgecolor='#95a5a6',
-                                         linewidth=1.5)
-                        ax.add_patch(rect)
-
-                        # Flèche (plus grande)
-                        ax.text(x_pos, y_fx + 0.01, arrow,
-                                ha='center', va='center',
-                                fontsize=14, fontweight='bold', color=text_color,
-                                fontfamily='DejaVu Sans')
-                        # Valeur (plus petite)
-                        ax.text(x_pos, y_fx - 0.01, valeur,
-                                ha='center', va='center',
-                                fontsize=10, color=text_color,
-                                fontfamily='DejaVu Sans')
-                        continue
-
-                # Valeur normale
-                rect = Rectangle((x_pos - col_width / 2, y_fx - row_height / 2),
-                                 col_width, row_height,
-                                 facecolor=bg_color, edgecolor='#95a5a6',
-                                 linewidth=1.5)
-                ax.add_patch(rect)
-                ax.text(x_pos, y_fx, val_str,
-                        ha='center', va='center',
-                        fontsize=11, color=text_color,
-                        fontfamily='DejaVu Sans')
-
-            # ===== BORDURE FINALE =====
-            border = FancyBboxPatch((0.01, 0.12), 0.98, 0.78,
-                                    boxstyle="round,pad=0.02,rounding_size=0.03",
-                                    facecolor='none',
-                                    edgecolor='#208060',
-                                    linewidth=2.5,
-                                    linestyle='-')
-            ax.add_patch(border)
-
-            plt.savefig(output_path, dpi=300, bbox_inches='tight',
-                        facecolor='white', edgecolor='none')
-            plt.close()
-
-            return "tableaux/" + output_name
-
-        # ========== TABLEAU DE SIGNES (à implémenter après) ==========
-        elif tableau_type == "signe":
-            # Pour l'instant, retourner None et on implémente après
-            print(f"⚠️ Type de tableau non encore implémenté: {tableau_type}")
-            return None
-
-        # ========== TABLEAU STATISTIQUE (à implémenter après) ==========
-        elif tableau_type in ["statistique", "frequence"]:
-            print(f"⚠️ Type de tableau non encore implémenté: {tableau_type}")
-            return None
-
-        else:
-            print(f"❌ Type de tableau non supporté: {tableau_type}")
-            return None
-
-    except Exception as e:
-        print(f"❌ Erreur génération tableau: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
 # ===========================
-# ============== PROMPT SYSTÈME AVEC TABLEAUX ==============
+# PROMPT SYSTÈME AMÉLIORÉ AVEC VISION SCIENTIFIQUE
 DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
 géographie...bref, tu es un professeur de l'enseignement secondaire.
 
@@ -1970,6 +1671,14 @@ Le signe de f(x) est :
 3. ✅ Les descriptions doivent être PÉDAGOGIQUES et EXPLICITES
 4. ✅ Inclure les valeurs aux bornes quand elles sont importantes
 5. ✅ Mentionner les annulations et extremums
+🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
+
+RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
+1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
+2. ✅ Extrait les DONNÉES NUMÉRIQUES (angles, masses, distances, forces, tensions)
+3. ✅ Décris les RELATIONS SPATIALES entre les éléments
+4. ✅ Explique le CONCEPT SCIENTIFIQUE illustré
+
 EXEMPLES D'ANALYSE DE SCHÉMAS SCIENTIFIQUES :
 
 --- PLAN INCLINÉ ---
@@ -2000,86 +1709,6 @@ FORMAT DE RÉPONSE :
 - Références aux schémas quand ils existent ("D'après le schéma...")
 - Justifications détaillées pour chaque étape
 - Ne jamais dire "je pense" ou "c'est ambigu"
-
-RÈGLES ABSOLUES POUR LES TABLEAUX MATHÉMATIQUES :
-1. ✅ Quand un exercice demande un tableau (variation, signes, statistiques),
-   fournis d'abord l'analyse textuelle complète, puis ajoute un bloc JSON structuré
-
-2. ✅ Format JSON OBLIGATOIRE pour les tableaux :
----TABLEAU---
-{
-  "type": "variation|signe|statistique|frequence",
-  "data": {
-    "x_values": ["-∞", "-1", "1", "+∞"],
-    "f_prime": ["+", "0", "-", "0", "+"],
-    "f_values": ["-∞", "↗ -4", "↘ -8", "↗ +∞"],
-    "titre": "Tableau de variation de f(x) = x³ - 3x + 2",
-    "metadata": {
-      "function": "f(x) = x³ - 3x + 2",
-      "domain": "ℝ"
-    }
-  }
-}
----FIN_TABLEAU---
-
-3. ✅ SYMBOLES STANDARD :
-   - ↗ (U+2197) : fonction croissante
-   - ↘ (U+2198) : fonction décroissante
-   - → (U+2192) : constante
-   - ± (U+00B1) : signe indéterminé
-   - ∞ (U+221E) : infini
-   - || : asymptote/discontinuité
-
-4. ✅ Types de tableaux supportés :
-   - "variation" : x_values, f_prime, f_values
-   - "signe" : x_values, signes, zeros
-   - "statistique" : classes, effectifs, frequences
-   - "frequence" : intervalles, effectifs, pourcentages
-
-EXEMPLES DE TABLEAUX :
-
---- Tableau de variation ---
-[...analyse...]
----TABLEAU---
-{
-  "type": "variation",
-  "data": {
-    "x_values": ["-∞", "-2", "0", "2", "+∞"],
-    "f_prime": ["-", "0", "+", "0", "-"],
-    "f_values": ["+∞", "↘ 0", "↗ 4", "↘ 0", "-∞"],
-    "titre": "Variation de f(x) = -x³/3 + 2x",
-    "metadata": {"function": "f(x) = -x³/3 + 2x"}
-  }
-}
----FIN_TABLEAU---
-
---- Tableau de signes ---
-[...analyse...]
----TABLEAU---
-{
-  "type": "signe",
-  "data": {
-    "x_values": ["-∞", "-3", "1", "+∞"],
-    "signes": ["+", "0", "-", "0", "+"],
-    "zeros": [-3, 1],
-    "titre": "Signe de f(x) = (x+3)(x-1)"
-  }
-}
----FIN_TABLEAU---
-
---- Tableau statistique ---
-[...analyse...]
----TABLEAU---
-{
-  "type": "statistique",
-  "data": {
-    "classes": ["0-10", "10-20", "20-30", "30-40"],
-    "effectifs": [5, 12, 8, 3],
-    "frequences": [0.18, 0.43, 0.29, 0.10],
-    "titre": "Distribution des âges"
-  }
-}
----FIN_TABLEAU---
 
 POUR LES GRAPHIQUES :
 - Dès qu'un exercice demande un graphique, utilise la balise ---corrigé--- suivie du JSON
