@@ -1135,8 +1135,10 @@ def generate_corrige_html(corrige_text):
     in_bloc_exercice = False
     in_stat_table = False
     in_variation_block = False
+    in_table_markdown = False
     table_lines = []
     variation_lines = []
+    markdown_table_lines = []
 
     # Branding CIS en haut
     html_output.append(
@@ -1145,43 +1147,104 @@ def generate_corrige_html(corrige_text):
     while i < len(lines):
         line = lines[i].strip()
 
-        # ========== GESTION DES TABLEAUX STATISTIQUES ==========
-        # Détecter le début d'un tableau statistique
-        if line.startswith('|') and ('Classes' in line or 'Effectif' in line or 'Fréquence' in line
-                                     or 'ECC' in line or 'ECD' in line or 'Centre' in line):
-            in_stat_table = True
-            table_lines = [line]
-            i += 1
-            continue
+        # ========== GESTION DES TABLEAUX MARKDOWN DÉTECTÉS ==========
+        # Détecter le début d'un tableau markdown (ligne avec | et ligne suivante avec |- ou |:)
+        if line.startswith('|') and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if next_line.startswith('|') and ('---' in next_line or '===' in next_line or ':|' in next_line):
+                in_table_markdown = True
+                markdown_table_lines = [line]
+                i += 1
+                continue
 
-        # Collecter les lignes du tableau
-        if in_stat_table:
-            if line.startswith('|') or (line.replace('-', '').replace(':', '').strip() == ''):
-                table_lines.append(line)
+        # Collecter les lignes du tableau markdown
+        if in_table_markdown:
+            if line.startswith('|'):
+                markdown_table_lines.append(line)
                 i += 1
                 continue
             else:
-                # Fin du tableau - le formater
-                if table_lines:
-                    html_table = format_table_markdown('\n'.join(table_lines))
-                    html_output.append('<div class="statistical-table">')
-                    html_output.append('<p class="table-caption"><strong>📊 Tableau statistique :</strong></p>')
-                    html_output.append(html_table)
-                    html_output.append('</div>')
-                in_stat_table = False
-                table_lines = []
+                # Fin du tableau markdown - le formater
+                if len(markdown_table_lines) >= 2:  # Au moins l'en-tête et la ligne de séparation
+                    html_table = format_table_markdown('\n'.join(markdown_table_lines))
+                    # Détecter si c'est un tableau statistique
+                    is_stat_table = any(keyword in markdown_table_lines[0].lower()
+                                        for keyword in
+                                        ['classe', 'effectif', 'fréquence', 'ecc', 'ecd', 'centre', 'note'])
+                    if is_stat_table:
+                        html_output.append('<div class="statistical-table-wrapper">')
+                        html_output.append('<p class="table-title"><strong>📊 Tableau statistique :</strong></p>')
+                        html_output.append(html_table)
+                        html_output.append('</div>')
+                    else:
+                        html_output.append('<div class="general-table-wrapper">')
+                        html_output.append(html_table)
+                        html_output.append('</div>')
+                in_table_markdown = False
+                markdown_table_lines = []
                 # Ne pas incrémenter i, traiter cette ligne normalement
+                continue
+
+        # ========== GESTION DES TABLEAUX STATISTIQUES SANS FORMAT MARKDOWN ==========
+        # Détecter les tableaux statistiques décrits en texte
+        stat_keywords = ['classes', 'effectifs', 'fréquences', 'ecc', 'ecd', 'centre de classe', 'notes', 'valeurs']
+        if (any(keyword in line.lower() for keyword in stat_keywords) and
+                len(line) > 30 and
+                not line.startswith('\\') and
+                'tableau' not in line.lower()):  # Éviter les titres "Tableau 1:"
+
+            # Vérifier si les prochaines lignes contiennent des données tabulaires
+            j = i + 1
+            data_lines = []
+            while j < len(lines) and j < i + 10:  # Regarder les 10 lignes suivantes
+                if lines[j].strip() and ('|' in lines[j] or ';' in lines[j] or
+                                         re.match(r'^\[.*\]\s+\d+', lines[j].strip()) or
+                                         re.match(r'^\d+\s*[-–]\s*\d+\s+\d+', lines[j].strip())):
+                    data_lines.append(lines[j].strip())
+                j += 1
+
+            if data_lines:
+                # C'est probablement un tableau statistique - le formater proprement
+                html_output.append('<div class="statistical-table-wrapper">')
+                html_output.append('<p class="table-title"><strong>📊 Tableau statistique :</strong></p>')
+
+                # Ajouter la ligne de description
+                html_output.append(f'<p class="table-description">{line}</p>')
+
+                # Formater les données en tableau HTML
+                html_output.append('<table class="statistical-table"><tbody>')
+
+                for data_line in data_lines:
+                    html_output.append('<tr>')
+                    # Différents formats de données
+                    if '|' in data_line:
+                        cells = [cell.strip() for cell in data_line.split('|') if cell.strip()]
+                    elif ';' in data_line:
+                        cells = [cell.strip() for cell in data_line.split(';')]
+                    else:
+                        # Essayer de parser d'autres formats
+                        cells = re.split(r'\s{2,}', data_line)
+
+                    for cell in cells:
+                        html_output.append(f'<td>{cell}</td>')
+                    html_output.append('</tr>')
+
+                html_output.append('</tbody></table></div>')
+                i = j  # Sauter toutes les lignes traitées
                 continue
 
         # ========== GESTION DES DESCRIPTIONS DE VARIATIONS ==========
         # Détecter le début d'une description de variations/signe
         variation_keywords = ['croissant', 'décroissant', 'signe', 'variation', 'monotonie',
-                              'positive', 'négative', 's\'annule', 'minimum', 'maximum', 'extremum']
+                              'positive', 'négative', 's\'annule', 'minimum', 'maximum', 'extremum',
+                              'strictement']
 
         if (any(keyword in line.lower() for keyword in variation_keywords) and
                 not line.startswith('|') and
                 not line.startswith('\\') and
-                len(line) > 20):  # Éviter les très courtes lignes
+                len(line) > 15 and  # Éviter les très courtes lignes
+                'tableau' not in line.lower()):  # Éviter les références aux tableaux
+
             in_variation_block = True
             variation_lines = [line]
             i += 1
@@ -1190,7 +1253,8 @@ def generate_corrige_html(corrige_text):
         # Collecter les lignes de description de variations
         if in_variation_block:
             # Continuer tant que la ligne n'est pas vide ou ne commence pas un nouveau bloc
-            if line and not pattern_exercice.match(line) and not line.startswith('Question'):
+            if (line and not pattern_exercice.match(line) and
+                    not line.startswith('Question') and not line.startswith('|')):
                 variation_lines.append(line)
                 i += 1
                 continue
@@ -1198,9 +1262,19 @@ def generate_corrige_html(corrige_text):
                 # Fin du bloc de variations - le formater
                 if variation_lines:
                     variation_text = ' '.join(variation_lines)
-                    html_output.append('<div class="variation-description">')
-                    html_output.append('<p class="variation-title"><strong>📈 Variations et signe :</strong></p>')
-                    html_output.append(f'<p class="variation-content">{variation_text}</p>')
+                    html_output.append('<div class="variation-description-wrapper">')
+                    html_output.append(
+                        '<p class="variation-title"><strong>📈 Étude des variations et du signe :</strong></p>')
+
+                    # Séparer en paragraphes si c'est long
+                    if len(variation_text) > 150:
+                        sentences = re.split(r'[.!?]', variation_text)
+                        for sentence in sentences:
+                            if sentence.strip():
+                                html_output.append(f'<p class="variation-content">{sentence.strip()}.</p>')
+                    else:
+                        html_output.append(f'<p class="variation-content">{variation_text}</p>')
+
                     html_output.append('</div>')
                 in_variation_block = False
                 variation_lines = []
@@ -1241,29 +1315,33 @@ def generate_corrige_html(corrige_text):
             i += 1
             continue
 
-        # Listes
-        if line.startswith('•') or line.startswith('-'):
-            html_output.append(f'<p>{line}</p>')
+        # Listes avec puces
+        if line.startswith('•') or line.startswith('-') or line.startswith('*'):
+            html_output.append(f'<p class="list-item">{line}</p>')
             i += 1
             continue
 
-        # Tableaux markdown généraux (non statistiques)
-        if line.startswith('|') and i + 1 < len(lines) and '|' in lines[i + 1]:
-            table_lines_general = []
-            j = i
-            while j < len(lines) and lines[j].startswith('|'):
-                table_lines_general.append(lines[j])
-                j += 1
-            html_table = format_table_markdown('\n'.join(table_lines_general))
-            html_output.append('<div class="general-table">')
-            html_output.append(html_table)
-            html_output.append('</div>')
-            i = j
+        # Énumérations numérotées
+        if re.match(r'^\d+[\).]', line):
+            html_output.append(f'<p class="numbered-item">{line}</p>')
+            i += 1
             continue
 
-        # Formules LaTeX
-        if '\\(' in line or '\\[' in line:
-            html_output.append(f'<p class="reponse-question mathjax">{line}</p>')
+        # Formules LaTeX (inline)
+        if '\\(' in line and '\\)' in line:
+            html_output.append(f'<p class="reponse-question mathjax-inline">{line}</p>')
+            i += 1
+            continue
+
+        # Formules LaTeX (display)
+        if '\\[' in line and '\\]' in line:
+            html_output.append(f'<div class="mathjax-display">{line}</div>')
+            i += 1
+            continue
+
+        # Titres de sections dans les réponses
+        if line.endswith(':') and len(line) < 50 and not line.startswith('http'):
+            html_output.append(f'<p class="section-title"><strong>{line}</strong></p>')
             i += 1
             continue
 
@@ -1272,20 +1350,35 @@ def generate_corrige_html(corrige_text):
         i += 1
 
     # ========== FERMETURE DES BLOCS EN COURS ==========
+    # Fermer le dernier tableau markdown si toujours ouvert
+    if in_table_markdown and markdown_table_lines:
+        html_table = format_table_markdown('\n'.join(markdown_table_lines))
+        is_stat_table = any(keyword in markdown_table_lines[0].lower()
+                            for keyword in ['classe', 'effectif', 'fréquence', 'ecc', 'ecd'])
+        if is_stat_table:
+            html_output.append('<div class="statistical-table-wrapper">')
+            html_output.append('<p class="table-title"><strong>📊 Tableau statistique :</strong></p>')
+            html_output.append(html_table)
+            html_output.append('</div>')
+        else:
+            html_output.append('<div class="general-table-wrapper">')
+            html_output.append(html_table)
+            html_output.append('</div>')
+
     # Fermer le dernier bloc de variations si toujours ouvert
     if in_variation_block and variation_lines:
         variation_text = ' '.join(variation_lines)
-        html_output.append('<div class="variation-description">')
-        html_output.append('<p class="variation-title"><strong>📈 Variations et signe :</strong></p>')
-        html_output.append(f'<p class="variation-content">{variation_text}</p>')
-        html_output.append('</div>')
+        html_output.append('<div class="variation-description-wrapper">')
+        html_output.append('<p class="variation-title"><strong>📈 Étude des variations et du signe :</strong></p>')
 
-    # Fermer le dernier tableau statistique si toujours ouvert
-    if in_stat_table and table_lines:
-        html_table = format_table_markdown('\n'.join(table_lines))
-        html_output.append('<div class="statistical-table">')
-        html_output.append('<p class="table-caption"><strong>📊 Tableau statistique :</strong></p>')
-        html_output.append(html_table)
+        if len(variation_text) > 150:
+            sentences = re.split(r'[.!?]', variation_text)
+            for sentence in sentences:
+                if sentence.strip():
+                    html_output.append(f'<p class="variation-content">{sentence.strip()}.</p>')
+        else:
+            html_output.append(f'<p class="variation-content">{variation_text}</p>')
+
         html_output.append('</div>')
 
     # Ferme le dernier bloc exercice si ouvert
@@ -1293,7 +1386,6 @@ def generate_corrige_html(corrige_text):
         html_output.append('</div>')
 
     return mark_safe("".join(html_output))
-
 # ============== EXTRACTION TEXTE/FICHIER ==============
 
 def extraire_texte_pdf(fichier_path):
