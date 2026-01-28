@@ -425,6 +425,18 @@ def format_corrige_pdf_structure(texte_corrige_raw):
 
 
 # ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
+
+# Version simple maintenue pour compatibilité (mais dépréciée)
+def separer_exercices(texte_epreuve):
+    """
+    Version simple maintenue pour compatibilité.
+    DÉPRÉCIÉE : Utiliser separer_exercices_avec_titres() à la place.
+    """
+    resultats = separer_exercices_avec_titres(texte_epreuve)
+    # Retourne juste les contenus pour compatibilité
+    return [ex['contenu'] for ex in resultats]
+
+
 def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
     """
     Version avec hiérarchie parent-enfant pour les titres.
@@ -1570,6 +1582,97 @@ Rappels :
 "Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python. Pour les listes/types, toujours notation JSON [ ... ] et jamais { ... } sauf pour des objets. N’insère JAMAIS de virgule en trop."
 """
 
+
+
+
+# ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
+def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere, donnees_vision=None,demande=None):
+    """
+    Traitement direct pour les épreuves courtes avec données vision.
+    """
+    print("🎯 Traitement DIRECT avec analyse vision")
+    print("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
+          "/", type(demande))
+
+    # ✅ PASSER les données vision à la fonction de génération
+    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
+
+
+def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
+    """
+    Traitement par découpage pour les épreuves longues avec données vision,
+    utilisant la nouvelle fonction unifiée.
+    """
+    # 1) Sépare le texte en exercices AVEC la nouvelle fonction
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+
+    # 2) Traitement séquentiel
+    tous_corriges = []
+    tous_graphiques = []
+
+    for idx, ex_data in enumerate(exercices_data, start=1):
+        # Utiliser le contenu nettoyé de l'exercice
+        corrige_html, graphs = generer_corrige_par_exercice(
+            texte_exercice=ex_data['contenu'],
+            contexte=contexte,
+            matiere=matiere,
+            donnees_vision=donnees_vision,
+            demande=demande
+        )
+
+        # Préfixe avec le titre réel pour une meilleure organisation
+        titre_affichage = ex_data['titre']
+        if len(titre_affichage) > 50:
+            titre_affichage = f"Exercice {idx}"
+
+        tous_corriges.append(f"\n\n## 📝 {titre_affichage}\n\n{corrige_html}")
+
+        # Collecte des graphiques si existants
+        if graphs:
+            tous_graphiques.extend(graphs)
+
+    # 3) Retour
+    return "".join(tous_corriges), tous_graphiques
+
+
+def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
+                                    demande=None, donnees_vision=None):
+    """
+    Nouvelle version avec système unifié d'extraction.
+    """
+    print("\n[DEBUG] --> generer_corrige_ia_et_graphique called avec demande:",
+          getattr(demande, 'id', None), "/",
+          type(demande))
+
+    if lecons_contenus is None:
+        lecons_contenus = []
+    if exemples_corriges is None:
+        exemples_corriges = []
+
+    print("\n" + "=" * 60)
+    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION (SYSTÈME UNIFIÉ)")
+    print("=" * 60)
+    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+
+    # Données vision
+    if donnees_vision:
+        print(f"🔬 Données vision disponibles:")
+        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
+        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
+
+    # 1. ESTIMER LA COMPLEXITÉ
+    tokens_estimes = estimer_tokens(texte_enonce)
+
+    # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
+    if tokens_estimes < 1500:  # Épreuve courte
+        print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
+        return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
+                                      donnees_vision, demande=demande)
+    else:  # Épreuve longue
+        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
+        # Utiliser la nouvelle version unifiée
+        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande=demande)
+
 #les fonctions utilitaires , utilisables ou non, donc optionnelles
 def extraire_exercice_par_index(texte_epreuve, index=0):
     """
@@ -1620,28 +1723,165 @@ def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
     return result
 
 
-# Nouvelle fonction dans ia_utils.py
-def generer_corrige_un_exercice(texte_exercice, contexte, matiere, demande=None, donnees_vision=None):
-    """
-    Version simplifiée pour un seul exercice (workflow partiel)
-    Appelle directement generer_corrige_par_exercice sans logique de découpage
-    """
-    print("🎯 Traitement DIRECT pour exercice unique (workflow partiel)")
-
-    # Appel direct à la fonction de génération
-    return generer_corrige_par_exercice(
-        texte_exercice=texte_exercice,
-        contexte=contexte,
-        matiere=matiere,
-        demande=demande,
-        donnees_vision=donnees_vision
-    )
 # ============== TÂCHE ASYNCHRONE ==============
+
+@shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
+def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
+    from correction.models import DemandeCorrection, SoumissionIA
+    from resources.models import Matiere
+
+    try:
+        # Récupération de la demande et création de la soumission IA
+        demande = DemandeCorrection.objects.get(id=demande_id)
+        soumission = SoumissionIA.objects.get(demande=demande)
+
+        # Étape 1 : Extraction du texte brut AVEC VISION
+        soumission.statut = 'extraction'
+        soumission.progression = 20
+        soumission.save()
+
+        donnees_vision_complete = None
+        texte_brut = ""
+
+        if demande.fichier:
+            # 1) Sauvegarde locale
+            temp_dir = tempfile.gettempdir()
+            local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
+            with open(local_path, "wb") as f:
+                for chunk in demande.fichier.chunks():
+                    f.write(chunk)
+
+            # 2) Appel unique d'analyse scientifique
+            analyse_complete = analyser_document_scientifique(local_path)
+            donnees_vision_complete = {
+                "elements_visuels": analyse_complete.get("elements_visuels", []),
+                "formules_latex": analyse_complete.get("formules_latex", []),
+                "graphs": analyse_complete.get("graphs", []),
+                "angles": analyse_complete.get("angles", []),
+                "numbers": analyse_complete.get("numbers", []),
+                "structure_exercices": analyse_complete.get("structure_exercices", [])
+            }
+            texte_brut = analyse_complete.get("texte_complet", "")
+
+            # 3) Nettoyage
+            try:
+                os.unlink(local_path)
+            except:
+                pass
+        else:
+            texte_brut = demande.enonce_texte or ""
+
+        print("📥 TEXTE BRUT AVEC VISION (premiers 500 chars) :")
+        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
+
+        # Étape 1b : Extraire les exercices et stocker les données
+        exercices_data = separer_exercices_avec_titres(texte_brut)
+        print(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
+
+        # Stocker les données des exercices dans la demande
+        demande.exercices_data = json.dumps([
+            {
+                'titre': ex['titre'],
+                'titre_complet': ex['titre_complet'],
+                'contenu': ex['contenu'][:500] + '...' if len(ex['contenu']) > 500 else ex['contenu']
+            }
+            for ex in exercices_data
+        ])
+        demande.save()
+
+        # Étape 2 : Texte final pour l'IA
+        texte_enonce = texte_brut
+
+        # Étape 3 : Lancement du traitement IA AVEC DONNÉES VISION
+        soumission.statut = 'analyse_ia'
+        soumission.progression = 40
+        soumission.save()
+
+        matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
+        contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
+
+        # Étape 4 : Génération graphique (si département scientifique)
+        departement = demande.departement
+        if is_departement_scientifique(departement):
+            print(f"⚗️ Département scientifique : {departement.nom}")
+            soumission.statut = 'generation_graphiques'
+            soumission.progression = 60
+            soumission.save()
+        else:
+            print(f"⚡ Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
+
+        # APPEL AVEC DONNÉES VISION
+        corrige_txt, graph_list = generer_corrige_ia_et_graphique(
+            texte_enonce,
+            contexte,
+            matiere=matiere,
+            donnees_vision=donnees_vision_complete,
+            demande=demande
+        )
+
+        # Étape 5 : Génération PDF
+        soumission.statut = 'formatage_pdf'
+        soumission.progression = 80
+        soumission.save()
+
+        from .pdf_utils import generer_pdf_corrige
+        pdf_path = generer_pdf_corrige(
+            {
+                "titre_corrige": contexte,
+                "corrige_html": corrige_txt,
+                "soumission_id": demande_id,
+                "exercices_data": exercices_data  # Passer les données des exercices
+            },
+            demande_id
+        )
+
+        # Débit de crédit
+        from abonnement.services import debiter_credit_abonnement
+        if not debiter_credit_abonnement(demande.user):
+            soumission.statut = 'erreur_credit'
+            soumission.save()
+            return False
+
+        # Étape 6 : Mise à jour du statut et sauvegarde
+        soumission.statut = 'termine'
+        soumission.progression = 100
+        soumission.resultat_json = {
+            'corrige_text': corrige_txt,
+            'pdf_url': pdf_path,
+            'graphiques': graph_list or [],
+            'analyse_vision': donnees_vision_complete,
+            'exercices_detectes': len(exercices_data),
+            'exercices_titres': [ex['titre'] for ex in exercices_data]
+        }
+        soumission.save()
+
+        demande.corrigé = corrige_txt
+        demande.save()
+
+        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        print(f"   Exercices détectés: {len(exercices_data)}")
+        for i, ex in enumerate(exercices_data, 1):
+            print(f"   {i}. {ex['titre'][:50]}...")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ ERREUR dans la tâche IA: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            soumission.statut = 'erreur'
+            soumission.save()
+        except:
+            pass
+        return False
+
+
 @shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
 def generer_corrige_exercice_async(soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
-    Version refactorée utilisant generer_corrige_un_exercice
+    Version mise à jour avec système unifié.
     """
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
@@ -1650,7 +1890,7 @@ def generer_corrige_exercice_async(soumission_id):
         # 1) Préparer le texte complet depuis le fichier d'énoncé
         texte = extraire_texte_fichier(dem.fichier)
 
-        # 2) Séparer et extraire le fragment
+        # 2) Séparer et extraire le fragment avec la NOUVELLE fonction
         exercices_data = separer_exercices_avec_titres(texte)
         idx = soum.exercice_index or 0
 
@@ -1665,18 +1905,17 @@ def generer_corrige_exercice_async(soumission_id):
         print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
         print(f"   Longueur contenu: {len(fragment)} caractères")
 
-        # 3) Mise à jour statut
+        # 3) Mise à jour statut pour analyse IA
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
 
-        # 4) Lancer la génération avec la NOUVELLE fonction
+        # 4) Lancer la génération (IA + graph) sur ce fragment
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
         contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
 
-        # ✅ APPEL À LA NOUVELLE FONCTION
-        corrige_txt, _ = generer_corrige_un_exercice(
-            texte_exercice=fragment,
+        corrige_txt, _ = generer_corrige_ia_et_graphique(
+            texte_enonce=fragment,
             contexte=contexte,
             matiere=mat,
             demande=dem

@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from .models import DemandeCorrection, SoumissionIA
-
+from .ia_utils import generer_corrige_ia_et_graphique_async
 from resources.models import Pays, SousSysteme, Classe, Matiere, TypeExercice,Lecon,Departement
 import json
 from rest_framework.parsers import MultiPartParser, JSONParser
@@ -44,7 +44,7 @@ from .ia_utils import (
 
 )
 from rest_framework.permissions import IsAuthenticated
-from .ia_utils import  extraire_texte_fichier
+from .ia_utils import separer_exercices, extraire_texte_fichier
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import traceback
 import tempfile, os
@@ -182,7 +182,94 @@ class ProfileAPIView(APIView):
         return Response({"success": True, "message": "Profil mis à jour."})
 
 # vue pour la soumission coté flutter
+class SoumissionExerciceAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, JSONParser]
 
+    def post(self, request):
+        try:
+            # 1) Vérifier l'abonnement actif / crédits restants
+            if not user_abonnement_actif(request.user):
+                return Response(
+                    {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
+                    status=status.HTTP_402_PAYMENT_REQUIRED
+                )
+
+            # 2) Débite 1 crédit
+            # → Le débit est différé : il interviendra plus tard, une fois le PDF généré.
+
+            # Récupérer les données
+            pays_id = request.data.get('pays')
+            sous_systeme_id = request.data.get('sous_systeme')
+            classe_id = request.data.get('classe')
+            matiere_id = request.data.get('matiere')
+            type_exercice_id = request.data.get('type_exercice')
+            departement_id = request.data.get('departement')
+            fichier = request.FILES.get('fichier')
+
+            # Récupérer les leçons sélectionnées
+            lecons_ids = request.data.get('lecons_ids', [])
+            if isinstance(lecons_ids, str):
+                try:
+                    lecons_ids = json.loads(lecons_ids)
+                except json.JSONDecodeError:
+                    lecons_ids = []
+
+            # Validation des données requises
+            if not matiere_id:
+                return Response(
+                    {"error": "Matière obligatoire"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Vérifier qu'on a un fichier
+            if not fichier :
+                return Response(
+                    {"error": "Fichier ou énoncé texte requis"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Créer la demande
+            demande = DemandeCorrection.objects.create(
+                user=request.user,
+                pays_id=pays_id,
+                sous_systeme_id=sous_systeme_id,
+                classe_id=classe_id,
+                matiere_id=matiere_id,
+                departement_id=departement_id,
+                type_exercice_id=type_exercice_id,
+                fichier=fichier,
+            )
+
+            # Ajouter les leçons sélectionnées
+            if lecons_ids:
+                lecons = Lecon.objects.filter(id__in=lecons_ids)
+                demande.lecons.set(lecons)
+
+            # Créer le suivi IA
+            soumission = SoumissionIA.objects.create(
+                user=request.user,
+                demande=demande,
+                statut='en_attente'
+            )
+
+            # Lancer le traitement async AVEC DÉCOUPAGE
+            from .ia_utils import generer_corrige_ia_et_graphique_async
+            generer_corrige_ia_et_graphique_async.delay(demande.id, matiere_id)
+
+            return Response({
+                "success": True,
+                "soumission_id": soumission.id,
+                "message": "Exercice soumis avec succès. Traitement en cours...",
+                "info": "Le système détectera automatiquement si un découpage est nécessaire"
+            })
+
+        except Exception as e:
+            print(f"Erreur lors de la soumission: {e}")
+            return Response(
+                {"error": f"Erreur serveur: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class StatutSoumissionAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -721,3 +808,4 @@ class ContactWhatsAppAPIView(APIView):
                 "success": False,
                 "error": "Erreur lors de la récupération du contact"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
