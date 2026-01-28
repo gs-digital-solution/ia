@@ -28,6 +28,13 @@ from resources.models import Matiere
 from abonnement.services import debiter_credit_abonnement
 from .models import CorrigePartiel
 from django.core.files import File
+
+import math
+from typing import Dict, List, Optional, Tuple
+from .mathpix_extractor import (
+    validate_mathpix_config,
+    analyze_scientific_document as mathpix_analyze
+)
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -91,6 +98,130 @@ def is_departement_scientifique(departement):
         dep_name = departement.nom.lower()
         return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
     return False
+
+
+def extract_with_scientific_workflow(file_path: str, departement) -> Dict:
+    """
+    Workflow d'extraction scientifique avec Mathpix et analyse avancée.
+
+    Args:
+        file_path: Chemin vers le fichier
+        departement: Objet département pour vérification
+
+    Returns:
+        Dict: Résultats d'analyse enrichis pour DeepSeek Reasoner
+    """
+    logger.info(f"🔬 Début workflow scientifique pour département: {departement.nom if departement else 'Inconnu'}")
+
+    # 1. Vérifier si Mathpix est configuré
+    if not validate_mathpix_config():
+        logger.warning("⚠️ Mathpix non configuré, fallback sur OCR standard")
+        return {"text": "", "elements_visuels": [], "formules_latex": []}
+
+    try:
+        # 2. Analyse scientifique avec Mathpix
+        mathpix_results = mathpix_analyze(file_path)
+
+        # 3. Post-traitement pour structurer les résultats
+        # Extraire le texte principal
+        texte_complet = mathpix_results.get("text", "")
+
+        # Préparer les éléments visuels (équations et tableaux)
+        elements_visuels = []
+
+        # Ajouter les équations comme éléments visuels
+        for eq in mathpix_results.get("equations", []):
+            elements_visuels.append({
+                "type": "equation",
+                "latex": eq.get("latex", ""),
+                "confidence": eq.get("confidence", 0),
+                "position": eq.get("bounds", {}),
+                "description": f"Équation mathématique (confiance: {eq.get('confidence', 0):.2f})"
+            })
+
+        # Ajouter les tableaux comme éléments visuels
+        for table in mathpix_results.get("tables", []):
+            elements_visuels.append({
+                "type": "table",
+                "latex": table.get("latex", ""),
+                "text": table.get("text", ""),
+                "confidence": table.get("confidence", 0),
+                "description": f"Tableau détecté (confiance: {table.get('confidence', 0):.2f})"
+            })
+
+        # Extraire les blocs LaTeX
+        formules_latex = mathpix_results.get("latex_blocks", [])
+
+        # 4. Analyse des schémas avec BLIP (si disponible)
+        captions = []
+        try:
+            from PIL import Image
+            img = Image.open(file_path)
+
+            # Détection de schémas basique par analyse d'image
+            # Vous pouvez ajouter une détection plus sophistiquée ici
+            img_array = np.array(img)
+
+            # Détection de contours pour identifier les schémas
+            if len(img_array.shape) == 3:
+                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = img_array
+
+            edges = cv2.Canny(gray, 50, 150)
+            contour_ratio = np.sum(edges > 0) / (img_array.shape[0] * img_array.shape[1])
+
+            if contour_ratio > 0.05:  # Seuil pour détecter un schéma
+                try:
+                    # Utiliser BLIP pour générer une description
+                    blip_processor, blip_model = get_blip_model()
+                    inputs = blip_processor(img, return_tensors="pt").to(blip_model.device)
+                    out = blip_model.generate(**inputs, max_new_tokens=50)
+                    caption = blip_processor.decode(out[0], skip_special_tokens=True)
+
+                    captions.append({
+                        "type": "schema",
+                        "description": caption,
+                        "confidence": 0.7,
+                        "contour_density": contour_ratio
+                    })
+                except Exception as e:
+                    logger.warning(f"⚠️ Erreur BLIP: {e}")
+                    captions.append({
+                        "type": "schema",
+                        "description": "Schéma scientifique détecté (non analysé)",
+                        "confidence": 0.5,
+                        "contour_density": contour_ratio
+                    })
+
+        except Exception as e:
+            logger.warning(f"⚠️ Erreur analyse image: {e}")
+
+        # 5. Structurer le résultat final
+        result = {
+            "texte_complet": texte_complet,
+            "elements_visuels": elements_visuels + captions,
+            "formules_latex": formules_latex,
+            "confidence": mathpix_results.get("confidence", 0),
+            "extraction_method": "mathpix_scientific",
+            "mathpix_raw": mathpix_results,  # Données brutes pour débogage
+            "metadata": {
+                "departement": departement.nom if departement else "Inconnu",
+                "is_scientific": True,
+                "file_type": os.path.splitext(file_path)[1],
+                "extraction_timestamp": datetime.now().isoformat()
+            }
+        }
+
+        logger.info(f"✅ Workflow scientifique terminé: {len(texte_complet)} caractères, "
+                    f"{len(elements_visuels)} éléments visuels, {len(formules_latex)} formules")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ Erreur workflow scientifique: {e}")
+        # Fallback sur l'analyse standard
+        return analyser_document_scientifique(file_path)
 
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
 def get_best_promptia(demande):
@@ -195,23 +326,180 @@ def call_deepseek_vision(path_fichier: str) -> dict:
         print(f"❌ Erreur call_deepseek_vision: {e}")
         return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
 
+
+def call_deepseek_reasoner(exercice_data: Dict, contexte: str, promptia=None) -> str:
+    """
+    Appel à DeepSeek Reasoner pour reconstituer rigoureusement l'exercice scientifique.
+
+    Args:
+        exercice_data: Données de l'exercice (texte, formules, éléments visuels)
+        contexte: Contexte de l'exercice
+        promptia: Prompt IA spécifique (optionnel)
+
+    Returns:
+        str: Exercice reconstitué et structuré pour DeepSeek Chat
+    """
+    logger.info("🧠 Appel DeepSeek Reasoner pour reconstruction scientifique")
+
+    # Construire le prompt système spécialisé pour Reasoner
+    system_prompt = """Tu es DeepSeek Reasoner, un expert en analyse scientifique rigoureuse.
+
+TON RÔLE : Reconstituer de manière EXHAUSTIVE et STRUCTURÉE un exercice scientifique à partir des données d'extraction.
+
+CONSIGNES ABSOLUES :
+1. NE PAS faire le corrigé, seulement reconstituer l'énoncé
+2. INCLURE TOUS les éléments : texte, formules, schémas, tableaux
+3. DÉCRIRE LES SCHÉMAS de manière précise et complète
+4. STRUCTURER avec des sections claires
+5. PRÉSERVER la rigueur mathématique/scientifique
+6. GÉRER les ambiguïtés de manière logique
+
+FORMAT DE SORTIE OBLIGATOIRE :
+
+=== EXERCICE RECONSTITUÉ ===
+
+[Texte principal de l'exercice exactement comme dans le document]
+
+=== FORMULES MATHÉMATIQUES ===
+
+[Pour chaque formule LaTeX détectée :
+• Formule : \[ ... \]
+• Contexte : Description de son usage dans l'exercice
+• Position : Si disponible, indication de localisation]
+
+=== SCHÉMAS ET FIGURES ===
+
+[Pour chaque élément visuel :
+• Type : (schéma, tableau, graphique, diagramme)
+• Description détaillée : [Décrire TOUS les éléments, leurs relations, annotations]
+• Données numériques : [Extraire toutes les valeurs numériques]
+• Légendes : [Inclure toutes les légendes détectées]
+• Relation avec l'exercice : [Expliquer comment le schéma s'intègre]]
+
+=== DONNÉES SUPPLÉMENTAIRES ===
+
+[Angles, valeurs numériques, unités spécifiques]
+
+=== CONTEXTE ET PRÉCISIONS ===
+
+[Clarifier les ambiguïtés, préciser les hypothèses raisonnables]
+
+=== STRUCTURE PROPOSÉE POUR LE CORRIGÉ ===
+
+[Suggérer une organisation pour la correction, sans la faire]
+
+FIN DE LA RECONSTITUTION
+"""
+
+    # Construire le prompt utilisateur avec toutes les données
+    user_prompt_parts = [
+        f"CONTEXTE : {contexte}",
+        "\n=== DONNÉES BRUTES D'EXTRACTION ===\n"
+    ]
+
+    # Ajouter le texte extrait
+    if exercice_data.get("texte_complet"):
+        user_prompt_parts.append("TEXTE EXTRAIT :")
+        user_prompt_parts.append(exercice_data["texte_complet"][:5000])  # Limiter la taille
+
+    # Ajouter les formules LaTeX
+    if exercice_data.get("formules_latex"):
+        user_prompt_parts.append("\nFORMULES LaTeX DÉTECTÉES :")
+        for i, formule in enumerate(exercice_data["formules_latex"][:20], 1):  # Limiter à 20 formules
+            user_prompt_parts.append(f"{i}. {formule}")
+
+    # Ajouter les éléments visuels
+    if exercice_data.get("elements_visuels"):
+        user_prompt_parts.append("\nÉLÉMENTS VISUELS DÉTECTÉS :")
+        for i, element in enumerate(exercice_data["elements_visuels"][:15], 1):  # Limiter à 15 éléments
+            desc = element.get("description", "Élément sans description")
+            elem_type = element.get("type", "inconnu")
+            user_prompt_parts.append(f"{i}. [{elem_type.upper()}] {desc}")
+
+    # Ajouter les métadonnées
+    metadata = exercice_data.get("metadata", {})
+    if metadata:
+        user_prompt_parts.append(f"\nMÉTADONNÉES : Département={metadata.get('departement')}, "
+                                 f"Scientifique={metadata.get('is_scientific')}")
+
+    user_prompt_parts.append("\n" + "=" * 50)
+    user_prompt_parts.append("INSTRUCTIONS FINALES :")
+    user_prompt_parts.append("1. Reconstituer l'exercice COMPLET et EXACT")
+    user_prompt_parts.append("2. Décrire TOUS les schémas en détail")
+    user_prompt_parts.append("3. Structurer pour faciliter la correction")
+    user_prompt_parts.append("4. NE PAS faire le corrigé maintenant")
+
+    user_prompt = "\n".join(user_prompt_parts)
+
+    # Préparation de l'appel API
+    api_url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "deepseek-reasoner",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 8000,
+        "top_p": 0.9,
+        "frequency_penalty": 0.0
+    }
+
+    try:
+        logger.info("📡 Appel à DeepSeek Reasoner...")
+        response = requests.post(api_url, headers=headers, json=data, timeout=120)
+        response.raise_for_status()
+
+        result = response.json()
+        reconstructed_exercise = result['choices'][0]['message']['content']
+
+        logger.info(f"✅ Reasoner: {len(reconstructed_exercise)} caractères générés")
+
+        # Vérification de la qualité
+        if len(reconstructed_exercise) < 100:
+            logger.warning("⚠️ Reconstruction trop courte, utilisation des données brutes")
+            return exercice_data.get("texte_complet", "")
+
+        return reconstructed_exercise
+
+    except Exception as e:
+        logger.error(f"❌ Erreur DeepSeek Reasoner: {e}")
+        # Fallback: retourner le texte brut
+        return exercice_data.get("texte_complet", "")
+
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
-def analyser_document_scientifique(fichier_path: str) -> dict:
+def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
     """
-    Analyse scientifique avancée avec deepseek-vl2 :
-    - OCR (Tesseract) en fallback
-    - appel multimodal deepseek-vl2 pour texte + schémas
-    Retourne un dict avec :
-      - texte_complet (str)
-      - elements_visuels (list of captions)
-      - formules_latex  (list of LaTeX strings)
-      - graphs          (list of dicts graphiques)
-      - angles          (list of {"valeur","unité","coord"})
-      - numbers         (list of {"valeur","unité","coord"})
-      - structure_exercices (list)
+    Analyse scientifique avancée avec choix automatique du workflow.
+
+    Args:
+        fichier_path: Chemin vers le fichier
+        departement: Objet département (optionnel, pour décision)
+
+    Returns:
+        dict: Résultats d'analyse
     """
-    logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
+    logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
+
+    # Décision du workflow
+    use_scientific_workflow = False
+    if departement:
+        use_scientific_workflow = is_departement_scientifique(departement)
+        logger.info(f"   Département: {departement.nom} → Workflow scientifique: {use_scientific_workflow}")
+
+    # Si département scientifique et Mathpix configuré, utiliser le workflow scientifique
+    if use_scientific_workflow and validate_mathpix_config():
+        logger.info("   → Utilisation du workflow scientifique avec Mathpix")
+        return extract_with_scientific_workflow(fichier_path, departement)
+
+    # Sinon, utiliser le workflow standard avec DeepSeek Vision
+    logger.info("   → Utilisation du workflow standard avec DeepSeek Vision")
 
     # 1) OCR fallback pour avoir un premier texte
     config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
@@ -253,12 +541,12 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             texte_json = texte_ocr
 
         # 2b) Récupération des blocs
-        captions     = vision_json.get("captions", [])
+        captions = vision_json.get("captions", [])
         latex_blocks = vision_json.get("latex_blocks", [])
-        graphs       = vision_json.get("graphs", [])
-        angles       = vision_json.get("angles", [])
-        numbers      = vision_json.get("numbers", [])
-        struct_exos  = vision_json.get("structure_exercices", [])
+        graphs = vision_json.get("graphs", [])
+        angles = vision_json.get("angles", [])
+        numbers = vision_json.get("numbers", [])
+        struct_exos = vision_json.get("structure_exercices", [])
 
         logger.info("✅ deepseek-vl2 OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
                     len(texte_json), len(captions), len(latex_blocks), len(angles), len(numbers))
@@ -270,7 +558,13 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             "graphs": graphs,
             "angles": angles,
             "numbers": numbers,
-            "structure_exercices": struct_exos
+            "structure_exercices": struct_exos,
+            "extraction_method": "deepseek_vision",
+            "metadata": {
+                "departement": departement.nom if departement else "Inconnu",
+                "is_scientific": False,
+                "file_type": os.path.splitext(fichier_path)[1]
+            }
         }
 
     except Exception as e:
@@ -283,9 +577,14 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
             "graphs": [],
             "angles": [],
             "numbers": [],
-            "structure_exercices": []
+            "structure_exercices": [],
+            "extraction_method": "ocr_fallback",
+            "metadata": {
+                "departement": departement.nom if departement else "Inconnu",
+                "is_scientific": False,
+                "file_type": os.path.splitext(fichier_path)[1]
+            }
         }
-
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
     Extraction simple : OCR direct → Analyse IA
@@ -1995,7 +2294,6 @@ def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
 
 
 # ============== TÂCHE ASYNCHRONE ==============
-
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
     from correction.models import DemandeCorrection, SoumissionIA
@@ -2006,7 +2304,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         demande = DemandeCorrection.objects.get(id=demande_id)
         soumission = SoumissionIA.objects.get(demande=demande)
 
-        # Étape 1 : Extraction du texte brut AVEC VISION
+        # Étape 1 : Extraction du texte brut AVEC WORKFLOW SCIENTIFIQUE
         soumission.statut = 'extraction'
         soumission.progression = 20
         soumission.save()
@@ -2022,42 +2320,107 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
                 for chunk in demande.fichier.chunks():
                     f.write(chunk)
 
-            # 2) Appel unique d'analyse scientifique
-            analyse_complete = analyser_document_scientifique(local_path)
+            # 2) Analyse scientifique avec choix automatique du workflow
+            #    La fonction analyser_document_scientifique gère automatiquement
+            #    le choix entre workflow scientifique et standard
+            analyse_complete = analyser_document_scientifique(
+                local_path,
+                departement=demande.departement
+            )
+
+            # 3) Si département scientifique, utiliser DeepSeek Reasoner pour reconstruction
+            if is_departement_scientifique(demande.departement):
+                logger.info(f"⚗️ Département scientifique détecté: {demande.departement.nom}")
+
+                # Préparer le contexte
+                matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
+                contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
+
+                # Appeler Reasoner pour reconstruction rigoureuse
+                soumission.statut = 'reconstruction_scientifique'
+                soumission.progression = 30
+                soumission.save()
+
+                try:
+                    exercice_reconstruit = call_deepseek_reasoner(
+                        exercice_data=analyse_complete,
+                        contexte=contexte,
+                        promptia=get_best_promptia(demande)
+                    )
+
+                    # Remplacer le texte brut par la version reconstruite
+                    texte_brut = exercice_reconstruit
+                    logger.info(f"✅ Exercice reconstruit par Reasoner: {len(texte_brut)} caractères")
+
+                    # Ajouter un flag dans les données vision
+                    analyse_complete["reasoner_reconstructed"] = True
+                    analyse_complete["reconstructed_text"] = texte_brut
+
+                except Exception as e:
+                    logger.error(f"❌ Erreur Reasoner, fallback sur extraction standard: {e}")
+                    texte_brut = analyse_complete.get("texte_complet", "")
+            else:
+                # Département non-scientifique : workflow standard
+                texte_brut = analyse_complete.get("texte_complet", "")
+
             donnees_vision_complete = {
                 "elements_visuels": analyse_complete.get("elements_visuels", []),
                 "formules_latex": analyse_complete.get("formules_latex", []),
                 "graphs": analyse_complete.get("graphs", []),
                 "angles": analyse_complete.get("angles", []),
                 "numbers": analyse_complete.get("numbers", []),
-                "structure_exercices": analyse_complete.get("structure_exercices", [])
+                "structure_exercices": analyse_complete.get("structure_exercices", []),
+                "extraction_method": analyse_complete.get("extraction_method", "unknown"),
+                "metadata": analyse_complete.get("metadata", {}),
+                "reasoner_used": is_departement_scientifique(demande.departement),
+                "confidence": analyse_complete.get("confidence", 0)
             }
-            texte_brut = analyse_complete.get("texte_complet", "")
 
-            # 3) Nettoyage
+            # 4) Nettoyage du fichier temporaire
             try:
                 os.unlink(local_path)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur suppression fichier temporaire: {e}")
         else:
+            # Si pas de fichier, utiliser le texte de l'énoncé
             texte_brut = demande.enonce_texte or ""
-
-        print("📥 TEXTE BRUT AVEC VISION (premiers 500 chars) :")
-        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
-
-        # Étape 1b : Extraire les exercices et stocker les données
-        exercices_data = separer_exercices_avec_titres(texte_brut)
-        print(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
-
-        # Stocker les données des exercices dans la demande
-        demande.exercices_data = json.dumps([
-            {
-                'titre': ex['titre'],
-                'titre_complet': ex['titre_complet'],
-                'contenu': ex['contenu'][:500] + '...' if len(ex['contenu']) > 500 else ex['contenu']
+            donnees_vision_complete = {
+                "elements_visuels": [],
+                "formules_latex": [],
+                "graphs": [],
+                "angles": [],
+                "numbers": [],
+                "structure_exercices": [],
+                "extraction_method": "direct_text",
+                "metadata": {
+                    "departement": demande.departement.nom if demande.departement else "Inconnu",
+                    "is_scientific": is_departement_scientifique(demande.departement)
+                },
+                "reasoner_used": False
             }
-            for ex in exercices_data
-        ])
+
+        logger.info(f"📥 TEXTE FINAL POUR CORRECTION: {len(texte_brut)} caractères")
+        if texte_brut:
+            logger.info(f"   Extrait (500 premiers chars): {texte_brut[:500].replace(chr(10), '\\n')}...")
+
+        # Étape 1b : Extraire les exercices et stocker les données (uniquement si texte suffisant)
+        if len(texte_brut) > 100:
+            exercices_data = separer_exercices_avec_titres(texte_brut)
+            logger.info(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
+
+            # Stocker les données des exercices dans la demande
+            demande.exercices_data = json.dumps([
+                {
+                    'titre': ex['titre'],
+                    'titre_complet': ex['titre_complet'],
+                    'contenu': ex['contenu'][:500] + '...' if len(ex['contenu']) > 500 else ex['contenu']
+                }
+                for ex in exercices_data
+            ])
+        else:
+            exercices_data = []
+            demande.exercices_data = json.dumps([])
+
         demande.save()
 
         # Étape 2 : Texte final pour l'IA
@@ -2073,18 +2436,21 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 
         # Étape 4 : Génération graphique (si département scientifique)
         departement = demande.departement
-        if is_departement_scientifique(departement):
-            print(f"⚗️ Département scientifique : {departement.nom}")
+        is_scientific = is_departement_scientifique(departement)
+
+        if is_scientific:
+            logger.info(f"⚗️ Département scientifique : {departement.nom}")
             soumission.statut = 'generation_graphiques'
             soumission.progression = 60
             soumission.save()
         else:
-            print(f"⚡ Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
+            logger.info(
+                f"⚡ Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
 
         # APPEL AVEC DONNÉES VISION
         corrige_txt, graph_list = generer_corrige_ia_et_graphique(
-            texte_enonce,
-            contexte,
+            texte_enonce=texte_enonce,
+            contexte=contexte,
             matiere=matiere,
             donnees_vision=donnees_vision_complete,
             demande=demande
@@ -2111,6 +2477,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         if not debiter_credit_abonnement(demande.user):
             soumission.statut = 'erreur_credit'
             soumission.save()
+            logger.error("❌ Crédits insuffisants pour l'utilisateur")
             return False
 
         # Étape 6 : Mise à jour du statut et sauvegarde
@@ -2122,24 +2489,27 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
             'graphiques': graph_list or [],
             'analyse_vision': donnees_vision_complete,
             'exercices_detectes': len(exercices_data),
-            'exercices_titres': [ex['titre'] for ex in exercices_data]
+            'exercices_titres': [ex['titre'] for ex in exercices_data],
+            'is_scientific': is_scientific,
+            'reasoner_used': donnees_vision_complete.get('reasoner_used', False)
         }
         soumission.save()
 
         demande.corrigé = corrige_txt
         demande.save()
 
-        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
-        print(f"   Exercices détectés: {len(exercices_data)}")
+        logger.info("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        logger.info(f"   Exercices détectés: {len(exercices_data)}")
+        logger.info(f"   Département scientifique: {is_scientific}")
+        logger.info(f"   Reasoner utilisé: {donnees_vision_complete.get('reasoner_used', False)}")
+
         for i, ex in enumerate(exercices_data, 1):
-            print(f"   {i}. {ex['titre'][:50]}...")
+            logger.info(f"   {i}. {ex['titre'][:50]}...")
 
         return True
 
     except Exception as e:
-        print(f"❌ ERREUR dans la tâche IA: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"❌ ERREUR dans la tâche IA: {e}")
         try:
             soumission.statut = 'erreur'
             soumission.save()
@@ -2152,36 +2522,149 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 def generer_corrige_exercice_async(soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
-    Version mise à jour avec système unifié.
+    Version mise à jour avec workflow scientifique intégré.
     """
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
 
-        # 1) Préparer le texte complet depuis le fichier d'énoncé
-        texte = extraire_texte_fichier(dem.fichier)
+        # Étape 1 : Préparation de l'extraction
+        soum.statut = 'extraction'
+        soum.progression = 10
+        soum.save()
 
-        # 2) Séparer et extraire le fragment avec la NOUVELLE fonction
-        exercices_data = separer_exercices_avec_titres(texte)
+        donnees_vision_complete = None
+        texte_complet = ""
+
+        if dem.fichier:
+            # 1) Sauvegarde locale
+            temp_dir = tempfile.gettempdir()
+            local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
+            with open(local_path, "wb") as f:
+                for chunk in dem.fichier.chunks():
+                    f.write(chunk)
+
+            # 2) Analyse scientifique avec choix automatique du workflow
+            analyse_complete = analyser_document_scientifique(
+                local_path,
+                departement=dem.departement
+            )
+
+            # 3) Si département scientifique, utiliser DeepSeek Reasoner pour reconstruction
+            if is_departement_scientifique(dem.departement):
+                logger.info(f"⚗️ Département scientifique détecté: {dem.departement.nom}")
+
+                # Préparer le contexte
+                mat = dem.matiere if dem.matiere else Matiere.objects.first()
+                contexte = f"Exercice isolé de {mat.nom} - {dem.classe.nom if dem.classe else ''}"
+
+                # Appeler Reasoner pour reconstruction rigoureuse
+                soum.statut = 'reconstruction_scientifique'
+                soum.progression = 20
+                soum.save()
+
+                try:
+                    exercice_reconstruit = call_deepseek_reasoner(
+                        exercice_data=analyse_complete,
+                        contexte=contexte,
+                        promptia=get_best_promptia(dem)
+                    )
+
+                    # Utiliser la version reconstruite
+                    texte_complet = exercice_reconstruit
+                    logger.info(f"✅ Exercice reconstruit par Reasoner: {len(texte_complet)} caractères")
+
+                    # Ajouter un flag dans les données vision
+                    analyse_complete["reasoner_reconstructed"] = True
+                    analyse_complete["reconstructed_text"] = texte_complet
+
+                except Exception as e:
+                    logger.error(f"❌ Erreur Reasoner, fallback sur extraction standard: {e}")
+                    texte_complet = analyse_complete.get("texte_complet", "")
+            else:
+                # Département non-scientifique : workflow standard
+                texte_complet = analyse_complete.get("texte_complet", "")
+
+            # Préparer les données vision pour la correction
+            donnees_vision_complete = {
+                "elements_visuels": analyse_complete.get("elements_visuels", []),
+                "formules_latex": analyse_complete.get("formules_latex", []),
+                "graphs": analyse_complete.get("graphs", []),
+                "angles": analyse_complete.get("angles", []),
+                "numbers": analyse_complete.get("numbers", []),
+                "structure_exercices": analyse_complete.get("structure_exercices", []),
+                "extraction_method": analyse_complete.get("extraction_method", "unknown"),
+                "metadata": analyse_complete.get("metadata", {}),
+                "reasoner_used": is_departement_scientifique(dem.departement),
+                "confidence": analyse_complete.get("confidence", 0)
+            }
+
+            # 4) Nettoyage
+            try:
+                os.unlink(local_path)
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur suppression fichier temporaire: {e}")
+        else:
+            # Si pas de fichier, utiliser le texte de l'énoncé
+            texte_complet = dem.enonce_texte or ""
+            donnees_vision_complete = {
+                "elements_visuels": [],
+                "formules_latex": [],
+                "graphs": [],
+                "angles": [],
+                "numbers": [],
+                "structure_exercices": [],
+                "extraction_method": "direct_text",
+                "metadata": {
+                    "departement": dem.departement.nom if dem.departement else "Inconnu",
+                    "is_scientific": is_departement_scientifique(dem.departement)
+                },
+                "reasoner_used": False
+            }
+
+        logger.info(f"📥 TEXTE COMPLET: {len(texte_complet)} caractères")
+
+        # 2) Séparer et extraire le fragment spécifique
+        soum.statut = 'decoupage_exercices'
+        soum.progression = 30
+        soum.save()
+
+        exercices_data = separer_exercices_avec_titres(texte_complet)
         idx = soum.exercice_index or 0
 
         # Vérifier l'index
         if idx >= len(exercices_data):
-            print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+            logger.warning(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
             idx = len(exercices_data) - 1
 
         ex_data = exercices_data[idx]
         fragment = ex_data['contenu']
 
-        print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
-        print(f"   Longueur contenu: {len(fragment)} caractères")
+        logger.info(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
+        logger.info(f"   Longueur contenu: {len(fragment)} caractères")
 
-        # 3) Mise à jour statut pour analyse IA
+        # 3) Préparer les données vision spécifiques à cet exercice
+        # Filtrer les éléments visuels pertinents pour cet exercice
+        exercice_donnees_vision = None
+        if donnees_vision_complete and len(fragment) > 50:
+            # On pourrait implémenter une logique pour filtrer les éléments visuels
+            # pertinents pour cet exercice spécifique, mais pour l'instant on garde tout
+            exercice_donnees_vision = donnees_vision_complete.copy()
+
+            # Ajouter des métadonnées spécifiques à l'exercice
+            exercice_donnees_vision["exercice_specific"] = {
+                "index": idx,
+                "titre": ex_data.get('titre', ''),
+                "titre_complet": ex_data.get('titre_complet', ''),
+                "longueur_contenu": ex_data.get('longueur_contenu', 0)
+            }
+
+        # 4) Mise à jour statut pour analyse IA
         soum.statut = 'analyse_ia'
-        soum.progression = 20
+        soum.progression = 40
         soum.save()
 
-        # 4) Lancer la génération (IA + graph) sur ce fragment
+        # 5) Lancer la génération (IA + graph) sur ce fragment avec données vision
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
         contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
 
@@ -2189,10 +2672,11 @@ def generer_corrige_exercice_async(soumission_id):
             texte_enonce=fragment,
             contexte=contexte,
             matiere=mat,
+            donnees_vision=exercice_donnees_vision,
             demande=dem
         )
 
-        # 5) Mise à jour PDF
+        # 6) Mise à jour PDF
         soum.statut = 'formatage_pdf'
         soum.progression = 60
         soum.save()
@@ -2202,18 +2686,21 @@ def generer_corrige_exercice_async(soumission_id):
                 "titre_corrige": contexte,
                 "corrige_html": corrige_txt,
                 "soumission_id": soum.id,
-                "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
+                "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}"),
+                "exercice_index": idx,
+                "total_exercices": len(exercices_data)
             },
             soum.id
         )
 
-        # 6) Débit de crédit
+        # 7) Débit de crédit
         if not debiter_credit_abonnement(dem.user):
             soum.statut = 'erreur_credit'
             soum.save()
+            logger.error("❌ Crédits insuffisants pour l'utilisateur")
             return False
 
-        # 7) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
+        # 8) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
         pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
         pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
 
@@ -2223,6 +2710,11 @@ def generer_corrige_exercice_async(soumission_id):
         # Nettoyer un peu le titre si trop long
         if len(titre_reel) > 200:
             titre_reel = titre_reel[:197] + "..."
+
+        # Vérifier que le fichier PDF existe
+        if not os.path.exists(pdf_absolute_path):
+            logger.error(f"❌ Fichier PDF non trouvé: {pdf_absolute_path}")
+            raise FileNotFoundError(f"PDF non généré: {pdf_absolute_path}")
 
         # Ouvre le fichier PDF
         with open(pdf_absolute_path, 'rb') as f:
@@ -2238,7 +2730,7 @@ def generer_corrige_exercice_async(soumission_id):
             )
             corrige.save()
 
-        # 8) Finalisation
+        # 9) Finalisation
         soum.statut = 'termine'
         soum.progression = 100
         soum.resultat_json = {
@@ -2246,15 +2738,28 @@ def generer_corrige_exercice_async(soumission_id):
             "exercice_titre": titre_reel,
             "corrige_text": corrige_txt,
             "pdf_url": pdf_url,
-            "exercice_data": ex_data  # Stocker toutes les données de l'exercice
+            "exercice_data": ex_data,
+            "total_exercices": len(exercices_data),
+            "analyse_vision": exercice_donnees_vision,
+            "is_scientific": is_departement_scientifique(dem.departement),
+            "reasoner_used": donnees_vision_complete.get('reasoner_used', False) if donnees_vision_complete else False,
+            "metadata": {
+                "departement": dem.departement.nom if dem.departement else "Inconnu",
+                "matiere": mat.nom if mat else "Inconnue",
+                "classe": dem.classe.nom if dem.classe else "Inconnue"
+            }
         }
         soum.save()
 
+        logger.info(f"🎉 Correction exercice {idx + 1} terminée avec succès!")
+        logger.info(f"   Titre: {titre_reel[:50]}...")
+        logger.info(f"   PDF généré: {pdf_url}")
+        logger.info(f"   Département scientifique: {is_departement_scientifique(dem.departement)}")
+
         return True
+
     except Exception as e:
-        print(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
         try:
             soum = SoumissionIA.objects.get(id=soumission_id)
             soum.statut = 'erreur'
@@ -2262,4 +2767,3 @@ def generer_corrige_exercice_async(soumission_id):
         except:
             pass
         return False
-
