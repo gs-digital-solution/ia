@@ -87,42 +87,18 @@ def get_blip_model():
     return _blip_processor, _blip_model
 
 
+DEPARTEMENTS_SCIENTIFIQUES = [
+    'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
+]
 def is_departement_scientifique(departement):
     """
     Renvoie True si le département fait partie des filières scientifiques définies globalement.
     """
-    if not departement or not departement.nom:
-        return False
-
-    dep_name = departement.nom.upper()
-    print(f"🔬 [DEBUG] Vérification département: {dep_name}")
-
-    # Liste complète des départements scientifiques
-    scientific_keywords = [
-        'MATHEMATIQUES', 'MATHS', 'MATHÉMATIQUES',
-        'PHYSIQUE', 'PHYS',
-        'CHIMIE', 'CHIM',
-        'SCIENCES', 'SCIENCE',
-        'BIOLOGIE', 'BIO', 'SVT',
-        'INFORMATIQUE', 'INFO',
-        'TECHNOLOGIE', 'TECHNIQUE'
-    ]
-
-    # Vérification directe
-    for keyword in scientific_keywords:
-        if keyword in dep_name:
-            print(f"✅ [DEBUG] Département scientifique détecté: {keyword} dans {dep_name}")
-            return True
-
-    # Vérification par mot-clé partiel
-    scientific_indicators = ['MATH', 'PHYS', 'CHIM', 'BIO', 'SCI', 'INFO', 'TECH']
-    for indicator in scientific_indicators:
-        if indicator in dep_name:
-            print(f"✅ [DEBUG] Indicateur scientifique détecté: {indicator} dans {dep_name}")
-            return True
-
-    print(f"❌ [DEBUG] Département NON scientifique: {dep_name}")
+    if departement and departement.nom:
+        dep_name = departement.nom.lower()
+        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
     return False
+
 
 
 def extract_with_scientific_workflow(file_path: str, departement) -> Dict:
@@ -499,39 +475,21 @@ FIN DE LA RECONSTITUTION
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
-def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
+def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Analyse scientifique avancée avec choix automatique du workflow.
+    Analyse scientifique avancée avec deepseek-vl2 :
+    - OCR (Tesseract) en fallback
+    - appel multimodal deepseek-vl2 pour texte + schémas
+    Retourne un dict avec :
+      - texte_complet (str)
+      - elements_visuels (list of captions)
+      - formules_latex  (list of LaTeX strings)
+      - graphs          (list of dicts graphiques)
+      - angles          (list of {"valeur","unité","coord"})
+      - numbers         (list of {"valeur","unité","coord"})
+      - structure_exercices (list)
     """
-    print(f"\n🔍 [ANALYSE SCIENTIFIQUE] Début pour: {fichier_path}")
-
-    # Afficher les infos du département
-    dep_name = departement.nom if departement else "Aucun"
-    print(f"   [ANALYSE] Département reçu: {dep_name}")
-
-    # Décision du workflow
-    use_scientific_workflow = False
-    if departement:
-        use_scientific_workflow = is_departement_scientifique(departement)
-        print(f"   [ANALYSE] Résultat is_departement_scientifique: {use_scientific_workflow}")
-
-    # Vérifier Mathpix
-    from .mathpix_extractor import validate_mathpix_config
-    mathpix_configured = validate_mathpix_config()
-    print(f"   [ANALYSE] Mathpix configuré: {mathpix_configured}")
-
-    # Si département scientifique et Mathpix configuré, utiliser le workflow scientifique
-    if use_scientific_workflow and mathpix_configured:
-        print("   [ANALYSE] → Utilisation du workflow scientifique avec Mathpix")
-        return extract_with_scientific_workflow(fichier_path, departement)
-    else:
-        if not use_scientific_workflow:
-            print("   [ANALYSE] → Workflow scientifique: NON (département non scientifique)")
-        if not mathpix_configured:
-            print("   [ANALYSE] → Workflow scientifique: NON (Mathpix non configuré)")
-
-    # Sinon, utiliser le workflow standard avec DeepSeek Vision
-    print("   [ANALYSE] → Utilisation du workflow standard avec DeepSeek Vision")
+    logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
 
     # 1) OCR fallback pour avoir un premier texte
     config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
@@ -573,12 +531,12 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
             texte_json = texte_ocr
 
         # 2b) Récupération des blocs
-        captions = vision_json.get("captions", [])
+        captions     = vision_json.get("captions", [])
         latex_blocks = vision_json.get("latex_blocks", [])
-        graphs = vision_json.get("graphs", [])
-        angles = vision_json.get("angles", [])
-        numbers = vision_json.get("numbers", [])
-        struct_exos = vision_json.get("structure_exercices", [])
+        graphs       = vision_json.get("graphs", [])
+        angles       = vision_json.get("angles", [])
+        numbers      = vision_json.get("numbers", [])
+        struct_exos  = vision_json.get("structure_exercices", [])
 
         logger.info("✅ deepseek-vl2 OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
                     len(texte_json), len(captions), len(latex_blocks), len(angles), len(numbers))
@@ -590,13 +548,7 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
             "graphs": graphs,
             "angles": angles,
             "numbers": numbers,
-            "structure_exercices": struct_exos,
-            "extraction_method": "deepseek_vision",
-            "metadata": {
-                "departement": departement.nom if departement else "Inconnu",
-                "is_scientific": False,
-                "file_type": os.path.splitext(fichier_path)[1]
-            }
+            "structure_exercices": struct_exos
         }
 
     except Exception as e:
@@ -609,14 +561,9 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
             "graphs": [],
             "angles": [],
             "numbers": [],
-            "structure_exercices": [],
-            "extraction_method": "ocr_fallback",
-            "metadata": {
-                "departement": departement.nom if departement else "Inconnu",
-                "is_scientific": False,
-                "file_type": os.path.splitext(fichier_path)[1]
-            }
+            "structure_exercices": []
         }
+
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
     Extraction simple : OCR direct → Analyse IA
