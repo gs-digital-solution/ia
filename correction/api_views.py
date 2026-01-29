@@ -692,7 +692,7 @@ class PartialCorrectionAPIView(APIView):
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
             # 3) Récupérer le texte complet depuis le fichier
-            texte_complet = extraire_texte_fichier(demande.fichier)
+            texte_complet = extraire_texte_fichier(demande.fichier, demande)
             if not texte_complet:
                 return Response(
                     {"error": "Impossible d'extraire le texte de la demande."},
