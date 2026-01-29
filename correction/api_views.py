@@ -596,7 +596,7 @@ class SplitExercisesAPIView(APIView):
                 pass
 
         # 4) Extraire le texte et découper en exercices AVEC TITRES
-        texte = extraire_texte_fichier(fichier)
+        texte = extraire_texte_fichier(fichier, demande)
 
         # Utiliser la nouvelle fonction améliorée
         exercices_detaillees = separer_exercices_avec_titres(texte)

@@ -34,6 +34,70 @@ import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
 
+MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
+MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
+
+
+def ocr_mathpix(path_image: str) -> dict:
+    """
+    Appelle l'API Mathpix pour extraire texte + LaTeX de manière optimisée.
+    Spécialisé pour les équations mathématiques.
+    """
+    try:
+        with open(path_image, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode()
+
+        headers = {
+            "app_id": MATHPIX_APP_ID,
+            "app_key": MATHPIX_APP_KEY,
+            "Content-type": "application/json"
+        }
+
+        payload = {
+            "src": f"data:image/png;base64,{img_b64}",
+            "formats": ["text", "latex_styled"],
+            "math_inline_delimiters": ["$", "$"],
+            "rm_spaces": True,
+            "ocr": ["math", "text"]
+        }
+
+        resp = requests.post(
+            "https://api.mathpix.com/v3/text",
+            headers=headers,
+            json=payload,
+            timeout=45
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    except Exception as e:
+        logger.error(f"❌ Erreur API Mathpix: {e}")
+        raise
+
+
+def preprocess_for_mathpix(pil_image):
+    """
+    Pré-traite une image pour optimiser l'OCR Mathpix.
+    Convertit en RGB, augmente le contraste, réduit le bruit.
+    """
+    try:
+        # Convertir en RGB si nécessaire
+        if pil_image.mode != 'RGB':
+            pil_image = pil_image.convert('RGB')
+
+        # Améliorer le contraste
+        enhancer = ImageEnhance.Contrast(pil_image)
+        pil_image = enhancer.enhance(1.5)
+
+        # Réduire le bruit
+        pil_image = pil_image.filter(ImageFilter.MedianFilter(size=3))
+
+        return pil_image
+    except Exception as e:
+        logger.warning(f"⚠️ Pré-traitement Mathpix échoué: {e}")
+        return pil_image
+
+
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -80,16 +144,33 @@ def get_blip_model():
     return _blip_processor, _blip_model
 
 
-DEPARTEMENTS_SCIENTIFIQUES = [
-    'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
-]
 def is_departement_scientifique(departement):
     """
-    Renvoie True si le département fait partie des filières scientifiques définies globalement.
+    Version améliorée avec matching flexible.
     """
-    if departement and departement.nom:
-        dep_name = departement.nom.lower()
-        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
+    if not departement or not departement.nom:
+        return False
+
+    dep_name = departement.nom.lower().strip()
+
+    # Mots-clés scientifiques (en minuscules)
+    scientific_keywords = [
+        'math', 'physique', 'chimie', 'biologie', 'svt',
+        'science', 'informatique', 'technologie', 'ingenierie',
+        'calcul', 'algebre', 'geometrie', 'statistique'
+    ]
+
+    # Vérifier si un mot-clé est présent dans le nom
+    for keyword in scientific_keywords:
+        if keyword in dep_name:
+            return True
+
+    # Abréviations courantes
+    abbreviations = ['math', 'phy', 'chim', 'bio', 'sci', 'info', 'tech']
+    for abbrev in abbreviations:
+        if abbrev in dep_name:
+            return True
+
     return False
 
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
@@ -196,95 +277,193 @@ def call_deepseek_vision(path_fichier: str) -> dict:
         return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
-
-def analyser_document_scientifique(fichier_path: str) -> dict:
+def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
     """
-    Analyse scientifique avancée avec deepseek-vl2 :
-    - OCR (Tesseract) en fallback
-    - appel multimodal deepseek-vl2 pour texte + schémas
-    Retourne un dict avec :
-      - texte_complet (str)
-      - elements_visuels (list of captions)
-      - formules_latex  (list of LaTeX strings)
-      - graphs          (list of dicts graphiques)
-      - angles          (list of {"valeur","unité","coord"})
-      - numbers         (list of {"valeur","unité","coord"})
-      - structure_exercices (list)
-    """
-    logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
+    NOUVELLE VERSION : Analyse scientifique avancée avec workflow intelligent.
 
-    # 1) OCR fallback pour avoir un premier texte
-    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
-    texte_ocr = ""
-    try:
+    Stratégie :
+    1. Si département scientifique → MathPix + DeepSeek Reasoner
+    2. Si département non scientifique → OCR standard (workflow actuel)
+    3. DeepSeek Reasoner reconstruit l'exercice de manière rigoureuse
+
+    Returns:
+        dict: {
+            "texte_complet": str,
+            "elements_visuels": list,
+            "formules_latex": list,
+            "graphs": list,
+            "angles": list,
+            "numbers": list,
+            "structure_exercices": list,
+            "source_extraction": "mathpix_reasoner" | "ocr_standard"
+        }
+    """
+    logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
+
+    # 1. DÉTERMINER LA STRATÉGIE D'EXTRACTION
+    use_mathpix = False
+    if departement and is_departement_scientifique(departement):
+        use_mathpix = True
+        logger.info(
+            f"⚗️ Département scientifique détecté: {departement.nom}, utilisation de MathPix + DeepSeek Reasoner")
+    else:
+        logger.info(f"⚡ Département non-scientifique ou non spécifié, utilisation OCR standard")
+
+    # 2. EXTRACTION DE BASE SELON LA STRATÉGIE
+    texte_brut = ""
+    latex_blocks = []
+    elements_visuels = []
+
+    if use_mathpix and MATHPIX_APP_ID and MATHPIX_APP_KEY:
+        try:
+            # 2a. EXTRACTION AVEC MATHPIX (optimisée pour équations)
+            if fichier_path.lower().endswith('.pdf'):
+                # Pour PDF: convertir la première page
+                pages = convert_from_path(fichier_path, dpi=300, first_page=1, last_page=1)
+                if pages:
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                        # Pré-traiter l'image
+                        page_processed = preprocess_for_mathpix(pages[0])
+                        page_processed.save(tmp.name, 'PNG')
+
+                        # Appel MathPix
+                        result = ocr_mathpix(tmp.name)
+                        texte_brut = result.get('text', '').strip()
+                        latex_raw = result.get('latex_styled', result.get('latex_simplified', ''))
+
+                        os.unlink(tmp.name)
+                else:
+                    raise ValueError("PDF vide ou corrompu")
+            else:
+                # Pour images directement
+                img = Image.open(fichier_path)
+                img_processed = preprocess_for_mathpix(img)
+
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    img_processed.save(tmp.name, 'PNG')
+                    result = ocr_mathpix(tmp.name)
+                    texte_brut = result.get('text', '').strip()
+                    latex_raw = result.get('latex_styled', result.get('latex_simplified', ''))
+                    os.unlink(tmp.name)
+
+            # 2b. EXTRACTION DES BLOCS LATEX
+            if latex_raw:
+                import re
+                # Chercher les équations (format $$...$$, \[...\], ou équations numérotées)
+                patterns = [
+                    r'\$\$(.*?)\$\$',
+                    r'\\\[(.*?)\\\]',
+                    r'\\begin{equation\*?}(.*?)\\end{equation\*?}',
+                    r'\\begin{align\*?}(.*?)\\end{align\*?}'
+                ]
+                for pattern in patterns:
+                    matches = re.findall(pattern, latex_raw, re.DOTALL)
+                    for match in matches:
+                        if match.strip():
+                            latex_blocks.append(match.strip())
+
+            logger.info(f"✅ MathPix: {len(texte_brut)} caractères, {len(latex_blocks)} formules LaTeX")
+
+            # 2c. ANALYSE AVEC DEEPSEEK REASONER
+            if texte_brut and len(texte_brut) > 50:
+                try:
+                    system_prompt = """Tu es un expert en analyse de documents scientifiques.
+                    Ton rôle : analyser rigoureusement l'extraction OCR d'un exercice scientifique.
+
+                    ÉTAPES :
+                    1. Identifie chaque partie (énoncé, questions, données)
+                    2. Vérifie la complétude des équations LaTeX
+                    3. Décris les schémas/croquis mentionnés de manière exhaustive
+                    4. Reconstruis l'exercice dans un format clair et structuré
+
+                    Format de sortie JSON :
+                    {
+                        "exercice_reconstruit": "texte complet reformulé avec équations bien formatées",
+                        "description_schemas": ["description détaillée schéma 1", ...],
+                        "formules_verifiees": ["$$equation1$$", "$$equation2$$", ...],
+                        "metadonnees": {"type": "problème", "domaine": "physique/maths/chimie", "difficulte": "moyenne"}
+                    }"""
+
+                    user_content = f"""
+                    ANALYSE CET EXERCICE SCIENTIFIQUE EXTRACTÉ PAR OCR :
+
+                    === TEXTE OCR ===
+                    {texte_brut}
+
+                    === FORMULES LaTeX DÉTECTÉES ===
+                    {'Aucune formule' if not latex_blocks else chr(10).join([f'• {eq[:100]}...' if len(eq) > 100 else f'• {eq}' for eq in latex_blocks])}
+
+                    === CONSIGNES ===
+                    1. Reconstruis l'exercice en conservant toutes les informations
+                    2. Décris chaque schéma ou diagramme mentionné
+                    3. Vérifie la cohérence des formules mathématiques
+                    4. Structure pour qu'un assistant IA puisse résoudre facilement
+                    """
+
+                    response = openai.ChatCompletion.create(
+                        model="deepseek-reasoner",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ],
+                        response_format={"type": "json_object"},
+                        temperature=0.1,
+                        max_tokens=4000
+                    )
+
+                    resultat_reasoner = json.loads(response.choices[0].message.content)
+
+                    # Mettre à jour avec l'analyse du Reasoner
+                    texte_brut = resultat_reasoner.get("exercice_reconstruit", texte_brut)
+                    elements_visuels = resultat_reasoner.get("description_schemas", [])
+                    latex_blocks = resultat_reasoner.get("formules_verifiees", latex_blocks)
+
+                    logger.info(
+                        f"✅ DeepSeek Reasoner: exercice reconstruit ({len(texte_brut)} caractères), {len(elements_visuels)} schémas décrits")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ DeepSeek Reasoner échoué, utilisation extraction brute: {e}")
+                    # On garde l'extraction MathPix brute
+
+        except Exception as e:
+            logger.error(f"❌ Erreur workflow MathPix: {e}")
+            # Fallback vers OCR standard
+            use_mathpix = False
+
+    # 3. FALLBACK OCR STANDARD (pour non-scientifique ou échec MathPix)
+    if not use_mathpix or not texte_brut or len(texte_brut) < 50:
+        logger.info("🔄 Utilisation OCR standard (Tesseract + PDFMiner)")
+
+        # OCR standard (code existant)
+        config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
+
         if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             img = Image.open(fichier_path)
             clean = preprocess_image_for_ocr(img)
-            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
-            logger.info("    ✓ OCR image brut extrait %d caractères", len(texte_ocr))
+            texte_brut = pytesseract.image_to_string(clean, config=config_tesseract)
 
         elif fichier_path.lower().endswith('.pdf'):
-            texte_ocr = extraire_texte_pdf(fichier_path)
-            logger.info("    ✓ PDFMiner extrait %d caractères", len(texte_ocr))
-            if len(texte_ocr) < 50:
-                logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
+            texte_brut = extraire_texte_pdf(fichier_path)
+            if len(texte_brut) < 50:
                 pages = convert_from_path(fichier_path, dpi=300)
                 txts = []
                 for page in pages:
                     clean = preprocess_image_for_ocr(page)
                     txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
-                texte_ocr = "\n".join(txts)
-                logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
+                texte_brut = "\n".join(txts)
 
-        else:
-            raise ValueError(f"Format non supporté pour OCR : {fichier_path}")
+    # 4. RETOUR DES DONNÉES
+    return {
+        "texte_complet": texte_brut.strip() if texte_brut else "",
+        "elements_visuels": elements_visuels,
+        "formules_latex": latex_blocks,
+        "graphs": [],
+        "angles": [],
+        "numbers": [],
+        "structure_exercices": [],
+        "source_extraction": "mathpix_reasoner" if use_mathpix else "ocr_standard"
+    }
 
-    except Exception:
-        logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
-        # on ne stoppe pas, on continue avec texte_ocr vide
-
-    # 2) Appel deepseek-vl2 pour tout : texte + schémas + JSON
-    try:
-        vision_json = call_deepseek_vision(fichier_path)
-
-        # 2a) Texte complet : fallback sur OCR si résultat trop court
-        texte_json = vision_json.get("text", "") or ""
-        if len(texte_json) < 50:
-            texte_json = texte_ocr
-
-        # 2b) Récupération des blocs
-        captions     = vision_json.get("captions", [])
-        latex_blocks = vision_json.get("latex_blocks", [])
-        graphs       = vision_json.get("graphs", [])
-        angles       = vision_json.get("angles", [])
-        numbers      = vision_json.get("numbers", [])
-        struct_exos  = vision_json.get("structure_exercices", [])
-
-        logger.info("✅ deepseek-vl2 OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
-                    len(texte_json), len(captions), len(latex_blocks), len(angles), len(numbers))
-
-        return {
-            "texte_complet": texte_json,
-            "elements_visuels": captions,
-            "formules_latex": latex_blocks,
-            "graphs": graphs,
-            "angles": angles,
-            "numbers": numbers,
-            "structure_exercices": struct_exos
-        }
-
-    except Exception as e:
-        logger.exception("❌ Erreur deepseek-vl2 pour %s: %s", fichier_path, e)
-        # fallback minimal
-        return {
-            "texte_complet": texte_ocr,
-            "elements_visuels": [],
-            "formules_latex": [],
-            "graphs": [],
-            "angles": [],
-            "numbers": [],
-            "structure_exercices": []
-        }
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
@@ -1169,79 +1348,67 @@ def extraire_texte_pdf(fichier_path):
 
 
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
-def extraire_texte_fichier(fichier_field):
+def extraire_texte_fichier(fichier_field, demande=None):
     """
-    Extraction robuste via analyse scientifique avec fallback OCR pour images.
+    NOUVELLE VERSION : Extraction intelligente selon le département.
+
+    Args:
+        fichier_field: Fichier uploadé
+        demande: Objet DemandeCorrection (optionnel, pour récupérer département)
+
+    Returns:
+        str: Texte extrait
     """
     if not fichier_field:
         return ""
 
-    # 1) Sauvegarde locale
+    # 1. Sauvegarde locale
     temp_dir = tempfile.gettempdir()
     local_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+
     with open(local_path, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    # 2) Détecter le type de fichier
-    ext = os.path.splitext(local_path)[1].lower()
+    # 2. Déterminer le département
+    departement = None
+    if demande and hasattr(demande, 'departement'):
+        departement = demande.departement
+    elif hasattr(fichier_field, 'demande') and fichier_field.demande:
+        # Fallback: essayer de trouver via relation
+        departement = fichier_field.demande.departement
 
-    # 3) Pour les images, essayer d'abord un OCR simple et rapide
+    # 3. Appeler l'analyse scientifique
     texte = ""
-    if ext in ['.png', '.jpg', '.jpeg']:
-        print(f"🖼️  Fichier image détecté: {ext}, tentative OCR Tesseract...")
-        try:
-            import pytesseract
-            from PIL import Image
-            image = Image.open(local_path)
-
-            # Préprocess pour améliorer l'OCR
-            image = image.convert('L')  # Niveaux de gris
-            texte = pytesseract.image_to_string(image, lang='fra+eng')
-            print(f"✅ OCR Tesseract réussi: {len(texte)} caractères")
-
-            if len(texte) > 100:  # Si l'OCR a bien fonctionné
-                # Nettoyer
-                try:
-                    os.unlink(local_path)
-                except:
-                    pass
-                return texte.strip()
-            else:
-                print("⚠️  OCR Tesseract a retourné peu de texte, essai DeepSeek...")
-        except Exception as e:
-            print(f"⚠️  OCR Tesseract échoué: {e}, passage à DeepSeek...")
-
-    # 4) Appel à l'analyse scientifique (DeepSeek) - pour PDF et images avec OCR faible
     try:
-        analyse = analyser_document_scientifique(local_path)
+        analyse = analyser_document_scientifique(local_path, departement)
         texte = analyse.get("texte_complet", "")
-        print(f"🔬 Analyse scientifique: {len(texte)} caractères")
-    except Exception as e:
-        print(f"❌ Analyse scientifique échouée: {e}")
-        texte = ""
 
-    # 5) Fallback final pour images si tout échoue
-    if not texte or len(texte) < 50:
-        if ext in ['.png', '.jpg', '.jpeg']:
-            print("🔄 Fallback final: OCR brut sans prétraitement...")
-            try:
-                import pytesseract
-                from PIL import Image
+        logger.info(
+            f"✅ Extraction {'MathPix+Reasoner' if analyse.get('source_extraction') == 'mathpix_reasoner' else 'OCR standard'}: {len(texte)} caractères")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur extraction améliorée: {e}")
+
+        # Fallback ultime: OCR simple
+        try:
+            if local_path.lower().endswith(('.png', '.jpg', '.jpeg')):
                 image = Image.open(local_path)
                 texte = pytesseract.image_to_string(image, lang='fra+eng')
-                print(f"✅ Fallback OCR: {len(texte)} caractères")
-            except Exception as e:
-                print(f"❌ Tous les OCR ont échoué: {e}")
-                texte = "Impossible d'extraire le texte de cette image."
+            elif local_path.lower().endswith('.pdf'):
+                texte = extraire_texte_pdf(local_path)
+        except Exception as e2:
+            logger.error(f"❌ Fallback OCR échoué: {e2}")
+            texte = ""
 
-    # 6) Nettoyage
+    # 4. Nettoyage
     try:
         os.unlink(local_path)
     except:
         pass
 
     return texte.strip()
+
 
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
@@ -1735,7 +1902,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         demande = DemandeCorrection.objects.get(id=demande_id)
         soumission = SoumissionIA.objects.get(demande=demande)
 
-        # Étape 1 : Extraction du texte brut AVEC VISION
+        # Étape 1 : Extraction du texte brut AVEC NOUVEAU WORKFLOW
         soumission.statut = 'extraction'
         soumission.progression = 20
         soumission.save()
@@ -1751,15 +1918,17 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
                 for chunk in demande.fichier.chunks():
                     f.write(chunk)
 
-            # 2) Appel unique d'analyse scientifique
-            analyse_complete = analyser_document_scientifique(local_path)
+            # 2) Appel à l'analyse scientifique AMÉLIORÉE (avec département)
+            analyse_complete = analyser_document_scientifique(local_path, demande.departement)
+
             donnees_vision_complete = {
                 "elements_visuels": analyse_complete.get("elements_visuels", []),
                 "formules_latex": analyse_complete.get("formules_latex", []),
                 "graphs": analyse_complete.get("graphs", []),
                 "angles": analyse_complete.get("angles", []),
                 "numbers": analyse_complete.get("numbers", []),
-                "structure_exercices": analyse_complete.get("structure_exercices", [])
+                "structure_exercices": analyse_complete.get("structure_exercices", []),
+                "source_extraction": analyse_complete.get("source_extraction", "ocr_standard")
             }
             texte_brut = analyse_complete.get("texte_complet", "")
 
@@ -1768,6 +1937,10 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
                 os.unlink(local_path)
             except:
                 pass
+
+            logger.info(
+                f"✅ Extraction sujet complet: {len(texte_brut)} caractères (source: {donnees_vision_complete['source_extraction']})")
+
         else:
             texte_brut = demande.enonce_texte or ""
 
@@ -1881,51 +2054,96 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 def generer_corrige_exercice_async(soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
-    Version mise à jour avec système unifié.
+    Version mise à jour avec nouveau workflow scientifique.
     """
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
 
-        # 1) Préparer le texte complet depuis le fichier d'énoncé
-        texte = extraire_texte_fichier(dem.fichier)
+        # ÉTAPE 1 : Extraction améliorée avec nouveau workflow
+        soum.statut = 'extraction'
+        soum.progression = 20
+        soum.save()
 
-        # 2) Séparer et extraire le fragment avec la NOUVELLE fonction
-        exercices_data = separer_exercices_avec_titres(texte)
+        donnees_vision_complete = None
+        texte_brut = ""
+
+        if dem.fichier:
+            # 1) Sauvegarde locale
+            temp_dir = tempfile.gettempdir()
+            local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
+            with open(local_path, "wb") as f:
+                for chunk in dem.fichier.chunks():
+                    f.write(chunk)
+
+            # 2) Appel à l'analyse scientifique AMÉLIORÉE
+            analyse_complete = analyser_document_scientifique(local_path, dem.departement)
+
+            # 3) Récupérer les données d'analyse
+            donnees_vision_complete = {
+                "elements_visuels": analyse_complete.get("elements_visuels", []),
+                "formules_latex": analyse_complete.get("formules_latex", []),
+                "graphs": analyse_complete.get("graphs", []),
+                "angles": analyse_complete.get("angles", []),
+                "numbers": analyse_complete.get("numbers", []),
+                "structure_exercices": analyse_complete.get("structure_exercices", []),
+                "source_extraction": analyse_complete.get("source_extraction", "ocr_standard")
+            }
+            texte_brut = analyse_complete.get("texte_complet", "")
+
+            # 4) Nettoyage
+            try:
+                os.unlink(local_path)
+            except:
+                pass
+
+            logger.info(
+                f"✅ Extraction exercice {soum.id}: {len(texte_brut)} caractères (source: {donnees_vision_complete['source_extraction']})")
+
+        else:
+            texte_brut = dem.enonce_texte or ""
+
+        # ÉTAPE 2 : Séparation et extraction du fragment
+        soum.statut = 'separation_exercices'
+        soum.progression = 40
+        soum.save()
+
+        exercices_data = separer_exercices_avec_titres(texte_brut)
         idx = soum.exercice_index or 0
 
-        # Vérifier l'index
         if idx >= len(exercices_data):
-            print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+            logger.warning(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
             idx = len(exercices_data) - 1
 
         ex_data = exercices_data[idx]
         fragment = ex_data['contenu']
 
-        print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
-        print(f"   Longueur contenu: {len(fragment)} caractères")
+        logger.info(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
+        logger.info(f"   Longueur: {len(fragment)} caractères")
 
-        # 3) Mise à jour statut pour analyse IA
+        # ÉTAPE 3 : Génération avec données vision
         soum.statut = 'analyse_ia'
-        soum.progression = 20
+        soum.progression = 60
         soum.save()
 
-        # 4) Lancer la génération (IA + graph) sur ce fragment
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
         contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
 
+        # PASSER LES DONNÉES VISION À LA GÉNÉRATION
         corrige_txt, _ = generer_corrige_ia_et_graphique(
             texte_enonce=fragment,
             contexte=contexte,
             matiere=mat,
+            donnees_vision=donnees_vision_complete,
             demande=dem
         )
 
-        # 5) Mise à jour PDF
+        # ÉTAPE 4 : Génération PDF
         soum.statut = 'formatage_pdf'
-        soum.progression = 60
+        soum.progression = 80
         soum.save()
 
+        from .pdf_utils import generer_pdf_corrige
         pdf_url = generer_pdf_corrige(
             {
                 "titre_corrige": contexte,
@@ -1936,38 +2154,36 @@ def generer_corrige_exercice_async(soumission_id):
             soum.id
         )
 
-        # 6) Débit de crédit
+        # ÉTAPE 5 : Débit de crédit
+        from abonnement.services import debiter_credit_abonnement
         if not debiter_credit_abonnement(dem.user):
             soum.statut = 'erreur_credit'
             soum.save()
             return False
 
-        # 7) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
+        # ÉTAPE 6 : Création du CorrigePartiel
         pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
         pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
 
-        # Utiliser le titre réel de l'exercice
         titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
-
-        # Nettoyer un peu le titre si trop long
         if len(titre_reel) > 200:
             titre_reel = titre_reel[:197] + "..."
 
-        # Ouvre le fichier PDF
         with open(pdf_absolute_path, 'rb') as f:
-            # Crée le CorrigePartiel avec le VRAI titre
+            from django.core.files import File
+            from .models import CorrigePartiel
+
             corrige = CorrigePartiel.objects.create(
                 soumission=soum,
                 titre_exercice=titre_reel,
             )
-            # Attache le fichier PDF
             corrige.fichier_pdf.save(
                 f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
                 File(f)
             )
             corrige.save()
 
-        # 8) Finalisation
+        # ÉTAPE 7 : Finalisation
         soum.statut = 'termine'
         soum.progression = 100
         soum.resultat_json = {
@@ -1975,15 +2191,16 @@ def generer_corrige_exercice_async(soumission_id):
             "exercice_titre": titre_reel,
             "corrige_text": corrige_txt,
             "pdf_url": pdf_url,
-            "exercice_data": ex_data  # Stocker toutes les données de l'exercice
+            "exercice_data": ex_data,
+            "analyse_vision": donnees_vision_complete
         }
         soum.save()
 
+        logger.info(f"🎉 Exercice {soum.id} traité avec succès")
         return True
+
     except Exception as e:
-        print(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
         try:
             soum = SoumissionIA.objects.get(id=soumission_id)
             soum.statut = 'erreur'
@@ -1991,4 +2208,3 @@ def generer_corrige_exercice_async(soumission_id):
         except:
             pass
         return False
-
