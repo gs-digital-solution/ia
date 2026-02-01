@@ -44,7 +44,7 @@ from .ia_utils import (
 
 )
 from rest_framework.permissions import IsAuthenticated
-from .ia_utils import separer_exercices, extraire_texte_fichier
+from .ia_utils import separer_exercices_avec_titres, extraire_texte_fichier
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import traceback
 import tempfile, os
@@ -450,7 +450,7 @@ class DebugExtractionAPIView(APIView):
             return Response({"error": "Aucun fichier"}, status=400)
 
         from .ia_utils import extraire_texte_fichier
-        texte_extraite = extraire_texte_fichier(fichier)
+        texte_extraite = extraire_texte_fichier(fichier, None)  # ✅ Ajouter None comme 2ème paramètre
 
         return Response({
             "success": True,
@@ -598,6 +598,8 @@ class SplitExercisesAPIView(APIView):
         # 4) Extraire le texte et découper en exercices AVEC TITRES
         texte = extraire_texte_fichier(fichier, demande)
 
+        # ✅ AJOUTER CET IMPORT LOCAL
+        from .ia_utils import separer_exercices_avec_titres
         # Utiliser la nouvelle fonction améliorée
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
