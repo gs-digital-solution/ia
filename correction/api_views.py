@@ -1,6 +1,8 @@
 # 1) VUE PAYS et SOUS SYSTEME DEPUIS RESOURCES/VIEWQ.PY
 #from resources.api_views import PaysListAPIView, SousSystemeListAPIView
 #LA SUITE DES IMPORTS
+from datetime import datetime
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -41,6 +43,7 @@ from .ia_utils import (
     extract_and_process_graphs,
     format_corrige_pdf_structure,
     generer_corrige_exercice_async,
+    detecter_departement_scientifique_avance,
 
 )
 from rest_framework.permissions import IsAuthenticated
@@ -532,9 +535,8 @@ class AppConfigAPIView(APIView):
 class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
-    - Crée une DemandeCorrection
-    - Stocke les exercices avec leurs titres complets dans exercices_data
-    - Retourne { demande_id: ..., exercices: [...] } avec vrais titres
+    - Extrait le texte UNE FOIS avec pipeline adapté
+    - Stocke TOUT (texte complet + données vision + exercices)
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
@@ -551,7 +553,7 @@ class SplitExercisesAPIView(APIView):
         type_exo_id = request.data.get('type_exercice')
         lecons_ids = request.data.get('lecons_ids')
 
-        # 2) Récupérer le fichier d'énoncé et vérifier sa présence
+        # 2) Récupérer le fichier
         fichier = request.FILES.get('fichier')
         if not fichier:
             return Response(
@@ -560,13 +562,13 @@ class SplitExercisesAPIView(APIView):
             )
 
         # 2b) VÉRIFICATION TAILLE FICHIER (1 Mo max)
-        if fichier.size > 1048576:  # 1 Mo en octets
+        if fichier.size > 1048576:
             return Response(
                 {"error": "Le fichier ne doit pas dépasser 1 Mo."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2c) VÉRIFICATION FORMAT (PDF ou images)
+        # 2c) VÉRIFICATION FORMAT
         ext = os.path.splitext(fichier.name)[1].lower()
         allowed_ext = ['.pdf', '.png', '.jpg', '.jpeg']
         if ext not in allowed_ext:
@@ -575,7 +577,7 @@ class SplitExercisesAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3) Créer la demande (nom_fichier sera auto-rempli via save())
+        # 3) Créer la demande
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
@@ -587,7 +589,7 @@ class SplitExercisesAPIView(APIView):
             fichier=fichier
         )
 
-        # 3b) Lier les leçons si présentes
+        # 3b) Lier les leçons
         if lecons_ids:
             try:
                 ids = json.loads(lecons_ids) if isinstance(lecons_ids, str) else lecons_ids
@@ -595,16 +597,15 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et découper en exercices AVEC TITRES
-        texte = extraire_texte_fichier(fichier)
+        # 4) ⭐ EXTRACTION COMPLÈTE UNE SEULE FOIS avec pipeline adapté
+        texte_complet = extraire_texte_fichier(fichier, departement=demande.departement)
 
-        # Utiliser la nouvelle fonction améliorée
-        exercices_detaillees = separer_exercices_avec_titres(texte)
+        # 5) Découpage en exercices
+        exercices_detaillees = separer_exercices_avec_titres(texte_complet)
 
-        # 5) Construire la liste JSON complète pour stockage
-        exercices_complets = []
+        # 6) ⭐ CONSTRUIRE STRUCTURE COMPLÈTE POUR STOCKAGE
+        exercices_liste = []
         for idx, ex in enumerate(exercices_detaillees):
-            # ex est maintenant un dict avec 'titre', 'titre_complet', 'contenu'
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
             contenu = ex.get('contenu', '')
 
@@ -613,10 +614,10 @@ class SplitExercisesAPIView(APIView):
             if len(titre_affichage) > 80:
                 titre_affichage = titre_affichage[:77] + "..."
 
-            # Extraire un extrait (premières lignes)
+            # Extraire un extrait
             lignes = contenu.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
+            for line in lignes[:3]:
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
@@ -625,35 +626,44 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            exercices_complets.append({
+            exercices_liste.append({
                 "index": idx,
                 "titre": titre_affichage,
-                "titre_complet": titre_complet,  # Titre original complet
+                "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu": contenu[:500]  # Stocker un peu de contenu pour preview
+                "contenu": contenu  # ⭐ STOCKER TOUT LE CONTENU
             })
 
-        # 6) Stocker les exercices dans la demande
-        demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
+        # 7) ⭐ STOCKER STRUCTURE COMPLÈTE DANS exercices_data
+        # Note: On ne stocke PAS les données vision ici car elles seront recalculées
+        # dans generer_corrige_exercice_async() si nécessaire
+        demande.exercices_data = json.dumps({
+            "exercices": exercices_liste,
+            "date_extraction": datetime.now().isoformat(),
+            "departement": demande.departement.nom if demande.departement else None,
+            "pipeline_recommande": "scientifique" if detecter_departement_scientifique_avance(
+                demande.departement) else "standard"
+        }, ensure_ascii=False)
         demande.save()
 
-        # 7) Construire la réponse pour le frontend
+        # 8) Construire la réponse pour le frontend
         exercices_reponse = []
-        for ex in exercices_complets:
+        for ex in exercices_liste:
             exercices_reponse.append({
                 "index": ex["index"],
-                "titre": ex["titre"],  # Titre formaté pour l'affichage
+                "titre": ex["titre"],
                 "extrait": ex["extrait"]
             })
 
-        # 8) Répondre
+        # 9) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
-            "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée"
+            "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
+            "pipeline_recommande": "scientifique" if detecter_departement_scientifique_avance(
+                demande.departement) else "standard"
         })
-
 
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
@@ -663,23 +673,24 @@ class PartialCorrectionAPIView(APIView):
     def post(self, request):
         try:
             user = request.user
-            # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
+
+            # Vérification crédits
             if not user_abonnement_actif(user):
                 return Response(
                     {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
                     status=status.HTTP_402_PAYMENT_REQUIRED
                 )
-            # ===========================================================
+
             demande_id = request.data.get("demande_id")
             idx = request.data.get("index")
 
-            # 1) Validation minimale
+            # Validation
             if demande_id is None or idx is None:
                 return Response(
                     {"error": "demande_id et index sont requis"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            # Conversion et revalidation
+
             try:
                 idx = int(idx)
             except:
@@ -688,30 +699,63 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 2) Vérifier la demande
+            # Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
-            # 3) Récupérer le texte complet depuis le fichier
-            texte_complet = extraire_texte_fichier(demande.fichier)
-            if not texte_complet:
-                return Response(
-                    {"error": "Impossible d'extraire le texte de la demande."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # ⭐ OPTIMISATION : Utiliser données déjà extraites si disponibles
+            fragment = None
+            exercices_liste = []
 
-            # 4) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
-            exercices_detaillees = separer_exercices_avec_titres(texte_complet)
+            if demande.exercices_data:
+                try:
+                    data_json = json.loads(demande.exercices_data)
 
-            # Convertir en liste de textes pour compatibilité
-            exercices_textes = [ex.get('contenu', '') for ex in exercices_detaillees]
+                    # Gérer les deux formats possibles
+                    if isinstance(data_json, dict) and "exercices" in data_json:
+                        # Nouveau format structuré
+                        exercices_liste = data_json.get("exercices", [])
+                    else:
+                        # Ancien format (liste directe)
+                        exercices_liste = data_json
 
-            if idx < 0 or idx >= len(exercices_textes):
-                return Response(
-                    {"error": f"index hors limites (0 à {len(exercices_textes) - 1})"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                    # Vérifier index et récupérer contenu
+                    if idx < len(exercices_liste):
+                        fragment = exercices_liste[idx].get("contenu", "")
 
-            # 5) Création de la soumission
+                        if fragment:
+                            print(f"✅ Utilisation données OCR déjà extraites (exercice {idx + 1})")
+
+                            # Créer soumission directement
+                            soumission = SoumissionIA.objects.create(
+                                user=user,
+                                demande=demande,
+                                statut='en_attente',
+                                progression=0,
+                                exercice_index=idx
+                            )
+
+                            # Lancement asynchrone
+                            generer_corrige_exercice_async.delay(soumission.id)
+
+                            return Response({
+                                "success": True,
+                                "soumission_exercice_id": soumission.id,
+                                "message": "Exercice envoyé au traitement avec données pré-extraites.",
+                                "pipeline": "scientifique" if detecter_departement_scientifique_avance(
+                                    demande.departement) else "standard"
+                            }, status=status.HTTP_202_ACCEPTED)
+
+                except (json.JSONDecodeError, KeyError, IndexError) as e:
+                    print(f"⚠️ Erreur lecture données stockées: {e}")
+                    # Continuer avec extraction normale
+
+            # ⭐ FALLBACK : Extraction nécessaire
+            print(f"🔄 Données non disponibles, extraction nécessaire pour exercice {idx + 1}")
+
+            # Note: On ne fait PAS l'extraction ici, c'est generer_corrige_exercice_async() qui le fera
+            # On crée juste la soumission
+
+            # Création de la soumission
             soumission = SoumissionIA.objects.create(
                 user=user,
                 demande=demande,
@@ -720,25 +764,23 @@ class PartialCorrectionAPIView(APIView):
                 exercice_index=idx
             )
 
-            # 6) Lancement asynchrone
+            # Lancement asynchrone (qui fera l'extraction si nécessaire)
             generer_corrige_exercice_async.delay(soumission.id)
 
-            # 7) Réponse
             return Response({
                 "success": True,
                 "soumission_exercice_id": soumission.id,
-                "message": "Exercice envoyé au traitement."
+                "message": "Exercice envoyé au traitement. Extraction en cours...",
+                "pipeline": "scientifique" if detecter_departement_scientifique_avance(
+                    demande.departement) else "standard"
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
-            # Affiche la stack complète dans les logs
             traceback.print_exc()
-            # Renvoie un message minimal au front
             return Response(
                 {"error": f"Erreur interne: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 
 #Lister les corrigés partiels d’une soumission
 class CorrigesListAPIView(generics.ListAPIView):
