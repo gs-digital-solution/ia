@@ -528,8 +528,7 @@ class AppConfigAPIView(APIView):
 
 
 
-#VUE POUR LISTE D'EXERCICES A CORRIGER
-class SplitExercisesAPIView(APIView):
+#VUE POUR LISTE D'EXERCICES A CORRIGERclass SplitExercisesAPIView(APIView):
     """
     POST /api/split/
     - Crée une DemandeCorrection
@@ -595,21 +594,34 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et découper en exercices AVEC TITRES
-        texte = extraire_texte_fichier(fichier, demande)
+        # 4) Extraction scientifique COMPLÈTE avant découpage
+        temp_dir = tempfile.gettempdir()
+        pdf_path = os.path.join(temp_dir, f"temp_{demande.id}.pdf")
 
-        # ✅ AJOUTER LES IMPORTS LOCAUX NÉCESSAIRES
-        from .ia_utils import separer_exercices_avec_titres, extraire_exercice_avec_mathpix_et_schemas
-        # Utiliser la nouvelle fonction améliorée
-        exercices_detaillees = separer_exercices_avec_titres(texte)
+        with open(pdf_path, "wb") as f:
+            for chunk in fichier.chunks():
+                f.write(chunk)
 
-        # ✅ ENRICHIR CHAQUE EXERCICE AVEC MATHPIX + VISION + REASONER
+        from .ia_utils import analyser_document_scientifique, separer_exercices_avec_titres, enrichir_exercice_avec_reasoner
+
+        # Extraction MathPix + Vision
+        analyse_complete = analyser_document_scientifique(pdf_path, demande.departement)
+
+        # Récupérer données globales
+        tous_schemas = analyse_complete.get("elements_visuels", [])
+        toutes_formules = analyse_complete.get("formules_latex", [])
+        texte_complet = analyse_complete.get("texte_complet", "")
+
+        # Découpage
+        exercices_detaillees = separer_exercices_avec_titres(texte_complet)
+
+        # 5) Enrichir CHAQUE exercice
         exercices_enrichis = []
         for idx, ex in enumerate(exercices_detaillees):
-            # Appliquer l'extraction complète sur chaque exercice
-            exercice_enrichi = extraire_exercice_avec_mathpix_et_schemas(
+            exercice_enrichi = enrichir_exercice_avec_reasoner(
                 ex.get('contenu', ''),
-                demande.departement
+                tous_schemas,
+                toutes_formules
             )
 
             exercices_enrichis.append({
@@ -618,17 +630,22 @@ class SplitExercisesAPIView(APIView):
                 'titre_complet': ex.get('titre_complet', ex.get('titre', f'Exercice {idx + 1}')),
                 'contenu': exercice_enrichi['texte'],
                 'contenu_original': ex.get('contenu', ''),
-                'source_extraction': exercice_enrichi.get('source', 'ocr_standard'),
-                'has_mathpix': exercice_enrichi.get('source') in ['mathpix_reasoner_vision', 'mathpix_only'],
+                'source_extraction': exercice_enrichi.get('source', 'standard'),
+                'has_mathpix': analyse_complete.get('source_extraction') == 'mathpix_vision_combine',
                 'formules_count': len(exercice_enrichi.get('formules_latex', [])),
-                'schemas_count': len(exercice_enrichi.get('schemas_description', []))
+                'schemas_count': len(exercice_enrichi.get('elements_visuels', []))
             })
 
-        # 5) Construire la liste JSON complète pour stockage
+        # Nettoyer le fichier temporaire
+        try:
+            os.unlink(pdf_path)
+        except:
+            pass
+
+        # 6) Construire la liste JSON complète pour stockage
         exercices_complets = []
-        for ex in exercices_enrichis:  # Utiliser exercices_enrichis au lieu de exercices_detaillees
-            # ex est maintenant un dict avec 'titre', 'titre_complet', 'contenu'
-            titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
+        for ex in exercices_enrichis:
+            titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {ex['index'] + 1}"))
             contenu = ex.get('contenu', '')
 
             # Nettoyer le titre pour l'affichage
@@ -639,7 +656,7 @@ class SplitExercisesAPIView(APIView):
             # Extraire un extrait (premières lignes)
             lignes = contenu.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
+            for line in lignes[:3]:
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
@@ -649,19 +666,22 @@ class SplitExercisesAPIView(APIView):
                 extrait = extrait[:147] + "..."
 
             exercices_complets.append({
-                "index": idx,
+                "index": ex['index'],
                 "titre": titre_affichage,
-                "titre_complet": titre_complet,  # Titre original complet
+                "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu": contenu[:500]  # Stocker un peu de contenu pour preview
+                "contenu": contenu[:500],
+                "has_mathpix": ex.get("has_mathpix", False),
+                "source_extraction": ex.get("source_extraction", "ocr_standard"),
+                "formules_count": ex.get("formules_count", 0),
+                "schemas_count": ex.get("schemas_count", 0)
             })
 
-        # 6) Stocker les exercices dans la demande
+        # 7) Stocker les exercices dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-
-        # 7) Construire la réponse pour le frontend
+        # 8) Construire la réponse pour le frontend
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
@@ -673,7 +693,8 @@ class SplitExercisesAPIView(APIView):
                 "formules_count": ex.get("formules_count", 0),
                 "schemas_count": ex.get("schemas_count", 0)
             })
-        # 8) Répondre
+
+        # 9) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,

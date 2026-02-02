@@ -333,24 +333,144 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
     """
-    OCR STANDARD uniquement pour la détection des exercices.
-    MathPix sera appliqué exercice par exercice plus tard.
+    NOUVELLE VERSION : Extraction scientifique COMPLÈTE avant découpage.
+    1. MathPix pour texte + équations
+    2. DeepSeek Vision pour schémas
+    3. Combinaison des résultats
+    4. Découpage ensuite dans l'API
     """
-    logger.info(f"🔍 OCR standard pour détection exercices: {fichier_path}")
+    logger.info(f"🔍 Extraction scientifique COMPLÈTE pour {fichier_path}")
 
-    # OCR standard seulement - NO MATHPIX ICI
+    # Vérifier si département scientifique
+    if not departement or not is_departement_scientifique(departement):
+        logger.info("⚡ Département non-scientifique, retour OCR standard")
+        return analyser_document_scientifique_simple(fichier_path)
+
+    # Vérifier credentials MathPix
+    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
+        logger.warning("⚠️ MathPix non configuré, retour OCR standard")
+        return analyser_document_scientifique_simple(fichier_path)
+
+    try:
+        # 1. CONVERTIR PDF EN IMAGE (première page seulement pour extraction)
+        if fichier_path.lower().endswith('.pdf'):
+            pages = convert_from_path(fichier_path, dpi=300, first_page=1, last_page=1)
+            if not pages:
+                raise ValueError("PDF vide ou corrompu")
+
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                page_processed = preprocess_for_mathpix(pages[0])
+                page_processed.save(tmp.name, 'PNG')
+                image_path = tmp.name
+        else:
+            # Pour les images directement
+            image_path = fichier_path
+
+        # 2. APPEL MATHPIX (texte + équations)
+        logger.info("📡 Appel MathPix pour extraction texte + équations...")
+        result_mathpix = ocr_mathpix(image_path)
+        texte_mathpix = result_mathpix.get('text', '').strip()
+        latex_raw = result_mathpix.get('latex_styled', '')
+
+        # Extraire les blocs LaTeX
+        latex_blocks = []
+        if latex_raw:
+            import re
+            patterns = [r'\$\$(.*?)\$\$', r'\\\[(.*?)\\\]']
+            for pattern in patterns:
+                matches = re.findall(pattern, latex_raw, re.DOTALL)
+                latex_blocks.extend([m.strip() for m in matches])
+
+        logger.info(f"✅ MathPix: {len(texte_mathpix)} caractères, {len(latex_blocks)} formules")
+
+        # 3. APPEL DEEPSEEK VISION (schémas uniquement)
+        logger.info("👁️ Appel DeepSeek Vision pour analyse schémas...")
+
+        # Charger l'image en base64
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+
+        system_prompt = """Tu es un expert en analyse de schémas scientifiques.
+        Analyse cette image et identifie TOUS les schémas, croquis, diagrammes.
+
+        Pour CHAQUE schéma détecté, donne :
+        1. Une description détaillée
+        2. Sa position approximative dans la page
+        3. Les éléments visuels (flèches, formes, textes)
+        4. Les mesures/angles visibles
+
+        Réponds en JSON structuré :
+        {
+            "schemas": [
+                {
+                    "description": "Circuit électrique avec résistance R1=10Ω...",
+                    "position": "haut_gauche | centre | bas_droite",
+                    "elements": ["résistance", "flèche courant", "source 12V"],
+                    "mesures": ["R1=10Ω", "I=2A"],
+                    "page": 1
+                }
+            ]
+        }"""
+
+        response = openai.ChatCompletion.create(
+            model="deepseek-reasoner",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"[image]{image_b64}[/image]"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_tokens=2000
+        )
+
+        result_vision = json.loads(response.choices[0].message.content)
+        schemas_detectes = result_vision.get('schemas', [])
+
+        logger.info(f"✅ DeepSeek Vision: {len(schemas_detectes)} schémas détectés")
+
+        # 4. COMBINER MathPix + Vision
+        texte_combiné = texte_mathpix
+
+        # Ajouter des marqueurs pour les schémas dans le texte
+        for i, schema in enumerate(schemas_detectes, 1):
+            marqueur = f"\n[SCHÉMA {i}: {schema.get('description', 'Schéma détecté')}]\n"
+            texte_combiné += marqueur
+
+        # Nettoyage fichier temporaire
+        if fichier_path.lower().endswith('.pdf'):
+            os.unlink(image_path)
+
+        return {
+            "texte_complet": texte_combiné,
+            "elements_visuels": schemas_detectes,
+            "formules_latex": latex_blocks,
+            "graphs": [],
+            "angles": [],
+            "numbers": [],
+            "structure_exercices": [],
+            "source_extraction": "mathpix_vision_combine"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Erreur extraction scientifique: {e}")
+        # Fallback vers OCR simple
+        return analyser_document_scientifique_simple(fichier_path)
+
+
+def analyser_document_scientifique_simple(fichier_path: str) -> dict:
+    """
+    OCR simple pour fallback ou départements non-scientifiques.
+    """
+    logger.info(f"🔄 OCR standard pour {fichier_path}")
+
     texte_brut = ""
-
     if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
         img = Image.open(fichier_path)
         clean = preprocess_image_for_ocr(img)
         texte_brut = pytesseract.image_to_string(clean, config=r'--oem 3 --psm 6 -l fra+eng+digits')
-
     elif fichier_path.lower().endswith('.pdf'):
-        # Essayer d'abord avec PDFMiner
         texte_brut = extraire_texte_pdf(fichier_path)
         if len(texte_brut) < 50:
-            # Fallback: OCR des pages
             pages = convert_from_path(fichier_path, dpi=300)
             txts = []
             for page in pages:
@@ -366,9 +486,116 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
         "angles": [],
         "numbers": [],
         "structure_exercices": [],
-        "source_extraction": "ocr_standard"  # Toujours standard ici
+        "source_extraction": "ocr_standard"
     }
 
+
+def enrichir_exercice_avec_reasoner(contenu_exercice: str, schemas_document: list, formules_document: list) -> dict:
+    """
+    Enrichit UN exercice avec DeepSeek Reasoner.
+    Combine le texte avec les schémas et formules détectées.
+    """
+    if not contenu_exercice or len(contenu_exercice.strip()) < 50:
+        return {
+            "texte": contenu_exercice,
+            "formules_latex": [],
+            "elements_visuels": [],
+            "source": "direct"
+        }
+
+    try:
+        # Filtrer les schémas potentiellement liés à cet exercice
+        schemas_pertinents = []
+        for schema in schemas_document:
+            # Vérifier si le schéma pourrait être dans cet exercice
+            # (simplifié: on prend tous les schémas pour l'instant)
+            schemas_pertinents.append(schema)
+
+        # Filtrer les formules potentiellement dans cet exercice
+        formules_pertinentes = []
+        for formule in formules_document:
+            # Vérifier si la formule apparaît dans l'exercice
+            formule_simple = formule.replace('$', '').replace('\\', '')[:50]
+            if formule_simple.lower() in contenu_exercice.lower():
+                formules_pertinentes.append(formule)
+
+        # Préparer le prompt pour DeepSeek Reasoner
+        system_prompt = """Tu es un expert en reconstruction d'exercices scientifiques.
+        Tu reçois :
+        1. Un exercice extrait par OCR
+        2. Des schémas détectés dans le document
+        3. Des formules mathématiques détectées
+
+        Ta mission : RECONSTITUER l'exercice COMPLET et CLAIR.
+
+        Règles :
+        1. Corrige les erreurs OCR évidentes
+        2. Intègre les formules mathématiques au bon endroit
+        3. Si des schémas sont mentionnés, intègre leurs descriptions
+        4. Produis un exercice structuré et complet
+        5. Utilise $$...$$ pour les équations importantes
+
+        Réponds en JSON :
+        {
+            "exercice_reconstruit": "texte complet corrigé",
+            "formules_integrees": ["$$F=ma$$"],
+            "schemas_integres": ["description schéma 1"]
+        }"""
+
+        schemas_text = ""
+        if schemas_pertinents:
+            schemas_text = "\nSCHÉMAS DÉTECTÉS DANS LE DOCUMENT :\n"
+            for i, schema in enumerate(schemas_pertinents, 1):
+                schemas_text += f"{i}. {schema.get('description', 'Schéma')}\n"
+
+        formules_text = ""
+        if formules_pertinentes:
+            formules_text = "\nFORMULES DÉTECTÉES :\n"
+            for formule in formules_pertinentes:
+                formules_text += f"• {formule}\n"
+
+        user_content = f"""
+        EXERCICE EXTRACTÉ (OCR) :
+        {contenu_exercice}
+
+        {schemas_text}
+
+        {formules_text}
+
+        Consignes :
+        1. Reconstruis cet exercice en corrigeant les erreurs
+        2. Intègre naturellement les éléments pertinents
+        3. Sois précis et clair
+        """
+
+        response = openai.ChatCompletion.create(
+            model="deepseek-reasoner",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_tokens=2500
+        )
+
+        resultat = json.loads(response.choices[0].message.content)
+
+        return {
+            "texte": resultat.get("exercice_reconstruit", contenu_exercice),
+            "formules_latex": resultat.get("formules_integrees", formules_pertinentes),
+            "elements_visuels": schemas_pertinents,
+            "source": "deepseek_reasoner_enriched"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Erreur enrichissement Reasoner: {e}")
+        return {
+            "texte": contenu_exercice,
+            "formules_latex": [],
+            "elements_visuels": [],
+            "source": "error_fallback"
+        }
 
 def extraire_exercice_avec_mathpix_et_schemas(contenu_exercice: str, departement=None) -> dict:
     """
@@ -2281,51 +2508,77 @@ def generer_corrige_exercice_async(soumission_id):
         else:
             texte_brut = dem.enonce_texte or ""
 
-            # ÉTAPE 2 : Séparation et extraction du fragment
-            soum.statut = 'separation_exercices'
-            soum.progression = 40
-            soum.save()
+        # ÉTAPE 2 : Extraction COMPLÈTE du document et enrichissement
+        soum.statut = 'extraction_complete'
+        soum.progression = 40
+        soum.save()
 
-            exercices_data = separer_exercices_avec_titres(texte_brut)
-            idx = soum.exercice_index or 0
+        # Sauvegarder le PDF localement pour extraction
+        temp_dir = tempfile.gettempdir()
+        pdf_path = os.path.join(temp_dir, f"doc_{dem.id}_{soum.id}.pdf")
 
-            if idx >= len(exercices_data):
-                logger.warning(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
-                idx = len(exercices_data) - 1
+        # Recréer le fichier PDF pour l'extraction
+        with open(pdf_path, "wb") as f:
+            if dem.fichier:
+                dem.fichier.seek(0)
+                for chunk in dem.fichier.chunks():
+                    f.write(chunk)
+            else:
+                # Si pas de fichier, créer un fichier texte temporaire
+                with open(pdf_path, "w", encoding="utf-8") as txt_file:
+                    txt_file.write(texte_brut)
 
-            ex_data = exercices_data[idx]
-            fragment = ex_data['contenu']
+        # Extraction scientifique COMPLÈTE (MathPix + Vision)
+        analyse_complete = analyser_document_scientifique(pdf_path, dem.departement)
 
-            # ✅ NOUVEAU : Appliquer MathPix + Vision + Reasoner sur CET exercice
-            exercice_enrichi = extraire_exercice_avec_mathpix_et_schemas(
-                fragment,
-                dem.departement
-            )
+        # Récupérer tous les schémas et formules du document
+        tous_schemas = analyse_complete.get("elements_visuels", [])
+        toutes_formules = analyse_complete.get("formules_latex", [])
+        texte_complet = analyse_complete.get("texte_complet", texte_brut)
 
-            # Mettre à jour les données vision avec l'analyse complète
-            donnees_vision_complete = {
-                "elements_visuels": exercice_enrichi.get("elements_visuels", []),
-                "formules_latex": exercice_enrichi.get("formules_latex", []),
-                "schemas_description": exercice_enrichi.get("schemas_description", []),
-                "type_schema": exercice_enrichi.get("type_schema", ""),
-                "graphs": [],
-                "angles": [],
-                "numbers": [],
-                "structure_exercices": [],
-                "source_extraction": exercice_enrichi.get("source", "ocr_standard")
-            }
+        # Nettoyer le fichier temporaire
+        try:
+            os.unlink(pdf_path)
+        except:
+            pass
 
-            # Utiliser le texte enrichi pour la génération
-            fragment = exercice_enrichi["texte"]
+        # Découpage en exercices
+        exercices_data = separer_exercices_avec_titres(texte_complet)
+        idx = soum.exercice_index or 0
 
-            logger.info(f"✅ Exercice {idx + 1} enrichi: {ex_data.get('titre', 'Sans titre')}")
-            logger.info(f"   Source: {exercice_enrichi.get('source', 'unknown')}")
-            logger.info(f"   Longueur: {len(fragment)} caractères")
-            logger.info(f"   Formules: {len(donnees_vision_complete['formules_latex'])}")
-            logger.info(f"   Schémas: {len(donnees_vision_complete['schemas_description'])}")
+        if idx >= len(exercices_data):
+            logger.warning(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+            idx = len(exercices_data) - 1
 
-        logger.info(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
+        ex_data = exercices_data[idx]
+        fragment = ex_data['contenu']
+
+        # ✅ ENRICHIR cet exercice spécifique avec DeepSeek Reasoner
+        exercice_enrichi = enrichir_exercice_avec_reasoner(
+            fragment,
+            tous_schemas,
+            toutes_formules
+        )
+
+        # Préparer données vision
+        donnees_vision_complete = {
+            "elements_visuels": exercice_enrichi.get("elements_visuels", []),
+            "formules_latex": exercice_enrichi.get("formules_latex", []),
+            "schemas_description": exercice_enrichi.get("schemas_description", []),
+            "graphs": [],
+            "angles": [],
+            "numbers": [],
+            "structure_exercices": [],
+            "source_extraction": exercice_enrichi.get("source", "standard")
+        }
+
+        fragment = exercice_enrichi["texte"]
+
+        logger.info(f"✅ Exercice {idx + 1} enrichi: {ex_data.get('titre', 'Sans titre')}")
+        logger.info(f"   Source: {exercice_enrichi.get('source', 'unknown')}")
         logger.info(f"   Longueur: {len(fragment)} caractères")
+        logger.info(f"   Formules: {len(donnees_vision_complete['formules_latex'])}")
+        logger.info(f"   Schémas: {len(exercice_enrichi.get('elements_visuels', []))}")
 
         # ÉTAPE 3 : Génération avec données vision
         soum.statut = 'analyse_ia'
