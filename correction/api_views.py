@@ -598,14 +598,35 @@ class SplitExercisesAPIView(APIView):
         # 4) Extraire le texte et découper en exercices AVEC TITRES
         texte = extraire_texte_fichier(fichier, demande)
 
-        # ✅ AJOUTER CET IMPORT LOCAL
-        from .ia_utils import separer_exercices_avec_titres
+        # ✅ AJOUTER LES IMPORTS LOCAUX NÉCESSAIRES
+        from .ia_utils import separer_exercices_avec_titres, extraire_exercice_avec_mathpix_et_schemas
         # Utiliser la nouvelle fonction améliorée
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
+        # ✅ ENRICHIR CHAQUE EXERCICE AVEC MATHPIX + VISION + REASONER
+        exercices_enrichis = []
+        for idx, ex in enumerate(exercices_detaillees):
+            # Appliquer l'extraction complète sur chaque exercice
+            exercice_enrichi = extraire_exercice_avec_mathpix_et_schemas(
+                ex.get('contenu', ''),
+                demande.departement
+            )
+
+            exercices_enrichis.append({
+                'index': idx,
+                'titre': ex.get('titre', f'Exercice {idx + 1}'),
+                'titre_complet': ex.get('titre_complet', ex.get('titre', f'Exercice {idx + 1}')),
+                'contenu': exercice_enrichi['texte'],
+                'contenu_original': ex.get('contenu', ''),
+                'source_extraction': exercice_enrichi.get('source', 'ocr_standard'),
+                'has_mathpix': exercice_enrichi.get('source') in ['mathpix_reasoner_vision', 'mathpix_only'],
+                'formules_count': len(exercice_enrichi.get('formules_latex', [])),
+                'schemas_count': len(exercice_enrichi.get('schemas_description', []))
+            })
+
         # 5) Construire la liste JSON complète pour stockage
         exercices_complets = []
-        for idx, ex in enumerate(exercices_detaillees):
+        for ex in exercices_enrichis:  # Utiliser exercices_enrichis au lieu de exercices_detaillees
             # ex est maintenant un dict avec 'titre', 'titre_complet', 'contenu'
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
             contenu = ex.get('contenu', '')
@@ -639,15 +660,19 @@ class SplitExercisesAPIView(APIView):
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
+
         # 7) Construire la réponse pour le frontend
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
-                "titre": ex["titre"],  # Titre formaté pour l'affichage
-                "extrait": ex["extrait"]
+                "titre": ex["titre"],
+                "extrait": ex["extrait"],
+                "has_mathpix": ex.get("has_mathpix", False),
+                "source_extraction": ex.get("source_extraction", "ocr_standard"),
+                "formules_count": ex.get("formules_count", 0),
+                "schemas_count": ex.get("schemas_count", 0)
             })
-
         # 8) Répondre
         return Response({
             "demande_id": demande.id,
@@ -661,9 +686,11 @@ class SplitExercisesAPIView(APIView):
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-
     def post(self, request):
         try:
+            # ✅ AJOUTER CET IMPORT ICI
+            from .ia_utils import separer_exercices_avec_titres, extraire_exercice_avec_mathpix_et_schemas
+
             user = request.user
             # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
             if not user_abonnement_actif(user):
