@@ -9,7 +9,7 @@ from resources.models import SousSysteme, Departement, Classe, Matiere, TypeExer
 from .models import AppConfig
 from django.contrib import messages
 from django.urls import reverse
-from .ia_utils import generer_corrige_ia_et_graphique, tracer_graphique
+from .ia_utils import generer_corrige_par_exercice, tracer_graphique
 import re
 from .forms import CustomUserCreationForm, SECRET_QUESTIONS  # Import la liste
 from resources.models import Pays, SousSysteme
@@ -124,7 +124,7 @@ def soumettre_exercice(request):
             ) if demande.fichier else "Aucun énoncé soumis ou extraction impossible."
 
             # --- Génère le corrigé IA ici (le code peut prendre du temps ici !) ---
-            corrige_txt, graph_list = generer_corrige_ia_et_graphique(
+            corrige_txt, graph_list = generer_corrige_par_exercice(
                 texte_enonce,
                 contexte,
                 lecons_contenus=lecons_contenus,
