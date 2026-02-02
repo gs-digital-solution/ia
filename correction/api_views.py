@@ -44,7 +44,7 @@ from .ia_utils import (
 
 )
 from rest_framework.permissions import IsAuthenticated
-from .ia_utils import separer_exercices_avec_titres, extraire_texte_fichier
+from .ia_utils import separer_exercices, extraire_texte_fichier
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import traceback
 import tempfile, os
@@ -450,7 +450,7 @@ class DebugExtractionAPIView(APIView):
             return Response({"error": "Aucun fichier"}, status=400)
 
         from .ia_utils import extraire_texte_fichier
-        texte_extraite = extraire_texte_fichier(fichier, None)  # ✅ Ajouter None comme 2ème paramètre
+        texte_extraite = extraire_texte_fichier(fichier)
 
         return Response({
             "success": True,
@@ -528,7 +528,8 @@ class AppConfigAPIView(APIView):
 
 
 
-#VUE POUR LISTE D'EXERCICES A CORRIGERclass SplitExercisesAPIView(APIView):
+#VUE POUR LISTE D'EXERCICES A CORRIGER
+class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
     - Crée une DemandeCorrection
@@ -594,58 +595,17 @@ class AppConfigAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraction scientifique COMPLÈTE avant découpage
-        temp_dir = tempfile.gettempdir()
-        pdf_path = os.path.join(temp_dir, f"temp_{demande.id}.pdf")
+        # 4) Extraire le texte et découper en exercices AVEC TITRES
+        texte = extraire_texte_fichier(fichier)
 
-        with open(pdf_path, "wb") as f:
-            for chunk in fichier.chunks():
-                f.write(chunk)
+        # Utiliser la nouvelle fonction améliorée
+        exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        from .ia_utils import analyser_document_scientifique, separer_exercices_avec_titres, enrichir_exercice_avec_reasoner
-
-        # Extraction MathPix + Vision
-        analyse_complete = analyser_document_scientifique(pdf_path, demande.departement)
-
-        # Récupérer données globales
-        tous_schemas = analyse_complete.get("elements_visuels", [])
-        toutes_formules = analyse_complete.get("formules_latex", [])
-        texte_complet = analyse_complete.get("texte_complet", "")
-
-        # Découpage
-        exercices_detaillees = separer_exercices_avec_titres(texte_complet)
-
-        # 5) Enrichir CHAQUE exercice
-        exercices_enrichis = []
-        for idx, ex in enumerate(exercices_detaillees):
-            exercice_enrichi = enrichir_exercice_avec_reasoner(
-                ex.get('contenu', ''),
-                tous_schemas,
-                toutes_formules
-            )
-
-            exercices_enrichis.append({
-                'index': idx,
-                'titre': ex.get('titre', f'Exercice {idx + 1}'),
-                'titre_complet': ex.get('titre_complet', ex.get('titre', f'Exercice {idx + 1}')),
-                'contenu': exercice_enrichi['texte'],
-                'contenu_original': ex.get('contenu', ''),
-                'source_extraction': exercice_enrichi.get('source', 'standard'),
-                'has_mathpix': analyse_complete.get('source_extraction') == 'mathpix_vision_combine',
-                'formules_count': len(exercice_enrichi.get('formules_latex', [])),
-                'schemas_count': len(exercice_enrichi.get('elements_visuels', []))
-            })
-
-        # Nettoyer le fichier temporaire
-        try:
-            os.unlink(pdf_path)
-        except:
-            pass
-
-        # 6) Construire la liste JSON complète pour stockage
+        # 5) Construire la liste JSON complète pour stockage
         exercices_complets = []
-        for ex in exercices_enrichis:
-            titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {ex['index'] + 1}"))
+        for idx, ex in enumerate(exercices_detaillees):
+            # ex est maintenant un dict avec 'titre', 'titre_complet', 'contenu'
+            titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
             contenu = ex.get('contenu', '')
 
             # Nettoyer le titre pour l'affichage
@@ -656,7 +616,7 @@ class AppConfigAPIView(APIView):
             # Extraire un extrait (premières lignes)
             lignes = contenu.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:
+            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
@@ -666,35 +626,27 @@ class AppConfigAPIView(APIView):
                 extrait = extrait[:147] + "..."
 
             exercices_complets.append({
-                "index": ex['index'],
+                "index": idx,
                 "titre": titre_affichage,
-                "titre_complet": titre_complet,
+                "titre_complet": titre_complet,  # Titre original complet
                 "extrait": extrait,
-                "contenu": contenu[:500],
-                "has_mathpix": ex.get("has_mathpix", False),
-                "source_extraction": ex.get("source_extraction", "ocr_standard"),
-                "formules_count": ex.get("formules_count", 0),
-                "schemas_count": ex.get("schemas_count", 0)
+                "contenu": contenu[:500]  # Stocker un peu de contenu pour preview
             })
 
-        # 7) Stocker les exercices dans la demande
+        # 6) Stocker les exercices dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        # 8) Construire la réponse pour le frontend
+        # 7) Construire la réponse pour le frontend
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
-                "titre": ex["titre"],
-                "extrait": ex["extrait"],
-                "has_mathpix": ex.get("has_mathpix", False),
-                "source_extraction": ex.get("source_extraction", "ocr_standard"),
-                "formules_count": ex.get("formules_count", 0),
-                "schemas_count": ex.get("schemas_count", 0)
+                "titre": ex["titre"],  # Titre formaté pour l'affichage
+                "extrait": ex["extrait"]
             })
 
-        # 9) Répondre
+        # 8) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
@@ -707,11 +659,9 @@ class AppConfigAPIView(APIView):
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+
     def post(self, request):
         try:
-            # ✅ AJOUTER CET IMPORT ICI
-            from .ia_utils import separer_exercices_avec_titres, extraire_exercice_avec_mathpix_et_schemas
-
             user = request.user
             # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
             if not user_abonnement_actif(user):
@@ -742,7 +692,7 @@ class PartialCorrectionAPIView(APIView):
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
             # 3) Récupérer le texte complet depuis le fichier
-            texte_complet = extraire_texte_fichier(demande.fichier, demande)
+            texte_complet = extraire_texte_fichier(demande.fichier)
             if not texte_complet:
                 return Response(
                     {"error": "Impossible d'extraire le texte de la demande."},
