@@ -44,7 +44,7 @@ from .ia_utils import (
     format_corrige_pdf_structure,
     generer_corrige_exercice_async,
     detecter_departement_scientifique_avance,
-
+    generer_corrige_par_exercice, tracer_graphique
 )
 from rest_framework.permissions import IsAuthenticated
 from .ia_utils import separer_exercices, extraire_texte_fichier
@@ -598,29 +598,54 @@ class SplitExercisesAPIView(APIView):
                 pass
 
         # 4) ⭐ EXTRACTION COMPLÈTE UNE SEULE FOIS avec pipeline adapté
+        print(f"🔍 Début extraction pour demande {demande.id}...")
         texte_complet = extraire_texte_fichier(fichier, departement=demande.departement)
+        print(f"✅ Extraction terminée: {len(texte_complet)} caractères")
 
         # 5) Découpage en exercices
+        print(f"✂️ Découpage en exercices...")
         exercices_detaillees = separer_exercices_avec_titres(texte_complet)
+        print(f"✅ {len(exercices_detaillees)} exercice(s) détecté(s)")
 
-        # 6) ⭐ CONSTRUIRE STRUCTURE COMPLÈTE POUR STOCKAGE
+        # 6) ⭐ CONVERSION BALISES LaTeX (IMPORTANT)
+        try:
+            from correction.latex_utils import convertir_balises_latex_mathpix
+            print(f"🔄 Conversion balises LaTeX $...$ → \\(...\\)")
+            texte_complet = convertir_balises_latex_mathpix(texte_complet)
+
+            # Convertir aussi le contenu de chaque exercice
+            for ex in exercices_detaillees:
+                if 'contenu' in ex:
+                    ex['contenu'] = convertir_balises_latex_mathpix(ex['contenu'])
+        except ImportError as e:
+            print(f"⚠️ Module latex_utils non trouvé: {e}")
+            # Laisser tel quel, conversion se fera plus tard
+        except Exception as e:
+            print(f"⚠️ Erreur conversion LaTeX: {e}")
+            # Continuer sans conversion
+
+        # 7) ⭐ CONSTRUIRE STRUCTURE COMPLÈTE POUR STOCKAGE
         exercices_liste = []
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
             contenu = ex.get('contenu', '')
+
+            print(f"   Exercice {idx}: '{titre_complet[:50]}...' - {len(contenu)} caractères")
 
             # Nettoyer le titre pour l'affichage
             titre_affichage = titre_complet
             if len(titre_affichage) > 80:
                 titre_affichage = titre_affichage[:77] + "..."
 
-            # Extraire un extrait
+            # Extraire un extrait pour le frontend
             lignes = contenu.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:
+            for line in lignes[:3]:  # Prendre 3 premières lignes max
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
+                    if len(extrait_lignes) >= 2:  # Max 2 lignes pour l'extrait
+                        break
 
             extrait = ' / '.join(extrait_lignes) if extrait_lignes else contenu.strip()[:150]
             if len(extrait) > 150:
@@ -631,40 +656,66 @@ class SplitExercisesAPIView(APIView):
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu": contenu  # ⭐ STOCKER TOUT LE CONTENU
+                "contenu": contenu,  # ⭐ STOCKER TOUT LE CONTENU (non tronqué)
+                "longueur_contenu": len(contenu),
+                "has_latex": '\\(' in contenu or '\\[' in contenu or '$' in contenu
             })
 
-        # 7) ⭐ STOCKER STRUCTURE COMPLÈTE DANS exercices_data
-        # Note: On ne stocke PAS les données vision ici car elles seront recalculées
-        # dans generer_corrige_exercice_async() si nécessaire
-        demande.exercices_data = json.dumps({
-            "exercices": exercices_liste,
-            "date_extraction": datetime.now().isoformat(),
-            "departement": demande.departement.nom if demande.departement else None,
-            "pipeline_recommande": "scientifique" if detecter_departement_scientifique_avance(
-                demande.departement) else "standard"
-        }, ensure_ascii=False)
-        demande.save()
+        # 8) ⭐ STOCKER STRUCTURE COMPLÈTE DANS exercices_data (OPTIMISÉ)
+        print(f"💾 Stockage des données pour réutilisation...")
 
-        # 8) Construire la réponse pour le frontend
+        # Déterminer le pipeline utilisé
+        pipeline_type = "standard"
+        try:
+            if demande.departement:
+                est_scientifique = detecter_departement_scientifique_avance(demande.departement)
+                pipeline_type = "scientifique" if est_scientifique else "standard"
+                print(f"🎯 Pipeline détecté: {pipeline_type}")
+        except Exception as e:
+            print(f"⚠️ Erreur détection pipeline: {e}")
+            pipeline_type = "standard"
+
+        # Structure complète à stocker
+        donnees_a_stocker = {
+            "exercices": exercices_liste,
+            "metadata": {
+                "date_extraction": datetime.now().isoformat(),
+                "departement": demande.departement.nom if demande.departement else None,
+                "departement_id": demande.departement.id if demande.departement else None,
+                "pipeline": pipeline_type,
+                "texte_complet_tronque": texte_complet[:5000],  # Premiers 5000 caractères pour debug
+                "total_exercices": len(exercices_liste)
+            }
+        }
+
+        demande.exercices_data = json.dumps(donnees_a_stocker, ensure_ascii=False)
+        demande.save()
+        print(f"✅ Données stockées: {len(exercices_liste)} exercices")
+
+        # 9) Construire la réponse pour le frontend (LÉGÈRE)
         exercices_reponse = []
         for ex in exercices_liste:
             exercices_reponse.append({
                 "index": ex["index"],
                 "titre": ex["titre"],
-                "extrait": ex["extrait"]
+                "extrait": ex["extrait"],
+                "has_latex": ex["has_latex"]
             })
 
-        # 9) Répondre
+        # 10) Répondre
         return Response({
+            "success": True,
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "pipeline_recommande": "scientifique" if detecter_departement_scientifique_avance(
-                demande.departement) else "standard"
+            "pipeline_recommande": pipeline_type,
+            "total_exercices": len(exercices_liste),
+            "debug": {
+                "departement": demande.departement.nom if demande.departement else None,
+                "conversion_latex_appliquee": "oui" if 'convertir_balises_latex_mathpix' in locals() else "non"
+            }
         })
-
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -737,12 +788,29 @@ class PartialCorrectionAPIView(APIView):
                             # Lancement asynchrone
                             generer_corrige_exercice_async.delay(soumission.id)
 
+                            # Déterminer le pipeline de manière sécurisée
+                            pipeline_type = "standard"
+                            try:
+                                if demande.departement:
+                                    est_scientifique = detecter_departement_scientifique_avance(demande.departement)
+                                    pipeline_type = "scientifique" if est_scientifique else "standard"
+                                    print(f"🎯 Pipeline déterminé: {pipeline_type}")
+                                else:
+                                    print("🎯 Pas de département → pipeline standard")
+                            except Exception as e:
+                                print(f"⚠️ Erreur détermination pipeline: {e}")
+                                pipeline_type = "standard"  # Fallback
+
                             return Response({
                                 "success": True,
                                 "soumission_exercice_id": soumission.id,
-                                "message": "Exercice envoyé au traitement avec données pré-extraites.",
-                                "pipeline": "scientifique" if detecter_departement_scientifique_avance(
-                                    demande.departement) else "standard"
+                                "message": "Exercice envoyé au traitement.",
+                                "pipeline": pipeline_type,
+                                "debug_info": {
+                                    "has_departement": demande.departement is not None,
+                                    "departement_nom": demande.departement.nom if demande.departement else None,
+                                    "exercice_index": idx
+                                }
                             }, status=status.HTTP_202_ACCEPTED)
 
                 except (json.JSONDecodeError, KeyError, IndexError) as e:

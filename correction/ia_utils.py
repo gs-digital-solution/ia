@@ -30,6 +30,13 @@ from abonnement.services import debiter_credit_abonnement
 from .models import CorrigePartiel
 from django.core.files import File
 
+try:
+    from .latex_utils import convertir_balises_latex_mathpix
+except ImportError:
+    # Fallback si fichier non créé
+    def convertir_balises_latex_mathpix(texte):
+        return texte
+
 logger = logging.getLogger(__name__)
 
 # ========== CONFIGURATION MATHPIX ==========
@@ -57,29 +64,42 @@ def preprocess_image_for_ocr(pil_image):
 # ========== DÉTECTION DÉPARTEMENT SCIENTIFIQUE AVANCÉE ==========
 def detecter_departement_scientifique_avance(departement):
     """
-    Version améliorée pour détecter précisément les départements scientifiques
-    qui nécessitent MathPix + DeepSeek Vision.
+    Version ROBUSTE avec gestion d'erreurs.
     """
     if not departement:
         return False
 
-    nom_dep = departement.nom if hasattr(departement, 'nom') else str(departement)
-    nom_dep_upper = nom_dep.upper()
+    try:
+        # Si c'est un string direct
+        if isinstance(departement, str):
+            nom_dep = departement.upper()
+        # Si c'est un objet avec attribut nom
+        elif hasattr(departement, 'nom'):
+            nom_dep = str(departement.nom).upper()
+        else:
+            nom_dep = str(departement).upper()
 
-    SCIENTIFIQUES_AVANCES = [
-        'MATHEMATIQUES', 'MATHS', 'MATHÉMATIQUES',
-        'PHYSIQUE', 'PHYSIQUE-CHIMIE',
-        'CHIMIE',
-        'SCIENCES PHYSIQUES',
-        'TECHNOLOGIE', 'SCIENCES DE LINGENIEUR',
-        'INFORMATIQUE', 'SCIENCES NUMERIQUES'
-    ]
+        # Liste complète des départements scientifiques
+        SCIENTIFIQUES = [
+            'MATHEMATIQUES', 'MATHS', 'MATHÉMATIQUES',
+            'PHYSIQUE', 'PHYSIQUE-CHIMIE', 'PHYSIQUE CHIMIE',
+            'CHIMIE', 'SCIENCES PHYSIQUES',
+            'SCIENCES', 'SCIENCE', 'SVT',
+            'TECHNOLOGIE', 'SCIENCES DE LINGENIEUR',
+            'INFORMATIQUE', 'SCIENCES NUMERIQUES', 'SCIENCES NUMÉRIQUES',
+            'BIOLOGIE', 'SCIENCES DE LA VIE'
+        ]
 
-    for dep_sci in SCIENTIFIQUES_AVANCES:
-        if dep_sci in nom_dep_upper:
-            return True
+        # Vérifier correspondance
+        for dep_sci in SCIENTIFIQUES:
+            if dep_sci in nom_dep:
+                return True
 
-    return False
+        return False
+
+    except Exception as e:
+        print(f"⚠️ Erreur détection département scientifique: {e}")
+        return False  # En cas d'erreur, considérer comme non scientifique
 
 
 # ========== OCR MATHPIX (extraction scientifique) ==========
@@ -169,7 +189,7 @@ def extraire_avec_mathpix(fichier_path: str) -> str:
 
     except Exception as e:
         logger.error(f"❌ Erreur extraction MathPix: {e}")
-
+    texte_complet = convertir_balises_latex_mathpix(texte_complet)
     return texte_complet.strip()
 
 
@@ -1530,9 +1550,28 @@ def generer_corrige_exercice_async(soumission_id):
     Tâche asynchrone optimisée pour corriger UN exercice isolé.
     Utilise les données déjà extraites quand disponibles.
     """
+    print(f"🚀 === DÉBUT TÂCHE ASYNCHRONE === soumission_id={soumission_id}")
+
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
+
+        print(f"✅ Soumission trouvée: ID={soum.id}")
+        print(f"📋 Demande: ID={dem.id}, Fichier={'OUI' if dem.fichier else 'NON'}")
+        print(f"🔢 Exercice index: {soum.exercice_index}")
+        print(f"🎓 Département: {dem.departement.nom if dem.departement else 'AUCUN'}")
+
+        # Vérifier si on a des données déjà extraites
+        if dem.exercices_data:
+            print("📦 Données extraction PRÉSENTES dans la demande")
+            try:
+                data = json.loads(dem.exercices_data)
+                nb_ex = len(data.get('exercices', [])) if isinstance(data, dict) else len(data)
+                print(f"   → {nb_ex} exercice(s) stocké(s)")
+            except:
+                print("   → Format JSON invalide")
+        else:
+            print("📦 Données extraction ABSENTES, extraction nécessaire")
 
         # Étape 1 : Vérifier si données déjà extraites
         donnees_vision_complete = None
