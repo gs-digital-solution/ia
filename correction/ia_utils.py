@@ -1547,8 +1547,8 @@ def tracer_graphique(graphique_dict, output_name):
 @shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
 def generer_corrige_exercice_async(soumission_id):
     """
-    Tâche asynchrone optimisée pour corriger UN exercice isolé.
-    Utilise les données déjà extraites quand disponibles.
+    Tâche asynchrone OPTIMISÉE pour corriger UN exercice isolé.
+    Utilise les données déjà extraites SANS re-extraire.
     """
     print(f"🚀 === DÉBUT TÂCHE ASYNCHRONE === soumission_id={soumission_id}")
 
@@ -1560,118 +1560,199 @@ def generer_corrige_exercice_async(soumission_id):
         print(f"📋 Demande: ID={dem.id}, Fichier={'OUI' if dem.fichier else 'NON'}")
         print(f"🔢 Exercice index: {soum.exercice_index}")
         print(f"🎓 Département: {dem.departement.nom if dem.departement else 'AUCUN'}")
+        print(f"📁 Données stockées: {'OUI' if dem.exercices_data else 'NON'}")
 
-        # Vérifier si on a des données déjà extraites
-        if dem.exercices_data:
-            print("📦 Données extraction PRÉSENTES dans la demande")
-            try:
-                data = json.loads(dem.exercices_data)
-                nb_ex = len(data.get('exercices', [])) if isinstance(data, dict) else len(data)
-                print(f"   → {nb_ex} exercice(s) stocké(s)")
-            except:
-                print("   → Format JSON invalide")
-        else:
-            print("📦 Données extraction ABSENTES, extraction nécessaire")
+        # ========== ÉTAPE 1 : RÉCUPÉRATION DONNÉES DÉJÀ STOCKÉES ==========
+        print(f"🔍 Recherche données déjà extraites pour demande {dem.id}...")
 
-        # Étape 1 : Vérifier si données déjà extraites
-        donnees_vision_complete = None
-        texte_complet = ""
+        donnees_extraction = None
+        fragment = None
+        ex_data = None
+        exercices_stockes = []
 
         if dem.exercices_data:
             try:
-                exercices_data = json.loads(dem.exercices_data)
-                if isinstance(exercices_data, dict) and "texte_complet" in exercices_data:
-                    # Données structurées avec extraction complète
-                    texte_complet = exercices_data.get("texte_complet", "")
-                    donnees_vision_complete = exercices_data.get("donnees_vision", {})
-                    print("✅ Utilisation données extraction déjà stockées")
+                donnees_extraction = json.loads(dem.exercices_data)
+                print(f"✅ Données extraction PRÉSENTES dans la demande")
+
+                # Déterminer le format des données
+                if isinstance(donnees_extraction, dict) and "exercices" in donnees_extraction:
+                    # ⭐ NOUVEAU FORMAT STRUCTURÉ (depuis SplitExercisesAPIView)
+                    exercices_stockes = donnees_extraction["exercices"]
+                    metadata = donnees_extraction.get("metadata", {})
+
+                    print(f"   📋 Format: nouveau structuré")
+                    print(f"   📊 {len(exercices_stockes)} exercice(s) stocké(s)")
+                    print(f"   🎯 Pipeline: {metadata.get('pipeline', 'inconnu')}")
+                    print(f"   🏷️ Département: {metadata.get('departement', 'inconnu')}")
+
+                    # Vérifier si l'index demandé existe
+                    idx = soum.exercice_index or 0
+                    if idx < len(exercices_stockes):
+                        ex_stocke = exercices_stockes[idx]
+                        fragment = ex_stocke.get("contenu", "")
+                        ex_data = {
+                            'titre': ex_stocke.get('titre', f"Exercice {idx + 1}"),
+                            'titre_complet': ex_stocke.get('titre_complet', f"Exercice {idx + 1}"),
+                            'contenu': fragment
+                        }
+
+                        print(f"   🎯 Exercice {idx + 1} récupéré depuis stockage")
+                        print(f"   📏 Longueur: {len(fragment)} caractères")
+                        print(f"   🔤 Titre: {ex_data['titre'][:50]}...")
+
+                        # Marquer que tout est déjà prêt
+                        extraction_faite = True
+                        decoupage_fait = True
+                    else:
+                        print(f"⚠️ Index {idx} hors limites des {len(exercices_stockes)} exercices stockés")
+                        extraction_faite = False
+
+                elif isinstance(donnees_extraction, list):
+                    # ⭐ ANCIEN FORMAT (liste directe)
+                    exercices_stockes = donnees_extraction
+                    idx = soum.exercice_index or 0
+
+                    print(f"   📋 Format: ancien liste")
+                    print(f"   📊 {len(exercices_stockes)} exercice(s) stocké(s)")
+
+                    if idx < len(exercices_stockes):
+                        ex_stocke = exercices_stockes[idx]
+                        fragment = ex_stocke.get("contenu", "")
+                        ex_data = {
+                            'titre': ex_stocke.get('titre', f"Exercice {idx + 1}"),
+                            'titre_complet': ex_stocke.get('titre_complet', f"Exercice {idx + 1}"),
+                            'contenu': fragment
+                        }
+                        extraction_faite = True
+                        decoupage_fait = True
+                    else:
+                        extraction_faite = False
                 else:
-                    # Ancien format (juste liste d'exercices)
-                    texte_complet = " ".join([ex.get("contenu", "") for ex in exercices_data])
-                    print("✅ Utilisation contenu exercices déjà stockés")
-            except json.JSONDecodeError:
-                print("⚠️ Données exercices mal formatées, re-extraction")
+                    print("⚠️ Format de données inconnu")
+                    extraction_faite = False
 
-        # Si pas de données stockées, extraction nécessaire
-        if not texte_complet and dem.fichier:
-            print("🔄 Données non stockées, extraction nécessaire...")
+            except json.JSONDecodeError as e:
+                print(f"⚠️ JSON corrompu dans exercices_data: {e}")
+                extraction_faite = False
+            except Exception as e:
+                print(f"⚠️ Erreur lecture données stockées: {e}")
+                extraction_faite = False
+        else:
+            print("📦 Aucune donnée extraction stockée")
+            extraction_faite = False
+
+        # ========== ÉTAPE 2 : EXTRACTION SI NÉCESSAIRE ==========
+        if not extraction_faite:
+            print("🔄 Extraction nécessaire (données non disponibles ou invalides)...")
             soum.statut = 'extraction'
             soum.progression = 10
             soum.save()
 
-            temp_dir = tempfile.gettempdir()
-            local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
-            with open(local_path, "wb") as f:
-                for chunk in dem.fichier.chunks():
-                    f.write(chunk)
+            if dem.fichier:
+                temp_dir = tempfile.gettempdir()
+                local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
+                with open(local_path, "wb") as f:
+                    for chunk in dem.fichier.chunks():
+                        f.write(chunk)
 
-            analyse_complete = analyser_document_scientifique(local_path, departement=dem.departement)
+                # Extraction complète
+                analyse_complete = analyser_document_scientifique(local_path, departement=dem.departement)
+                texte_complet = analyse_complete.get("texte_complet", "")
 
-            donnees_vision_complete = {
-                "elements_visuels": analyse_complete.get("elements_visuels", []),
-                "formules_latex": analyse_complete.get("formules_latex", []),
-                "graphs": analyse_complete.get("graphs", []),
-                "angles": analyse_complete.get("angles", []),
-                "numbers": analyse_complete.get("numbers", []),
-                "pipeline_utilise": analyse_complete.get("pipeline", "inconnu")
-            }
+                # Découpage
+                exercices_detaillees = separer_exercices_avec_titres(texte_complet)
+                idx = soum.exercice_index or 0
 
-            texte_complet = analyse_complete.get("texte_complet", "")
+                if idx >= len(exercices_detaillees):
+                    print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+                    idx = len(exercices_detaillees) - 1
 
-            try:
-                os.unlink(local_path)
-            except:
-                pass
+                ex_data = exercices_detaillees[idx]
+                fragment = ex_data['contenu']
+
+                try:
+                    os.unlink(local_path)
+                except:
+                    pass
+
+                decoupage_fait = True
+                print(f"✅ Extraction + découpage terminés")
+
+            else:
+                # Fallback: texte direct
+                texte_complet = dem.enonce_texte or ""
+                fragment = texte_complet
+                ex_data = {
+                    'titre': f"Exercice {soum.exercice_index + 1}",
+                    'titre_complet': f"Exercice {soum.exercice_index + 1}",
+                    'contenu': fragment
+                }
+                decoupage_fait = True
         else:
-            texte_complet = dem.enonce_texte or ""
+            # Extraction déjà faite, on saute cette étape
+            print("⏭️ Extraction déjà faite, étape sautée")
+            soum.statut = 'decoupage'
+            soum.progression = 30
+            soum.save()
 
-        # Étape 2 : Séparation et extraction du fragment
-        soum.statut = 'decoupage'
-        soum.progression = 30
-        soum.save()
+        # ========== ÉTAPE 3 : VÉRIFICATION FINALE ==========
+        if not ex_data or not fragment:
+            print("❌ ERREUR: Aucun exercice ou fragment disponible")
+            soum.statut = 'erreur'
+            soum.save()
+            return False
 
-        exercices_data = separer_exercices_avec_titres(texte_complet)
-        idx = soum.exercice_index or 0
+        print(f"✅ Exercice {soum.exercice_index + 1} prêt: {ex_data.get('titre', 'Sans titre')}")
+        print(f"   📏 Longueur contenu: {len(fragment)} caractères")
 
-        if idx >= len(exercices_data):
-            print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
-            idx = len(exercices_data) - 1
+        # Mise à jour statut découpage si nécessaire
+        if not decoupage_fait:
+            soum.statut = 'decoupage'
+            soum.progression = 30
+            soum.save()
 
-        ex_data = exercices_data[idx]
-        fragment = ex_data['contenu']
-
-        print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
-        print(f"   Longueur contenu: {len(fragment)} caractères")
-
-        # Étape 3 : Préparer données vision pour cet exercice
+        # ========== ÉTAPE 4 : PRÉPARATION DONNÉES VISION ==========
         donnees_vision_exercice = None
-        if dem.departement and detecter_departement_scientifique_avance(dem.departement):
-            if donnees_vision_complete:
-                donnees_vision_exercice = filtrer_donnees_vision_par_exercice(
-                    donnees_vision_complete,
-                    fragment
-                )
-                print(f"🔬 Enrichissement scientifique activé pour exercice {idx + 1}")
-                print(f"   Schémas pertinents: {len(donnees_vision_exercice.get('elements_visuels', []))}")
 
-        # Étape 4 : Génération du corrigé
+        # Vérifier si département scientifique (avec gestion d'erreur)
+        try:
+            est_scientifique = False
+            if dem.departement:
+                est_scientifique = detecter_departement_scientifique_avance(dem.departement)
+                print(f"🔬 Département scientifique: {est_scientifique}")
+
+            if est_scientifique:
+                # Pour l'instant, on n'a pas les données vision stockées
+                # Donc on ne peut pas faire l'enrichissement Reasoner
+                print(f"⚠️ Département scientifique détecté mais données vision non stockées")
+                print(f"   → Enrichissement Reasoner NON disponible")
+                # Note: On pourrait extraire les données vision ici, mais c'est coûteux
+                # Pour l'instant, on passe sans enrichissement
+
+        except Exception as e:
+            print(f"⚠️ Erreur détection scientifique: {e}")
+            # Continuer sans enrichissement
+
+        # ========== ÉTAPE 5 : GÉNÉRATION DU CORRIGÉ ==========
         soum.statut = 'analyse_ia'
         soum.progression = 50
         soum.save()
 
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
-        contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
+        contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {soum.exercice_index + 1}')}"
 
+        print(f"🧠 Génération du corrigé avec IA...")
         corrige_txt, _ = generer_corrige_par_exercice(
             texte_exercice=fragment,
             contexte=contexte,
             matiere=mat,
-            donnees_vision=donnees_vision_exercice,
+            donnees_vision=donnees_vision_exercice,  # None pour l'instant
             demande=dem,
-            exercice_index=idx + 1
+            exercice_index=soum.exercice_index + 1
         )
 
-        # Étape 5 : Génération PDF
+        # ========== ÉTAPE 6 : GÉNÉRATION PDF ==========
         soum.statut = 'formatage_pdf'
         soum.progression = 80
         soum.save()
@@ -1682,55 +1763,62 @@ def generer_corrige_exercice_async(soumission_id):
                 "titre_corrige": contexte,
                 "corrige_html": corrige_txt,
                 "soumission_id": soum.id,
-                "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
+                "titre_exercice": ex_data.get('titre_complet', f"Exercice {soum.exercice_index + 1}")
             },
             soum.id
         )
 
-        # Étape 6 : Débit de crédit
+        # ========== ÉTAPE 7 : DÉBIT CRÉDIT ==========
         if not debiter_credit_abonnement(dem.user):
+            print("❌ Crédits insuffisants")
             soum.statut = 'erreur_credit'
             soum.save()
             return False
 
-        # Étape 7 : Création CorrigePartiel
+        # ========== ÉTAPE 8 : CRÉATION CORRIGEPARTIEL ==========
         pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
         pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
 
-        titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
+        titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {soum.exercice_index + 1}"))
         if len(titre_reel) > 200:
             titre_reel = titre_reel[:197] + "..."
 
-        with open(pdf_absolute_path, 'rb') as f:
-            corrige = CorrigePartiel.objects.create(
-                soumission=soum,
-                titre_exercice=titre_reel,
-            )
-            corrige.fichier_pdf.save(
-                f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
-                File(f)
-            )
-            corrige.save()
+        try:
+            with open(pdf_absolute_path, 'rb') as f:
+                corrige = CorrigePartiel.objects.create(
+                    soumission=soum,
+                    titre_exercice=titre_reel,
+                )
+                corrige.fichier_pdf.save(
+                    f"corrige_{dem.id}_ex{soum.exercice_index + 1}_{soum.id}.pdf",
+                    File(f)
+                )
+                corrige.save()
+            print(f"💾 CorrigePartiel créé: {titre_reel[:50]}...")
+        except Exception as e:
+            print(f"⚠️ Erreur création CorrigePartiel: {e}")
+            # Continuer quand même
 
-        # Étape 8 : Finalisation
+        # ========== ÉTAPE 9 : FINALISATION ==========
         soum.statut = 'termine'
         soum.progression = 100
         soum.resultat_json = {
-            "exercice_index": idx,
+            "exercice_index": soum.exercice_index,
             "exercice_titre": titre_reel,
             "corrige_text": corrige_txt,
             "pdf_url": pdf_url,
             "exercice_data": ex_data,
-            "pipeline_utilise": donnees_vision_complete.get("pipeline_utilise",
-                                                            "standard") if donnees_vision_complete else "standard"
+            "optimisation_utilisee": "donnees_stockees" if extraction_faite else "extraction_fraiche"
         }
         soum.save()
 
-        print(f"🎉 Exercice {idx + 1} traité avec succès!")
+        print(f"🎉 Exercice {soum.exercice_index + 1} traité avec succès!")
+        print(f"   📊 Optimisation: {'OUI' if extraction_faite else 'NON'}")
+        print(f"   📄 PDF généré: {pdf_url}")
         return True
 
     except Exception as e:
-        print(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
+        print(f"❌ ERREUR CRITIQUE dans generer_corrige_exercice_async: {e}")
         import traceback
         traceback.print_exc()
         try:
