@@ -11,7 +11,6 @@ import openai
 from datetime import datetime
 import logging
 import camelot
-
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pdfminer.high_level import extract_text
@@ -22,33 +21,28 @@ from django.utils.safestring import mark_safe
 from celery import shared_task
 from PIL import Image
 import base64
-from resources.models import PromptIA, Matiere
+from resources.models import PromptIA,Matiere
 from .pdf_utils import generer_pdf_corrige
 from .models import SoumissionIA
 from resources.models import Matiere
 from abonnement.services import debiter_credit_abonnement
 from .models import CorrigePartiel
 from django.core.files import File
-
-try:
-    from .latex_utils import convertir_balises_latex_mathpix
-except ImportError:
-    # Fallback si fichier non créé
-    def convertir_balises_latex_mathpix(texte):
-        return texte
-
+#from .tasks import generer_un_exercice
+#from celery import group
+import logging
+# Logger dédié
 logger = logging.getLogger(__name__)
 
-# ========== CONFIGURATION MATHPIX ==========
-MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
-MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
-
-
-# ========== FONCTIONS DE PRÉTRAITEMENT IMAGE ==========
 def preprocess_image_for_ocr(pil_image):
-    """Convertit une PIL.Image en image binaire nettoyée pour Tesseract."""
+    """
+    Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
+    """
+    # PIL → CV2 BGR
     img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    # niveaux de gris
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # seuillage adaptatif
     bin_img = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -56,153 +50,107 @@ def preprocess_image_for_ocr(pil_image):
         blockSize=11,
         C=2
     )
-    kernel = np.ones((1, 1), np.uint8)
+    # ouverture pour nettoyer le petit bruit
+    kernel = np.ones((1,1), np.uint8)
     clean = cv2.morphologyEx(bin_img, cv2.MORPH_OPEN, kernel)
     return clean
 
+# Cache en mémoire des PromptIA pour éviter les hits répétés en BDD
+_PROMPTIA_CACHE = {}
 
-# ========== DÉTECTION DÉPARTEMENT SCIENTIFIQUE AVANCÉE ==========
-def detecter_departement_scientifique_avance(departement):
+# ========== BLIP LAZY-LOADER ==========
+_blip_model = None
+_blip_processor = None
+def get_blip_model():
     """
-    Version ROBUSTE avec gestion d'erreurs.
+    Charge le modèle BLIP au premier appel (lazy load).
     """
-    if not departement:
-        return False
-
-    try:
-        # Si c'est un string direct
-        if isinstance(departement, str):
-            nom_dep = departement.upper()
-        # Si c'est un objet avec attribut nom
-        elif hasattr(departement, 'nom'):
-            nom_dep = str(departement.nom).upper()
-        else:
-            nom_dep = str(departement).upper()
-
-        # Liste complète des départements scientifiques
-        SCIENTIFIQUES = [
-            'MATHEMATIQUES', 'MATHS', 'MATHÉMATIQUES',
-            'PHYSIQUE', 'PHYSIQUE-CHIMIE', 'PHYSIQUE CHIMIE',
-            'CHIMIE', 'SCIENCES PHYSIQUES',
-            'SCIENCES', 'SCIENCE', 'SVT',
-            'TECHNOLOGIE', 'SCIENCES DE LINGENIEUR',
-            'INFORMATIQUE', 'SCIENCES NUMERIQUES', 'SCIENCES NUMÉRIQUES',
-            'BIOLOGIE', 'SCIENCES DE LA VIE'
-        ]
-
-        # Vérifier correspondance
-        for dep_sci in SCIENTIFIQUES:
-            if dep_sci in nom_dep:
-                return True
-
-        return False
-
-    except Exception as e:
-        print(f"⚠️ Erreur détection département scientifique: {e}")
-        return False  # En cas d'erreur, considérer comme non scientifique
-
-
-# ========== OCR MATHPIX (extraction scientifique) ==========
-def ocr_mathpix(path_image: str) -> dict:
-    """
-    Appelle l'API Mathpix pour extraire texte + LaTeX.
-    """
-    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
-        logger.error("❌ MathPix credentials manquants")
-        return {"text": "", "latex_simplified": ""}
-
-    try:
-        with open(path_image, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode()
-
-        headers = {
-            "app_id": MATHPIX_APP_ID,
-            "app_key": MATHPIX_APP_KEY,
-            "Content-type": "application/json"
-        }
-
-        payload = {
-            "src": f"data:image/png;base64,{img_b64}",
-            "formats": ["text", "latex_simplified"],
-            "math_inline_delimiters": ["$", "$"],
-            "rm_spaces": True
-        }
-
-        resp = requests.post(
-            "https://api.mathpix.com/v3/text",
-            headers=headers,
-            json=payload,
-            timeout=30
+    global _blip_model, _blip_processor
+    if _blip_model is None:
+        import torch
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _blip_processor = BlipProcessor.from_pretrained(
+            "Salesforce/blip-image-captioning-base"
         )
-        resp.raise_for_status()
-
-        result = resp.json()
-        logger.info(f"✅ MathPix OCR réussi: {len(result.get('text', ''))} caractères")
-        return result
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Erreur API MathPix: {e}")
-        return {"text": "", "latex_simplified": ""}
-    except Exception as e:
-        logger.error(f"❌ Erreur inattendue MathPix: {e}")
-        return {"text": "", "latex_simplified": ""}
+        _blip_model = BlipForConditionalGeneration.from_pretrained(
+            "Salesforce/blip-image-captioning-base"
+        ).to(device).eval()
+        logger.info("🖼️ BLIP chargé sur %s", device)
+    return _blip_processor, _blip_model
 
 
-def extraire_avec_mathpix(fichier_path: str) -> str:
+DEPARTEMENTS_SCIENTIFIQUES = [
+    'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
+]
+def is_departement_scientifique(departement):
     """
-    Extraction complète avec MathPix pour un fichier.
-    Gère PDF (converti en images) et images directes.
+    Renvoie True si le département fait partie des filières scientifiques définies globalement.
     """
-    if not fichier_path.lower().endswith(('.png', '.jpg', '.jpeg', '.pdf')):
-        logger.error(f"Format non supporté par MathPix: {fichier_path}")
-        return ""
+    if departement and departement.nom:
+        dep_name = departement.nom.lower()
+        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
+    return False
 
-    texte_complet = ""
+# ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
+def get_best_promptia(demande):
+    """
+    Retourne le PromptIA le plus spécifique pour la demande, ou None.
+    Ne fait jamais filter({}) qui retomberait sur le 1er prompt anglais.
+    Fallback progressif, puis prompt par défaut si rien trouvé.
+    """
+    # 1) Construire le filtre initial
+    filtra = {
+        'pays': demande.pays,
+        'sous_systeme': demande.sous_systeme,
+        'classe': demande.classe,
+        'matiere': demande.matiere,
+        'departement': demande.departement,
+        'type_exercice': demande.type_exercice,
+    }
+    # Ne garder que les clés non-nulles
+    filtra = {k: v for k, v in filtra.items() if v is not None}
 
-    try:
-        if fichier_path.lower().endswith('.pdf'):
-            pages = convert_from_path(fichier_path, dpi=300)
-            logger.info(f"📄 PDF converti en {len(pages)} pages pour MathPix")
+    # 2) Si on a au moins un critère, tenter la recherche exacte
+    if filtra:
+        qs = PromptIA.objects.filter(**filtra)
+        if qs.exists():
+            return qs.first()
 
-            for i, page in enumerate(pages, 1):
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    page.save(tmp.name, 'PNG')
+        # 2b) Fallback progressif en retirant un champ à la fois
+        for champ in ['type_exercice', 'departement', 'classe', 'sous_systeme', 'pays']:
+            if champ in filtra:
+                filtra2 = dict(filtra)
+                filtra2.pop(champ)
+                if filtra2:
+                    qs2 = PromptIA.objects.filter(**filtra2)
+                    if qs2.exists():
+                        return qs2.first()
 
-                    result = ocr_mathpix(tmp.name)
-                    page_text = result.get('text', '')
-                    latex = result.get('latex_simplified', '')
+        # 2c) Fallback par matière seule si matière faisait partie du filtre
+        if 'matiere' in filtra:
+            qs3 = PromptIA.objects.filter(matiere=demande.matiere)
+            if qs3.exists():
+                return qs3.first()
 
-                    if page_text:
-                        texte_complet += f"\n\n--- Page {i} ---\n{page_text}"
-                    if latex:
-                        texte_complet += f"\n[Formules page {i}]: {latex}"
-
-                    os.unlink(tmp.name)
-
-        else:
-            result = ocr_mathpix(fichier_path)
-            texte_complet = result.get('text', '')
-            latex = result.get('latex_simplified', '')
-
-            if latex:
-                texte_complet += f"\n\n[Formules LaTeX]: {latex}"
-
-    except Exception as e:
-        logger.error(f"❌ Erreur extraction MathPix: {e}")
-    texte_complet = convertir_balises_latex_mathpix(texte_complet)
-    return texte_complet.strip()
+    # 3) Aucune correspondance : retomber sur DEFAULT_SYSTEM_PROMPT
+    return None
 
 
-# ========== CONFIGURATION DEEPSEEK ==========
+# ── CONFIGURATION DEEPSEEK AVEC VISION ────────────────────
 openai.api_key = os.getenv("DEEPSEEK_API_KEY")
 openai.api_base = "https://api.deepseek.com"
+
+# ── MODÈLE POUR LA VISION ────────────────────────────────
+# deepseek-chat a les capacités vision quand on envoie des images
 DEEPSEEK_VISION_MODEL = "deepseek-reasoner"
 
 
-# ========== APPEL DEEPSEEK VISION ==========
+# ─── NEW ─── appel multimodal à DeepSeek-V3 pour PDF / images ────
+# ── CORRIGÉ : Appel multimodal à DeepSeek pour PDF/images ────
 def call_deepseek_vision(path_fichier: str) -> dict:
     """
-    Envoie un PDF ou une image à DeepSeek Vision.
+    Envoie un PDF ou une image à DeepSeek - Version corrigée pour l'API DeepSeek.
     """
     system_prompt = r"""
     Tu es un expert en schémas et documents scientifiques.
@@ -218,11 +166,14 @@ def call_deepseek_vision(path_fichier: str) -> dict:
     Ne renvoie aucun texte hors de ce JSON.
     """
     try:
+        # Encoder le fichier en base64
         with open(path_fichier, "rb") as f:
             data_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+        # ✅ CORRECTION : Format DeepSeek compatible
         message_content = f"""
         [image]{data_b64}[/image]
+
         Extrait le texte, les formules LaTeX et les légendes de ce document.
         """
 
@@ -241,303 +192,119 @@ def call_deepseek_vision(path_fichier: str) -> dict:
         return content if isinstance(content, dict) else json.loads(content)
 
     except Exception as e:
-        logger.error(f"❌ Erreur call_deepseek_vision: {e}")
+        print(f"❌ Erreur call_deepseek_vision: {e}")
         return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
 
+# ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
-# ========== FUSION EXTRACTIONS SCIENTIFIQUES ==========
-def fusionner_extractions_scientifiques(texte_mathpix: str, analyse_vision: dict) -> str:
+def analyser_document_scientifique(fichier_path: str) -> dict:
     """
-    Fusionne intelligemment l'extraction MathPix et l'analyse DeepSeek Vision.
+    Analyse scientifique avancée avec deepseek-vl2 :
+    - OCR (Tesseract) en fallback
+    - appel multimodal deepseek-vl2 pour texte + schémas
+    Retourne un dict avec :
+      - texte_complet (str)
+      - elements_visuels (list of captions)
+      - formules_latex  (list of LaTeX strings)
+      - graphs          (list of dicts graphiques)
+      - angles          (list of {"valeur","unité","coord"})
+      - numbers         (list of {"valeur","unité","coord"})
+      - structure_exercices (list)
     """
-    if not texte_mathpix and not analyse_vision:
-        return ""
+    logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
 
-    parties = []
+    # 1) OCR fallback pour avoir un premier texte
+    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
+    texte_ocr = ""
+    try:
+        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            img = Image.open(fichier_path)
+            clean = preprocess_image_for_ocr(img)
+            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
+            logger.info("    ✓ OCR image brut extrait %d caractères", len(texte_ocr))
 
-    if texte_mathpix:
-        parties.append(f"=== TEXTE ET FORMULES ===\n{texte_mathpix}")
+        elif fichier_path.lower().endswith('.pdf'):
+            texte_ocr = extraire_texte_pdf(fichier_path)
+            logger.info("    ✓ PDFMiner extrait %d caractères", len(texte_ocr))
+            if len(texte_ocr) < 50:
+                logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
+                pages = convert_from_path(fichier_path, dpi=300)
+                txts = []
+                for page in pages:
+                    clean = preprocess_image_for_ocr(page)
+                    txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
+                texte_ocr = "\n".join(txts)
+                logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
 
-    if analyse_vision.get("captions"):
-        parties.append("\n=== SCHÉMAS DÉTECTÉS ===")
-        for idx, element in enumerate(analyse_vision["captions"], 1):
-            desc = element if isinstance(element, str) else f"Schéma {idx}"
-            parties.append(f"[SCHÉMA {idx}]: {desc}")
+        else:
+            raise ValueError(f"Format non supporté pour OCR : {fichier_path}")
 
-    if analyse_vision.get("numbers"):
-        parties.append("\n=== DONNÉES NUMÉRIQUES ===")
-        for num in analyse_vision["numbers"]:
-            val = num.get("valeur", "")
-            unit = num.get("unité", "")
-            if val:
-                parties.append(f"- {val} {unit}")
+    except Exception:
+        logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
+        # on ne stoppe pas, on continue avec texte_ocr vide
 
-    if analyse_vision.get("angles"):
-        parties.append("\n=== ANGLES DÉTECTÉS ===")
-        for angle in analyse_vision["angles"]:
-            val = angle.get("valeur", "")
-            unit = angle.get("unité", "°")
-            if val:
-                parties.append(f"- {val}{unit}")
+    # 2) Appel deepseek-vl2 pour tout : texte + schémas + JSON
+    try:
+        vision_json = call_deepseek_vision(fichier_path)
 
-    return "\n".join(parties)
+        # 2a) Texte complet : fallback sur OCR si résultat trop court
+        texte_json = vision_json.get("text", "") or ""
+        if len(texte_json) < 50:
+            texte_json = texte_ocr
 
+        # 2b) Récupération des blocs
+        captions     = vision_json.get("captions", [])
+        latex_blocks = vision_json.get("latex_blocks", [])
+        graphs       = vision_json.get("graphs", [])
+        angles       = vision_json.get("angles", [])
+        numbers      = vision_json.get("numbers", [])
+        struct_exos  = vision_json.get("structure_exercices", [])
 
-# ========== ANALYSE DOCUMENT SCIENTIFIQUE UNIFIÉE ==========
-def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
-    """
-    Analyse scientifique avancée avec sélection automatique du pipeline.
-    """
-    logger.info(f"🔍 Analyse scientifique pour {fichier_path}")
-
-    # Décision du pipeline
-    besoin_scientifique = detecter_departement_scientifique_avance(departement)
-
-    texte_mathpix = ""
-    analyse_vision = {"text": "", "captions": [], "graphs": []}
-
-    if besoin_scientifique:
-        logger.info("⚡ Département scientifique détecté → Pipeline MathPix + DeepSeek Vision")
-
-        # 1. Extraction MathPix
-        texte_mathpix = extraire_avec_mathpix(fichier_path)
-
-        # 2. Analyse DeepSeek Vision
-        try:
-            analyse_vision = call_deepseek_vision(fichier_path)
-            if isinstance(analyse_vision, str):
-                analyse_vision = json.loads(analyse_vision)
-        except Exception as e:
-            logger.error(f"❌ Erreur DeepSeek Vision: {e}")
-            analyse_vision = {"text": "", "captions": [], "graphs": []}
-
-        # 3. Fusion intelligente
-        texte_fusionne = fusionner_extractions_scientifiques(texte_mathpix, analyse_vision)
-
-        logger.info(
-            f"✅ Pipeline scientifique: {len(texte_fusionne)} caractères, {len(analyse_vision.get('captions', []))} schémas")
+        logger.info("✅ deepseek-vl2 OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
+                    len(texte_json), len(captions), len(latex_blocks), len(angles), len(numbers))
 
         return {
-            "texte_complet": texte_fusionne,
-            "elements_visuels": analyse_vision.get("captions", []),
-            "formules_latex": analyse_vision.get("latex_blocks", []),
-            "graphs": analyse_vision.get("graphs", []),
-            "angles": analyse_vision.get("angles", []),
-            "numbers": analyse_vision.get("numbers", []),
-            "pipeline": "scientifique",
-            "mathpix_used": True
+            "texte_complet": texte_json,
+            "elements_visuels": captions,
+            "formules_latex": latex_blocks,
+            "graphs": graphs,
+            "angles": angles,
+            "numbers": numbers,
+            "structure_exercices": struct_exos
         }
 
-    else:
-        logger.info("📄 Département non scientifique → Pipeline standard OCR")
-
-        # Pipeline standard
-        try:
-            vision_json = call_deepseek_vision(fichier_path)
-            if isinstance(vision_json, str):
-                vision_json = json.loads(vision_json)
-
-            texte_json = vision_json.get("text", "") or ""
-
-            if len(texte_json) < 100:
-                texte_json = extraire_texte_robuste(fichier_path)
-
-            logger.info(f"✅ Pipeline standard: {len(texte_json)} caractères")
-
-            return {
-                "texte_complet": texte_json,
-                "elements_visuels": vision_json.get("captions", []),
-                "formules_latex": vision_json.get("latex_blocks", []),
-                "graphs": vision_json.get("graphs", []),
-                "angles": vision_json.get("angles", []),
-                "numbers": vision_json.get("numbers", []),
-                "pipeline": "standard",
-                "mathpix_used": False
-            }
-
-        except Exception as e:
-            logger.error(f"❌ Erreur pipeline standard: {e}")
-            texte_fallback = extraire_texte_robuste(fichier_path)
-            return {
-                "texte_complet": texte_fallback,
-                "elements_visuels": [],
-                "formules_latex": [],
-                "graphs": [],
-                "angles": [],
-                "numbers": [],
-                "pipeline": "fallback",
-                "mathpix_used": False
-            }
-
-
-# ========== ENRICHISSEMENT AVEC DEEPSEEK REASONER ==========
-def enrichir_exercice_avec_reasoner(texte_exercice: str, donnees_vision: dict, index_exercice: int = 1) -> str:
-    """
-    Utilise DeepSeek Reasoner pour reconstituer un énoncé scientifique clair.
-    """
-    elements_visuels = donnees_vision.get("elements_visuels", [])
-    formules = donnees_vision.get("formules_latex", [])
-    numbers = donnees_vision.get("numbers", [])
-    angles = donnees_vision.get("angles", [])
-
-    system_prompt = """Tu es un expert en reconstitution d'énoncés scientifiques.
-Ta mission : à partir d'un texte extrait (parfois incomplet ou mal structuré) et de données visuelles,
-reconstituer un énoncé d'exercice scientifique CLAIR, COMPLET et BIEN STRUCTURÉ.
-
-RÈGLES ABSOLUES :
-1. Garde TOUTES les informations techniques et numériques
-2. Reconstruis la logique de l'exercice si nécessaire
-3. Intègre les schémas sous forme de descriptions textuelles précises
-4. Formate les formules mathématiques en LaTeX : \[ ... \] pour les blocs, \( ... \) pour l'inline
-5. Numérote clairement les questions si elles sont détectées
-
-FORMAT DE SORTIE :
-- Titre de l'exercice (si détecté)
-- Énoncé principal reconstitué
-- Questions numérotées (1., 2., etc.)
-- [SCHÉMA X] : Description précise à insérer dans le texte
-- [DONNÉE Y] : Valeur numérique à utiliser
-
-Ne réponds QUE par l'énoncé reconstitué, sans commentaires."""
-
-    user_prompt = f"""RECONSTITUTION DE L'EXERCICE {index_exercice}
-
-=== TEXTE EXTRACT (potentiellement incomplet) ===
-{texte_exercice}
-
-=== DONNÉES VISUELLES DÉTECTÉES ===
-"""
-
-    if elements_visuels:
-        user_prompt += "\nSCHÉMAS :\n"
-        for i, elem in enumerate(elements_visuels, 1):
-            desc = elem if isinstance(elem, str) else elem.get("description", f"Schéma {i}")
-            user_prompt += f"[SCHÉMA {i}]: {desc}\n"
-
-    if formules:
-        user_prompt += "\nFORMULES DÉTECTÉES :\n"
-        for i, formule in enumerate(formules, 1):
-            user_prompt += f"[FORMULE {i}]: {formule}\n"
-
-    if numbers:
-        user_prompt += "\nDONNÉES NUMÉRIQUES :\n"
-        for i, num in enumerate(numbers, 1):
-            val = num.get("valeur", "")
-            unit = num.get("unité", "")
-            user_prompt += f"[DONNÉE {i}]: {val} {unit}\n"
-
-    if angles:
-        user_prompt += "\nANGLES DÉTECTÉS :\n"
-        for i, angle in enumerate(angles, 1):
-            val = angle.get("valeur", "")
-            unit = angle.get("unité", "°")
-            user_prompt += f"[ANGLE {i}]: {val}{unit}\n"
-
-    user_prompt += "\n---\nRECONSTITUE UN ÉNONCÉ CLAIR ET COMPLET :"
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="deepseek-reasoner",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1,
-            max_tokens=4000,
-            stream=False
-        )
-
-        enonce_reconstitue = response.choices[0].message.content
-        logger.info(f"✅ Exercice {index_exercice} enrichi: {len(enonce_reconstitue)} caractères")
-        return enonce_reconstitue
-
     except Exception as e:
-        logger.error(f"❌ Erreur enrichissement Reasoner: {e}")
-        return texte_exercice
+        logger.exception("❌ Erreur deepseek-vl2 pour %s: %s", fichier_path, e)
+        # fallback minimal
+        return {
+            "texte_complet": texte_ocr,
+            "elements_visuels": [],
+            "formules_latex": [],
+            "graphs": [],
+            "angles": [],
+            "numbers": [],
+            "structure_exercices": []
+        }
 
-
-# ========== FILTRAGE DONNÉES VISION ==========
-def filtrer_donnees_vision_par_exercice(donnees_vision_complete: dict, texte_exercice: str) -> dict:
+def extraire_texte_robuste(fichier_path: str) -> str:
     """
-    Filtre les données de vision pour ne garder que celles pertinentes.
+    Extraction simple : OCR direct → Analyse IA
     """
-    if not donnees_vision_complete or not texte_exercice:
-        return {}
+    print("🔄 Extraction simple...")
 
-    mots = set(texte_exercice.lower().split()[:50])
-
-    resultat = {
-        "elements_visuels": [],
-        "formules_latex": [],
-        "graphs": [],
-        "angles": [],
-        "numbers": []
-    }
-
-    for elem in donnees_vision_complete.get("elements_visuels", []):
-        if isinstance(elem, str):
-            desc = elem
+    # Juste utiliser l'analyse scientifique directe
+    try:
+        analyse = analyser_document_scientifique(fichier_path)
+        texte = analyse.get("texte_complet", "")
+        if texte and len(texte) > 50:
+            print("✅ Extraction réussie")
+            return texte
         else:
-            desc = elem.get("description", "")
-
-        desc_lower = desc.lower()
-        pertinence = any(mot in desc_lower for mot in mots if len(mot) > 3)
-
-        if pertinence:
-            resultat["elements_visuels"].append(elem)
-
-    resultat["formules_latex"] = donnees_vision_complete.get("formules_latex", [])
-    resultat["graphs"] = donnees_vision_complete.get("graphs", [])
-    resultat["angles"] = donnees_vision_complete.get("angles", [])
-    resultat["numbers"] = donnees_vision_complete.get("numbers", [])
-
-    return resultat
-
-
-# ========== FONCTIONS EXISTANTES (conservées) ==========
-def is_departement_scientifique(departement):
-    """Ancienne fonction conservée pour compatibilité."""
-    DEPARTEMENTS_SCIENTIFIQUES = [
-        'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
-    ]
-    if departement and departement.nom:
-        dep_name = departement.nom.lower()
-        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
-    return False
-
-
-def get_best_promptia(demande):
-    """Retourne le PromptIA le plus spécifique pour la demande."""
-    filtra = {
-        'pays': demande.pays,
-        'sous_systeme': demande.sous_systeme,
-        'classe': demande.classe,
-        'matiere': demande.matiere,
-        'departement': demande.departement,
-        'type_exercice': demande.type_exercice,
-    }
-    filtra = {k: v for k, v in filtra.items() if v is not None}
-
-    if filtra:
-        qs = PromptIA.objects.filter(**filtra)
-        if qs.exists():
-            return qs.first()
-
-        for champ in ['type_exercice', 'departement', 'classe', 'sous_systeme', 'pays']:
-            if champ in filtra:
-                filtra2 = dict(filtra)
-                filtra2.pop(champ)
-                if filtra2:
-                    qs2 = PromptIA.objects.filter(**filtra2)
-                    if qs2.exists():
-                        return qs2.first()
-
-        if 'matiere' in filtra:
-            qs3 = PromptIA.objects.filter(matiere=demande.matiere)
-            if qs3.exists():
-                return qs3.first()
-
-    return None
+            print("❌ Texte trop court, utilisation fallback OCR")
+            return texte
+    except Exception as e:
+        print(f"❌ Extraction échouée: {e}")
+        return ""
 
 
 def debug_ocr(fichier_path: str):
@@ -556,9 +323,31 @@ def debug_ocr(fichier_path: str):
     except Exception as e:
         print(f"❌ DEBUG OCR échoué: {e}")
     return ""
+# ========== EXTRAIRE LES BLOCS JSON POUR LES GRAPHIQUES ==========
+def extract_json_blocks(text: str):
+    """Extrait les blocs JSON pour les graphiques"""
+    decoder = json.JSONDecoder()
+    idx = 0
+    blocks = []
 
+    while True:
+        # Cherche le début d'un bloc JSON (après ```json ou {)
+        start = text.find('{', idx)
+        if start == -1:
+            break
 
-# ========== PATTERNS DE STRUCTURE ==========
+        try:
+            # Vérifie si c'est un bloc graphique
+            obj, end = decoder.raw_decode(text[start:])
+            if isinstance(obj, dict) and 'graphique' in obj:
+                blocks.append((obj, start, start + end))
+            idx = start + end
+        except ValueError:
+            idx = start + 1
+
+    return blocks
+# ========== PATTERNS DE STRUCTURE:LES TERMES OU TITRES ==========
+
 PATTERNS_BLOCS = [
     r'COMENTARIO DEL TEXTO', r'ESTRUCTURAS DE COMUNICACIÓN', r'PRODUCCIÓN DE TEXTOS',
     r'RECEPCIÓN DE TEXTOS', r'EXPRESIÓN ESCRITA', r'TRADUCCIÓN',
@@ -575,44 +364,134 @@ PATTERNS_BLOCS = [
 ]
 
 PATTERNS_QUESTIONS = [
-    r'^\d{1,2}[.\-]', r'^\d{1,2}[.]\d{1,2}[.-]?', r'^\d{1,2,3}[a-z]{1}[.]',
-    r'^[ivxIVX]{1,4}[.)-]', r'^[a-z]{1}[.)]', r'^[A-Z]{1}[.)]',
-    r'^\d{1,2}[.][a-z]{1}[.]', r'^\d{1,2}[.][A-Z]{1}[.]',
-    r'^\(\d+\)', r'^\([a-z]\)', r'^\([ivxIVX]+\)',
+    r'^\d{1,2}[.\-]',                   # 1. ou 2. ou 1- ou 2-
+    r'^\d{1,2}[.]\d{1,2}[.-]?',          # 1.1. ou 2.1-
+    r'^\d{1,2,3}[a-z]{1}[.]',              # 1a.
+    r'^[ivxIVX]{1,4}[.)-]',              # i. ou i) ou ii-) (romain)
+    r'^[a-z]{1}[.)]',                    # a) b)
+    r'^[A-Z]{1}[.)]',                    # A) B)
+    r'^\d{1,2}[.][a-z]{1}[.]',           # 1.a.
+    r'^\d{1,2}[.][A-Z]{1}[.]',           # 2.A.
+    r'^\(\d+\)',                         # (1)
+    r'^\([a-z]\)',                       # (a)
+    r'^\([ivxIVX]+\)',                   # (i)
 ]
 
+# ========== FONCTION DE STRUCTURATION POUR ORGANISER LES EXERCICES SUR LE PDF==========
 
-# ========== SÉPARATION EXERCICES ==========
+def format_corrige_pdf_structure(texte_corrige_raw):
+    """
+    Nettoie et structure le corrigé pour le PDF/HTML.
+    Gère les titres, exercices, questions et réponses.
+    """
+    # Supprime les marqueurs parasites générés par l'IA
+    texte = re.sub(r"(#+\s*)", "", texte_corrige_raw)
+    texte = re.sub(r"(\*{2,})", "", texte)
+    texte = re.sub(r"\n{3,}", "\n\n", texte)  # réduit les multiples sauts de lignes
+
+    lignes = texte.strip().split('\n')
+    html_output = []
+    in_bloc = False
+
+    for line in lignes:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Bloc/exercice/partie
+        if any(re.search(pat, line, re.IGNORECASE) for pat in PATTERNS_BLOCS):
+            if in_bloc: html_output.append("</div>")
+            html_output.append(f'<div class="bloc-exercice" style="margin-top:60px;"><h1 class="titre-exercice">{line}</h1>')
+            in_bloc = True
+            continue
+
+        # Question/sous-question
+        if any(re.match(pat, line) for pat in PATTERNS_QUESTIONS):
+            html_output.append(f'<h2 class="titre-question">{line}</h2>')
+            continue
+
+        # Code/algorithme (optionnel, à personnaliser)
+        if line.lower().startswith(("algorithme", "début", "fin", "code")):
+            html_output.append(f'<div class="code-block">{line}</div>')
+            continue
+
+        # Réponse standard
+        html_output.append(f'<p class="reponse-question">{line}</p>')
+
+    if in_bloc: html_output.append("</div>")
+    return "".join(html_output)
+
+
+
+
+# ============== FONCTIONS DE DÉCOUPAGE INTELLIGENT ==============
+
+# Version simple maintenue pour compatibilité (mais dépréciée)
+def separer_exercices(texte_epreuve):
+    """
+    Version simple maintenue pour compatibilité.
+    DÉPRÉCIÉE : Utiliser separer_exercices_avec_titres() à la place.
+    """
+    resultats = separer_exercices_avec_titres(texte_epreuve)
+    # Retourne juste les contenus pour compatibilité
+    return [ex['contenu'] for ex in resultats]
+
+
 def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
-    """Version avec hiérarchie parent-enfant pour les titres."""
+    """
+    Version avec hiérarchie parent-enfant pour les titres.
+    Les titres sans contenu deviennent des "parents" et sont fusionnés avec le titre suivant.
+
+    Args:
+        texte_epreuve (str): Texte complet de l'épreuve
+        min_caracteres (int): Nombre minimum de caractères pour valider un exercice (défaut: 60)
+
+    Returns:
+        list: Liste des exercices avec titre et contenu (titres parents fusionnés)
+    """
     if not texte_epreuve:
         return []
 
     lignes = texte_epreuve.splitlines()
 
+    # ========== LISTE ÉTENDUE DE MOTS-CLÉS ==========
     mots_cles_exercices = [
+        # Français
         'EXERCICE', 'EXERICE', 'PROBLÈME', 'PROBLEME',
         'PARTIE.*EVALUATION DES COMPETENCES',
         'SITUATION PROBLÈME',
+
+        # Anglais
         'SECTION', 'PART', 'EXERCISE', 'QUESTION',
         'TASK', 'ACTIVITY',
+
+        # Espagnol
         'EJERCICIO', 'PRUEBA',
+
+        # Allemand
         'AUFGABE', 'TEIL',
-        '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',
-        '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',
+
+        # AJOUTEZ D'AUTRES MOTS-CLÉS ICI :
+        # 'DEVOIR', 'TP', 'ÉPREUVE', 'TEST', 'INTERROGATION', etc.
+        # Formats pour évaluation des compétences - Lettres A-D et chiffres romains
+        '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',  # B. EVALUATION, B-ÉVALUATION, B: ÉVALUATION
+        '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',  # B. EVALUATION, B-EVALUATION, B: EVALUATION
         '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',
-        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',
+        # II. ÉVALUATION, II-ÉVALUATION, II: ÉVALUATION
+        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',# II. EVALUATION, II-EVALUATION, II: EVALUATION
         'SUJET[\\s\\-]*DE[\\s\\-]*TYPE[\\s\\-]*[\\dIVXL]+',
         'SUJET[\\s\\-]*TYPE[\\s\\-]*[\\dIVXL]+',
         'SUJET[\\s\\-]*[\\dIVXL]+',
     ]
 
+    # Convertir en regex pour matching flexible
     patterns = []
     for mot_cle in mots_cles_exercices:
         pattern_str = f'^{mot_cle}[\\s\\-]*[\\dA-ZIVXL]*[\\s\\-:\\.]'
         patterns.append(re.compile(pattern_str, re.IGNORECASE))
 
-    tous_les_blocs = []
+    # ========== ALGORITHME AVEC HIÉRARCHIE ==========
+    tous_les_blocs = []  # Tous les blocs détectés (avec ou sans contenu)
     current_block = []
     current_title = None
     current_start_index = 0
@@ -620,18 +499,22 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
     for i, ligne in enumerate(lignes):
         ligne_stripped = ligne.strip()
 
+        # Vérifier si la ligne commence par un mot-clé d'exercice
         est_titre_potentiel = False
         for pattern in patterns:
             if pattern.match(ligne_stripped.upper()):
                 est_titre_potentiel = True
                 break
 
+        # Vérifier aussi les titres avec notation (10 MARKS, 3 points)
         if not est_titre_potentiel:
             if re.search(r'\(\s*\d+[\s,\.]*(?:point|pt|mark|marque|note)s?\s*\)', ligne_stripped.upper()):
                 est_titre_potentiel = True
 
         if est_titre_potentiel:
+            # Sauvegarder le bloc précédent (même s'il est court)
             if current_block and current_title:
+                # Calculer la longueur du contenu (sans le titre)
                 contenu_sans_titre = current_block[1:] if len(current_block) > 1 else []
                 longueur_contenu = sum(len(l) for l in contenu_sans_titre)
 
@@ -644,6 +527,7 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
                     'has_enough_content': longueur_contenu >= min_caracteres
                 })
 
+            # Nouveau bloc
             current_title = ligne_stripped
             current_block = [ligne]
             current_start_index = i
@@ -651,6 +535,7 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             if current_block:
                 current_block.append(ligne)
 
+    # Dernier bloc
     if current_block and current_title:
         contenu_sans_titre = current_block[1:] if len(current_block) > 1 else []
         longueur_contenu = sum(len(l) for l in contenu_sans_titre)
@@ -664,25 +549,34 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             'has_enough_content': longueur_contenu >= min_caracteres
         })
 
-    groupes = []
+    # ========== CRÉATION DE LA HIÉRARCHIE PARENT-ENFANT ==========
+    groupes = []  # Liste de groupes [parent(s), enfant]
     groupe_courant = []
 
     for bloc in tous_les_blocs:
         if not bloc['has_enough_content']:
+            # C'est un "parent" potentiel (titre sans contenu)
             groupe_courant.append(bloc)
         else:
+            # C'est un "enfant" (titre avec contenu)
             if groupe_courant:
+                # Ajouter les parents + cet enfant comme un groupe
                 groupes.append(groupe_courant + [bloc])
                 groupe_courant = []
             else:
+                # Pas de parents, juste cet enfant seul
                 groupes.append([bloc])
 
+    # Traiter les derniers parents orphelins
     if groupe_courant:
+        # Si on a des parents à la fin sans enfant, les ajouter au dernier groupe
         if groupes:
             groupes[-1].extend(groupe_courant)
         else:
+            # Sinon, en faire un groupe seul
             groupes.append(groupe_courant)
 
+    # ========== FUSION DES GROUPES EN EXERCICES UNIQUES ==========
     resultats = []
 
     for groupe in groupes:
@@ -690,29 +584,39 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             continue
 
         if len(groupe) == 1:
+            # Un seul bloc (enfant seul)
             bloc = groupe[0]
             titre_final = bloc['title']
             lignes_finales = bloc['lines']
         else:
+            # Plusieurs blocs (parents + enfant)
+            # Construire un titre hiérarchique
             titres = [bloc['title'] for bloc in groupe]
             titre_final = " / ".join(titres)
 
+            # Fusionner toutes les lignes
             lignes_finales = []
             for bloc in groupe:
                 lignes_finales.extend(bloc['lines'])
+                # Ajouter une séparation entre les blocs
                 if bloc != groupe[-1]:
-                    lignes_finales.append("")
+                    lignes_finales.append("")  # Ligne vide de séparation
 
+        # Nettoyer et formater pour l'API
         titre_affichage = titre_final
         if len(titre_affichage) > 150:
+            # Garder les premiers et derniers mots
             mots = titre_affichage.split()
             if len(mots) > 8:
                 titre_affichage = ' '.join(mots[:4]) + " ... " + ' '.join(mots[-4:])
             else:
                 titre_affichage = titre_affichage[:147] + "..."
 
+        # Limiter le nombre de lignes
         lignes_limitees = lignes_finales[:300]
         contenu = '\n'.join(lignes_limitees)
+
+        # Calculer la longueur totale du contenu
         longueur_totale = sum(len(l) for l in lignes_limitees[1:] if len(lignes_limitees) > 1)
 
         resultats.append({
@@ -723,7 +627,9 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             'nombre_parents': len(groupe) - 1 if len(groupe) > 1 else 0
         })
 
+    # ========== FALLBACK SI AUCUN GROUPE ==========
     if not resultats:
+        # Prendre le bloc le plus long
         if tous_les_blocs:
             plus_long = max(tous_les_blocs, key=lambda x: x['content_length'])
 
@@ -741,6 +647,7 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
                 'longueur_contenu': plus_long['content_length']
             })
         else:
+            # Fallback ultime
             contenu_lines = lignes[:100]
             contenu = '\n'.join(contenu_lines)
             resultats.append({
@@ -752,133 +659,133 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
 
     return resultats
 
-
-def separer_exercices(texte_epreuve):
-    """Version simple maintenue pour compatibilité."""
-    resultats = separer_exercices_avec_titres(texte_epreuve)
-    return [ex['contenu'] for ex in resultats]
-
-
-# ========== EXTRACTION TEXTE ROBUSTE ==========
-def extraire_texte_robuste(fichier_path: str) -> str:
-    """Extraction simple : OCR direct → Analyse IA."""
-    print("🔄 Extraction simple...")
-
-    try:
-        analyse = analyser_document_scientifique(fichier_path)
-        texte = analyse.get("texte_complet", "")
-        if texte and len(texte) > 50:
-            print("✅ Extraction réussie")
-            return texte
-        else:
-            print("❌ Texte trop court, utilisation fallback OCR")
-            return texte
-    except Exception as e:
-        print(f"❌ Extraction échouée: {e}")
-        return ""
-
-
-# ============== EXTRACTION TEXTE/FICHIER ==============
-
-def extraire_texte_pdf(fichier_path):
-    try:
-        texte = extract_text(fichier_path)
-        print(f"📄 PDF extrait: {len(texte)} caractères")
-        return texte.strip() if texte else ""
-    except Exception as e:
-        print(f"❌ Erreur extraction PDF: {e}")
-        return ""
-
-
-# ========== EXTRACTION TEXTE FICHIER OPTIMISÉE ==========
-def extraire_texte_fichier(fichier_field, departement=None):
+def estimer_tokens(texte):
     """
-    Extraction robuste avec sélection automatique du pipeline.
-    Optimisé pour extraction UNE FOIS par sujet.
+    Estimation simple du nombre de tokens (1 token ≈ 0.75 mot français)
     """
-    if not fichier_field:
-        return ""
-
-    temp_dir = tempfile.gettempdir()
-    local_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
-
-    with open(local_path, "wb") as f:
-        for chunk in fichier_field.chunks():
-            f.write(chunk)
-
-    ext = os.path.splitext(local_path)[1].lower()
-
-    try:
-        analyse = analyser_document_scientifique(local_path, departement)
-        texte = analyse.get("texte_complet", "")
-
-        pipeline = analyse.get("pipeline", "standard")
-        print(f"✅ Extraction ({pipeline}): {len(texte)} caractères")
-
-    except Exception as e:
-        print(f"❌ Erreur extraction: {e}")
-        texte = ""
-
-    try:
-        os.unlink(local_path)
-    except:
-        pass
-
-    return texte.strip()
+    mots = len(texte.split())
+    tokens = int(mots / 0.75)
+    print(f"📊 Estimation tokens: {mots} mots → {tokens} tokens")
+    return tokens
 
 
-# ========== GÉNÉRATION CORRIGÉ PAR EXERCICE ==========
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None, demande=None,
-                                 exercice_index=1):
+def verifier_qualite_corrige(corrige_text, exercice_original):
     """
-    Génère le corrigé pour un seul exercice avec enrichissement scientifique si besoin.
+    Vérifie si le corrigé généré est de bonne qualité
+    Retourne False si le corrigé semble incomplet ou confus
     """
-    print(f"🎯 Génération corrigé exercice {exercice_index}...")
+    if not corrige_text:
+        return False
 
-    # Vérifier si besoin d'enrichissement scientifique
-    besoin_enrichissement = False
-    if demande and demande.departement:
-        besoin_enrichissement = detecter_departement_scientifique_avance(demande.departement)
+    indicateurs_problemes = [
+        "je pense qu'il manque une donnée",
+        "l'énoncé est ambigu",
+        "je vais arrêter ici",
+        "cela pourrait signifier",
+        "interprétation correcte est",
+        "je crois avoir compris",
+        "je vais plutôt utiliser",
+        "approche différente",
+        "arrêter ici cette question"
+    ]
 
-    # Étape d'enrichissement si département scientifique
-    if besoin_enrichissement and donnees_vision:
-        print(f"🔬 Département scientifique → Enrichissement avec Reasoner...")
-        texte_exercice = enrichir_exercice_avec_reasoner(
-            texte_exercice,
-            donnees_vision,
-            index_exercice=exercice_index
-        )
-        print(f"✅ Énoncé enrichi: {len(texte_exercice)} caractères")
+    # Compter les indicateurs de confusion
+    problemes_trouves = sum(1 for indicateur in indicateurs_problemes
+                            if indicateur.lower() in corrige_text.lower())
 
-    # Récupérer prompt métier
+    # Si trop d'indicateurs ou corrigé trop court
+    if problemes_trouves >= 2:
+        print(f"🔄 Qualité insuffisante détectée ({problemes_trouves} indicateurs)")
+        return False
+
+    # Vérifier si le corrigé est significativement plus court que l'énoncé
+    if len(corrige_text) < len(exercice_original) * 0.3:
+        print("🔄 Corrigé trop court par rapport à l'énoncé")
+        return False
+
+    return True
+
+def build_promptia_messages(promptia, contexte):
+    """
+    Retourne deux dicts {role, content} :
+    - system_message = system_prompt + exemple + consignes finales
+    - user_message   = contexte (on y ajoutera l'exercice + vision)
+    """
+    # 1) system
+    parts = []
+    if promptia and promptia.system_prompt:
+        parts.append(promptia.system_prompt)
+    else:
+        parts.append(DEFAULT_SYSTEM_PROMPT)
+
+    if promptia and promptia.exemple_prompt:
+        parts.append("----- EXEMPLE D'UTILISATION -----")
+        parts.append(promptia.exemple_prompt)
+
+    if promptia and promptia.consignes_finales:
+        parts.append("----- CONSIGNES FINALES -----")
+        parts.append(promptia.consignes_finales)
+
+    system_content = "\n\n".join(parts)
+
+    # 2) user (contenu de base = contexte)
+    user_content = contexte.strip()
+
+    return {"role": "system", "content": system_content}, \
+           {"role": "user",   "content": user_content}
+
+def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None,demande=None):
+    """
+    Génère le corrigé pour un seul exercice en exploitant les données vision.
+
+    Args:
+        texte_exercice: Texte de l'exercice
+        contexte: Contexte de l'exercice
+        matiere: Matière concernée
+        donnees_vision: Données d'analyse vision (schémas, formules, etc.)
+
+    Returns:
+        Tuple (corrige_text, graph_list)
+    """
+    print("🎯 Génération corrigé avec analyse vision...")
+    print("\n[DEBUG] ==> generer_corrige_par_exercice avec demande:",
+          getattr(demande, 'id', None), "/", type(demande))
+
+    # 1) Récupère le prompt métier (ou None)
     promptia = get_best_promptia(demande)
 
-    # Construire les messages
+    # 2) Construit les deux messages
+    contexte = f"Contexte : Exercice de {matiere.nom} – {getattr(demande.classe, 'nom', '')}"
     msg_system, msg_user = build_promptia_messages(promptia, contexte)
 
-    # Enrichir le user_message
+    # 3) Enrichir le user_message avec l'exercice et la vision
     user_blocks = [
         msg_user["content"],
         "----- EXERCICE À CORRIGER -----",
         texte_exercice.strip()
     ]
-
     if donnees_vision:
+        # Schémas identifiés
         if donnees_vision.get("elements_visuels"):
             user_blocks.append("----- SCHÉMAS IDENTIFIÉS -----")
             for element in donnees_vision["elements_visuels"]:
-                desc = element.get("description", "") if isinstance(element, dict) else str(element)
+                desc = element.get("description", "")
                 user_blocks.append(f"- {desc}")
 
+        # Formules LaTeX
         if donnees_vision.get("formules_latex"):
             user_blocks.append("----- FORMULES DÉTECTÉES -----")
             for formule in donnees_vision["formules_latex"]:
                 user_blocks.append(f"- {formule}")
 
+        # Données graphiques brutes (JSON)
         if donnees_vision.get("graphs"):
             user_blocks.append("----- DONNÉES GRAPHIQUES (JSON) -----")
-            user_blocks.append(json.dumps(donnees_vision["graphs"], ensure_ascii=False, indent=2))
+            user_blocks.append(
+                json.dumps(donnees_vision["graphs"], ensure_ascii=False, indent=2)
+            )
 
+        # Angles détectés
         if donnees_vision.get("angles"):
             user_blocks.append("----- ANGLES IDENTIFIÉS -----")
             for angle in donnees_vision["angles"]:
@@ -887,6 +794,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 coord = angle.get("coord", "")
                 user_blocks.append(f"- {val}{unit} à coord {coord}")
 
+        # Nombres détectés
         if donnees_vision.get("numbers"):
             user_blocks.append("----- NOMBRES ET UNITÉS -----")
             for num in donnees_vision["numbers"]:
@@ -895,9 +803,10 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 coord = num.get("coord", "")
                 user_blocks.append(f"- {val}{unit} à coord {coord}")
 
+    # On reconstitue le contenu utilisateur final
     msg_user["content"] = "\n\n".join(user_blocks)
 
-    # Appel API
+    # 4) Préparation de l’appel API avec deux messages
     data = {
         "model": "deepseek-chat",
         "messages": [msg_system, msg_user],
@@ -906,17 +815,18 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         "top_p": 0.9,
         "frequency_penalty": 0.1
     }
-
+    # URL et en-têtes pour l'appel DeepSeek
     api_url = "https://api.deepseek.com/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",
+        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",  # Assurez-vous que DEEPSEEK_API_KEY est dans vos env vars
         "Content-Type": "application/json"
     }
-
     try:
         print("📡 Appel API DeepSeek avec analyse vision...")
 
-        for tentative in range(2):
+        # Tentative avec vérification de qualité
+        output = None
+        for tentative in range(2):  # Maximum 2 tentatives
             response = requests.post(api_url, headers=headers, json=data, timeout=90)
             response_data = response.json()
 
@@ -925,29 +835,43 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 print(f"❌ {error_msg}")
                 return error_msg, None
 
+            # Récupération de la réponse
             output = response_data['choices'][0]['message']['content']
             print(f"✅ Réponse IA brute (tentative {tentative + 1}): {len(output)} caractères")
 
+            # Vérification de la qualité
             if verifier_qualite_corrige(output, texte_exercice):
                 print("✅ Qualité du corrigé validée")
                 break
             else:
                 print(f"🔄 Tentative {tentative + 1} - Qualité insuffisante, régénération...")
+                # Ajouter une consigne de rigueur pour la prochaine tentative
                 data["messages"][1][
                     "content"] += "\n\n⚠️ ATTENTION : Sois plus rigoureux ! Exploite mieux les schémas identifiés. Vérifie tous tes calculs."
 
-                if tentative == 0:
+                if tentative == 0:  # Attendre un peu avant la 2ème tentative
                     import time
                     time.sleep(2)
         else:
             print("❌ Échec après 2 tentatives - qualité insuffisante")
             return "Erreur: Qualité du corrigé insuffisante après plusieurs tentatives", None
 
-        # Traitement de la réponse
-        output = flatten_multiline_latex_blocks(output)
-        output_structured = format_corrige_pdf_structure(output)
+        # Traitement de la réponse (identique à avant)
+        output = response_data['choices'][0]['message']['content']
+        print("✅ Réponse IA brute (début):")
+        print(output[:500].replace("\n", "\\n"))
+        print("… (total", len(output), "caractères)\n")
 
-        # Initialisation
+        output = flatten_multiline_latex_blocks(output)
+        print("🛠️ Après flatten_multiline_latex_blocks (début):")
+        print(output[:500].replace("\n", "\\n"))
+        print("… (total", len(output), "caractères)\n")
+
+        output_structured = format_corrige_pdf_structure(output)
+        print("🧩 output_structured après format_corrige_pdf_structure:")
+        print(output_structured[:500].replace("\n", "\\n"), "\n…\n")
+
+        # Initialisation des variables de retour
         corrige_txt = output_structured
         graph_list = []
 
@@ -955,6 +879,14 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         json_blocks = extract_json_blocks(output_structured)
         print(f"🔍 JSON blocks détectés : {len(json_blocks)}")
 
+        # Afficher chaque JSON brut
+        for i, (graph_dict, start, end) in enumerate(json_blocks, start=1):
+            raw_json = output_structured[start:end]
+            print(f"   ▶️ Bloc JSON {i} brut:")
+            print(raw_json.replace("\n", "\\n"))
+            print("   ▶️ Parsed Python dict :", graph_dict)
+
+        # Traitement des graphiques (identique à avant)
         json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
 
         for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
@@ -976,6 +908,10 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 print(f"❌ Erreur génération graphique {idx}: {e}")
                 continue
 
+        print("📝 Corrigé final (début) :")
+        print(corrige_txt[:1000].replace("\n", "\\n"))
+        print("… fin extrait Corrigé\n")
+
         return corrige_txt.strip(), graph_list
 
     except Exception as e:
@@ -984,209 +920,23 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         return error_msg, None
 
 
-# ========== FONCTIONS UTILITAIRES (conservées) ==========
-def build_promptia_messages(promptia, contexte):
-    """Construit les messages système et utilisateur."""
-    DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
-géographie...bref, tu es un professeur de l'enseignement secondaire.
-
-🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
-
-RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
-1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
-2. ✅ Extrait les DONNÉES NUMÉRIQUES (angles, masses, distances, forces, tensions)
-3. ✅ Décris les RELATIONS SPATIALES entre les éléments
-4. ✅ Explique le CONCEPT SCIENTIFIQUE illustré
-
-RÈGLES GÉNÉRALES DE CORRECTION :
-- Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
-- Vérifie systématiquement tes résultats intermédiaires  
-- Ne laisse JAMAIS une question sans réponse complète
-- Donne TOUTES les étapes de calcul détaillées
-- Les réponses doivent être NUMÉRIQUEMENT EXACTES
-... [Le reste de votre prompt] ..."""
-
-    parts = []
-    if promptia and promptia.system_prompt:
-        parts.append(promptia.system_prompt)
-    else:
-        parts.append(DEFAULT_SYSTEM_PROMPT)
-
-    if promptia and promptia.exemple_prompt:
-        parts.append("----- EXEMPLE D'UTILISATION -----")
-        parts.append(promptia.exemple_prompt)
-
-    if promptia and promptia.consignes_finales:
-        parts.append("----- CONSIGNES FINALES -----")
-        parts.append(promptia.consignes_finales)
-
-    system_content = "\n\n".join(parts)
-    user_content = contexte.strip()
-
-    return {"role": "system", "content": system_content}, \
-        {"role": "user", "content": user_content}
-
-
-def verifier_qualite_corrige(corrige_text, exercice_original):
-    """Vérifie si le corrigé généré est de bonne qualité."""
-    if not corrige_text:
-        return False
-
-    indicateurs_problemes = [
-        "je pense qu'il manque une donnée",
-        "l'énoncé est ambigu",
-        "je vais arrêter ici",
-        "cela pourrait signifier",
-        "interprétation correcte est",
-        "je crois avoir compris",
-        "je vais plutôt utiliser",
-        "approche différente",
-        "arrêter ici cette question"
-    ]
-
-    problemes_trouves = sum(1 for indicateur in indicateurs_problemes
-                            if indicateur.lower() in corrige_text.lower())
-
-    if problemes_trouves >= 2:
-        print(f"🔄 Qualité insuffisante détectée ({problemes_trouves} indicateurs)")
-        return False
-
-    if len(corrige_text) < len(exercice_original) * 0.3:
-        print("🔄 Corrigé trop court par rapport à l'énoncé")
-        return False
-
-    return True
-
-
-def estimer_tokens(texte):
-    """Estimation simple du nombre de tokens."""
-    mots = len(texte.split())
-    tokens = int(mots / 0.75)
-    print(f"📊 Estimation tokens: {mots} mots → {tokens} tokens")
-    return tokens
-
-
-def extract_json_blocks(text: str):
-    """Extrait les blocs JSON pour les graphiques."""
-    decoder = json.JSONDecoder()
-    idx = 0
-    blocks = []
-
-    while True:
-        start = text.find('{', idx)
-        if start == -1:
-            break
-
-        try:
-            obj, end = decoder.raw_decode(text[start:])
-            if isinstance(obj, dict) and 'graphique' in obj:
-                blocks.append((obj, start, start + end))
-            idx = start + end
-        except ValueError:
-            idx = start + 1
-
-    return blocks
-
-
-def format_corrige_pdf_structure(texte_corrige_raw):
-    """Nettoie et structure le corrigé pour le PDF/HTML."""
-    texte = re.sub(r"(#+\s*)", "", texte_corrige_raw)
-    texte = re.sub(r"(\*{2,})", "", texte)
-    texte = re.sub(r"\n{3,}", "\n\n", texte)
-
-    lignes = texte.strip().split('\n')
-    html_output = []
-    in_bloc = False
-
-    for line in lignes:
-        line = line.strip()
-        if not line:
-            continue
-
-        if any(re.search(pat, line, re.IGNORECASE) for pat in PATTERNS_BLOCS):
-            if in_bloc: html_output.append("</div>")
-            html_output.append(
-                f'<div class="bloc-exercice" style="margin-top:60px;"><h1 class="titre-exercice">{line}</h1>')
-            in_bloc = True
-            continue
-
-        if any(re.match(pat, line) for pat in PATTERNS_QUESTIONS):
-            html_output.append(f'<h2 class="titre-question">{line}</h2>')
-            continue
-
-        if line.lower().startswith(("algorithme", "début", "fin", "code")):
-            html_output.append(f'<div class="code-block">{line}</div>')
-            continue
-
-        html_output.append(f'<p class="reponse-question">{line}</p>')
-
-    if in_bloc: html_output.append("</div>")
-    return "".join(html_output)
-
-
-def flatten_multiline_latex_blocks(text):
-    """Fusionne les blocs LaTeX multilignes."""
-    if not text:
-        return ""
-
-    text = re.sub(
-        r'\\\[\s*([\s\S]+?)\s*\\\]',
-        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r'\\\(\s*([\s\S]+?)\s*\\\)',
-        lambda m: r'\(' + " ".join(m.group(1).splitlines()).strip() + r'\)',
-        text,
-        flags=re.DOTALL
-    )
-
-    return text
-
-
-def detect_and_format_math_expressions(text):
-    if not text:
-        return ""
-
-    text = re.sub(
-        r'\$\$([\s\S]+?)\$\$',
-        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)',
-        lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r'\\\[\s*([\s\S]+?)\s*\\\]',
-        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(r'\\\\\s*\[', r'\[', text)
-    text = re.sub(r'\\\\\s*\]', r'\]', text)
-    text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
-    return text
 
 
 def extract_and_process_graphs(output: str):
-    """Extrait et traite les graphiques d'un corrigé."""
+    """
+    Extrait et traite les graphiques d'un corrigé en utilisant extract_json_blocks.
+    """
     print("🖼️ Extraction des graphiques (via JSONDecoder)…")
 
     graphs_data = []
     final_text = output
 
+    # 1) Extractions des blocs JSON
     json_blocks = extract_json_blocks(output)
     print(f"🔍 JSON blocks détectés dans extract_and_process_graphs: {len(json_blocks)}")
 
+    # 2) On parcourt et on insère les images
+    #    Pour gérer les remplacements successifs, on conserve un décalage 'offset'
     offset = 0
     for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
         try:
@@ -1200,13 +950,16 @@ def extract_and_process_graphs(output: str):
                     f'style="max-width:100%;margin:10px 0;" />'
                 )
 
+                # Ajuster les indices de remplacement avec l'offset
                 s, e = start + offset, end + offset
                 final_text = final_text[:s] + img_tag + final_text[e:]
+                # Mettre à jour l’offset en fonction de la différence de longueur
                 offset += len(img_tag) - (end - start)
 
                 graphs_data.append(graph_dict)
                 print(f"✅ Graphique {idx} inséré.")
             else:
+                # En cas d’échec de tracé, on remplace par un message
                 s, e = start + offset, end + offset
                 final_text = final_text[:s] + "[Erreur génération graphique]" + final_text[e:]
                 offset += len("[Erreur génération graphique]") - (end - start)
@@ -1220,78 +973,66 @@ def extract_and_process_graphs(output: str):
     return final_text, graphs_data
 
 
-def generate_corrige_html(corrige_text):
-    """Transforme le corrigé brut en HTML stylisé."""
-    if not corrige_text:
+# ============== UTILITAIRES TEXTE / LATEX / TABLEAU ==============
+
+def flatten_multiline_latex_blocks(text):
+    """
+    Fusionne les blocs LaTeX multilignes :
+      \[ ... \] et \( ... \)
+    en une seule ligne pour éviter qu'ils soient éclatés
+    en plusieurs <p> dans le HTML final.
+    """
+    if not text:
         return ""
 
-    lines = corrige_text.strip().split('\n')
-    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
-                                  re.IGNORECASE)
-    html_output = []
-    i = 0
+    # 1) Fusionner les blocs display math \[ ... \]
+    text = re.sub(
+        r'\\\[\s*([\s\S]+?)\s*\\\]',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
+        text,
+        flags=re.DOTALL
+    )
 
-    html_output.append(
-        '<div class="cis-message"><strong>SUJET CORRIGÉ PAR L\'APPLICATION CIS, DISPO SUR PLAYSTORE</strong></div>')
+    # 2) Fusionner les blocs inline math \( ... \)
+    text = re.sub(
+        r'\\\(\s*([\s\S]+?)\s*\\\)',
+        lambda m: r'\(' + " ".join(m.group(1).splitlines()).strip() + r'\)',
+        text,
+        flags=re.DOTALL
+    )
 
-    in_bloc_exercice = False
+    return text
 
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line:
-            i += 1
-            continue
+def detect_and_format_math_expressions(text):
+    if not text:
+        return ""
 
-        if pattern_exercice.match(line):
-            if in_bloc_exercice: html_output.append("</div>")
-            html_output.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
-            in_bloc_exercice = True
-            i += 1
-            continue
-
-        if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
-            html_output.append(f'<h2 class="titre-question">{line}</h2>')
-            i += 1
-            continue
-
-        if re.match(r'^\d+\.', line):
-            html_output.append(f'<h3 class="titre-question">{line}</h3>')
-            i += 1
-            continue
-
-        if re.match(r'^[a-z]\)', line):
-            html_output.append(f'<p><strong>{line}</strong></p>')
-            i += 1
-            continue
-
-        if line.startswith('•') or line.startswith('-'):
-            html_output.append(f'<p>{line}</p>')
-            i += 1
-            continue
-
-        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
-            table_lines = []
-            j = i
-            while j < len(lines) and lines[j].startswith('|'):
-                table_lines.append(lines[j])
-                j += 1
-            html_table = format_table_markdown('\n'.join(table_lines))
-            html_output.append(html_table)
-            i = j
-            continue
-
-        if '\\(' in line or '\\[' in line:
-            html_output.append(f'<p class="reponse-question mathjax">{line}</p>')
-            i += 1
-            continue
-
-        html_output.append(f'<p class="reponse-question">{line}</p>')
-        i += 1
-
-    if in_bloc_exercice:
-        html_output.append("</div>")
-
-    return mark_safe("".join(html_output))
+    # Block formulas $$...$$ → \[...\] (multilignes fusionnées sur une ligne)
+    text = re.sub(
+        r'\$\$([\s\S]+?)\$\$',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
+        text,
+        flags=re.DOTALL
+    )
+    # Inline formulas $...$ → \(...\)
+    text = re.sub(
+        r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)',
+        lambda m: r'\(' + m.group(1).replace('\n', ' ').strip() + r'\)',
+        text,
+        flags=re.DOTALL
+    )
+    # Blocs déjà en \[...\] : fusionne aussi les lignes ! (très important)
+    text = re.sub(
+        r'\\\[\s*([\s\S]+?)\s*\\\]',
+        lambda m: r'\[' + " ".join(m.group(1).splitlines()).strip() + r'\]',
+        text,
+        flags=re.DOTALL
+    )
+    # Corrige les doubles anti-slashs parasites
+    text = re.sub(r'\\\\\s*\[', r'\[', text)
+    text = re.sub(r'\\\\\s*\]', r'\]', text)
+    text = text.replace('\\backslash', '\\').replace('\xa0', ' ')
+    return text
 
 
 def format_table_markdown(table_text):
@@ -1324,7 +1065,211 @@ def format_table_markdown(table_text):
     return ''.join(html_table)
 
 
-# ========== FONCTIONS DE GRAPHIQUES (conservées) ==========
+def generate_corrige_html(corrige_text):
+    """Transforme le corrigé brut en HTML stylisé, aéré, avec blocs d'exercices, titres mis en valeur, formatage MathJax et tableaux conservés, et branding CIS au début."""
+    if not corrige_text:
+        return ""
+
+    # Formatage des expressions mathématiques (Latex) et tableaux
+    lines = corrige_text.strip().split('\n')
+
+    # Pattern pour détecter les débuts d'exercice/partie
+    pattern_exercice = re.compile(r'^(EXERCICE\s*\d+|PARTIE\s*[IVXLCDM]+|Exercice\s*\d+|Partie\s*[IVXLCDM]+)',
+                                  re.IGNORECASE)
+    html_output = []
+    i = 0
+
+    # Branding CIS en haut
+    html_output.append(
+        '<div class="cis-message"><strong>SUJET CORRIGÉ PAR L\'APPLICATION CIS, DISPO SUR PLAYSTORE</strong></div>')
+
+    # Pour gérer la séparation en blocs
+    in_bloc_exercice = False
+
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        # Début d'un nouvel exercice/partie
+        if pattern_exercice.match(line):
+            # Ferme le bloc précédent s'il y en avait un
+            if in_bloc_exercice:
+                html_output.append('</div>')
+            # Ouvre un nouveau bloc, titre en gros
+            html_output.append(f'<div class="bloc-exercice"><h1 class="titre-exercice">{line}</h1>')
+            in_bloc_exercice = True
+            i += 1
+            continue
+
+        # Sous-titre question principale (Question 1, 2, etc.)
+        if re.match(r'^Question\s*\d+', line, re.IGNORECASE):
+            html_output.append(f'<h2 class="titre-question">{line}</h2>')
+            i += 1
+            continue
+
+        # Sous-titre secondaire (1., 2., etc.)
+        if re.match(r'^\d+\.', line):
+            html_output.append(f'<h3 class="titre-question">{line}</h3>')
+            i += 1
+            continue
+
+        # Sous-question (a), b), etc.)
+        if re.match(r'^[a-z]\)', line):
+            html_output.append(f'<p><strong>{line}</strong></p>')
+            i += 1
+            continue
+
+        # Listes
+        if line.startswith('•') or line.startswith('-'):
+            html_output.append(f'<p>{line}</p>')
+            i += 1
+            continue
+
+        # Tableaux markdown
+        if line.startswith('|') and i + 1 < len(lines) and lines[i + 1].startswith('|'):
+            table_lines = []
+            j = i
+            while j < len(lines) and lines[j].startswith('|'):
+                table_lines.append(lines[j])
+                j += 1
+            html_table = format_table_markdown('\n'.join(table_lines))
+            html_output.append(html_table)
+            i = j
+            continue
+
+        # Formules LaTeX
+        if '\\(' in line or '\\[' in line:
+            html_output.append(f'<p class="reponse-question mathjax">{line}</p>')
+            i += 1
+            continue
+
+        # Cas général : paragraphe de réponse ou explication
+        html_output.append(f'<p class="reponse-question">{line}</p>')
+        i += 1
+
+    # Ferme le dernier bloc exercice si ouvert
+    if in_bloc_exercice:
+        html_output.append('</div>')
+
+    return mark_safe("".join(html_output))
+
+
+# ============== EXTRACTION TEXTE/FICHIER ==============
+
+def extraire_texte_pdf(fichier_path):
+    try:
+        texte = extract_text(fichier_path)
+        print(f"📄 PDF extrait: {len(texte)} caractères")
+        return texte.strip() if texte else ""
+    except Exception as e:
+        print(f"❌ Erreur extraction PDF: {e}")
+        return ""
+
+
+# ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
+def extraire_texte_fichier(fichier_field):
+    """
+    Extraction robuste via analyse scientifique avec fallback OCR pour images.
+    """
+    if not fichier_field:
+        return ""
+
+    # 1) Sauvegarde locale
+    temp_dir = tempfile.gettempdir()
+    local_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+    with open(local_path, "wb") as f:
+        for chunk in fichier_field.chunks():
+            f.write(chunk)
+
+    # 2) Détecter le type de fichier
+    ext = os.path.splitext(local_path)[1].lower()
+
+    # 3) Pour les images, essayer d'abord un OCR simple et rapide
+    texte = ""
+    if ext in ['.png', '.jpg', '.jpeg']:
+        print(f"🖼️  Fichier image détecté: {ext}, tentative OCR Tesseract...")
+        try:
+            import pytesseract
+            from PIL import Image
+            image = Image.open(local_path)
+
+            # Préprocess pour améliorer l'OCR
+            image = image.convert('L')  # Niveaux de gris
+            texte = pytesseract.image_to_string(image, lang='fra+eng')
+            print(f"✅ OCR Tesseract réussi: {len(texte)} caractères")
+
+            if len(texte) > 100:  # Si l'OCR a bien fonctionné
+                # Nettoyer
+                try:
+                    os.unlink(local_path)
+                except:
+                    pass
+                return texte.strip()
+            else:
+                print("⚠️  OCR Tesseract a retourné peu de texte, essai DeepSeek...")
+        except Exception as e:
+            print(f"⚠️  OCR Tesseract échoué: {e}, passage à DeepSeek...")
+
+    # 4) Appel à l'analyse scientifique (DeepSeek) - pour PDF et images avec OCR faible
+    try:
+        analyse = analyser_document_scientifique(local_path)
+        texte = analyse.get("texte_complet", "")
+        print(f"🔬 Analyse scientifique: {len(texte)} caractères")
+    except Exception as e:
+        print(f"❌ Analyse scientifique échouée: {e}")
+        texte = ""
+
+    # 5) Fallback final pour images si tout échoue
+    if not texte or len(texte) < 50:
+        if ext in ['.png', '.jpg', '.jpeg']:
+            print("🔄 Fallback final: OCR brut sans prétraitement...")
+            try:
+                import pytesseract
+                from PIL import Image
+                image = Image.open(local_path)
+                texte = pytesseract.image_to_string(image, lang='fra+eng')
+                print(f"✅ Fallback OCR: {len(texte)} caractères")
+            except Exception as e:
+                print(f"❌ Tous les OCR ont échoué: {e}")
+                texte = "Impossible d'extraire le texte de cette image."
+
+    # 6) Nettoyage
+    try:
+        os.unlink(local_path)
+    except:
+        pass
+
+    return texte.strip()
+
+# ============== DESSIN DE GRAPHIQUES ==============
+def style_axes(ax, graphique_dict):
+    """
+    Colorie les axes en rouge et synchronise les graduations y sur x
+    (sauf si x_ticks ou y_ticks sont fournis dans graphique_dict).
+    """
+    # colorer spines et ticks
+    ax.spines['bottom'].set_color('red')
+    ax.spines['left'].set_color('red')
+    ax.tick_params(axis='x', colors='red')
+    ax.tick_params(axis='y', colors='red')
+
+    # graduations sur x
+    if graphique_dict.get("x_ticks") is not None:
+        ax.set_xticks(graphique_dict["x_ticks"])
+    # graduations sur y
+    if graphique_dict.get("y_ticks") is not None:
+        ax.set_yticks(graphique_dict["y_ticks"])
+    else:
+        # par défaut, on réutilise les mêmes que sur x
+        ax.set_yticks(ax.get_xticks())
+
+    # noms d’axes
+    ax.set_xlabel(graphique_dict.get("x_label", "x"), color='red')
+    ax.set_ylabel(graphique_dict.get("y_label", "y"), color='red')
+
+
 def tracer_graphique(graphique_dict, output_name):
     if 'graphique' in graphique_dict:
         graphique_dict = graphique_dict['graphique']
@@ -1341,8 +1286,7 @@ def tracer_graphique(graphique_dict, output_name):
             try:
                 return float(expr)
             except Exception as e2:
-                print("Erreur safe_float cast direct:", expr, e2);
-                return None
+                print("Erreur safe_float cast direct:", expr, e2); return None
 
     def corriger_expression(expr):
         """Corrige les expressions mathématiques courantes"""
@@ -1543,443 +1487,381 @@ def tracer_graphique(graphique_dict, output_name):
         return None
 
 
-# ========== TÂCHES ASYNCHRONES OPTIMISÉES ==========
-@shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
-def generer_corrige_exercice_async(soumission_id):
+# ===========================
+# PROMPT SYSTÈME AMÉLIORÉ AVEC VISION SCIENTIFIQUE
+DEFAULT_SYSTEM_PROMPT = r"""Tu es un professeur expert en Mathématiques, physique, chimie, biologie,francais,histoire
+géographie...bref, tu es un professeur de l'enseignement secondaire.
+
+🔬 **CAPACITÉ VISION ACTIVÉE** - Tu peux maintenant analyser les schémas scientifiques !
+
+RÈGLES ABSOLUES POUR L'ANALYSE DES SCHÉMAS :
+1. ✅ Identifie le TYPE de schéma (plan incliné, circuit électrique, molécule, graphique)
+2. ✅ Extrait les DONNÉES NUMÉRIQUES (angles, masses, distances, forces, tensions)
+3. ✅ Décris les RELATIONS SPATIALES entre les éléments
+4. ✅ Explique le CONCEPT SCIENTIFIQUE illustré
+
+EXEMPLES D'ANALYSE DE SCHÉMAS SCIENTIFIQUES :
+
+--- PLAN INCLINÉ ---
+"Schéma identifié: plan incliné à 30° avec bloc de 2kg
+- Forces: poids (vertical ↓), réaction normale (⟂ plan), frottement (∥ plan)
+- Données: angle=30°, masse=2kg, g=10m/s²
+- Équations: P = mg = 20N, P∥ = P•sin(30°)=10N, P⟂ = P•cos(30°)=17.32N"
+
+--- CIRCUIT ÉLECTRIQUE ---  
+"Circuit série: R1=10Ω, R2=20Ω, source E=12V
+- Lois: U = RI, loi des mailles ΣU=0
+- Calcul: Req = R1 + R2 = 30Ω, I = E/Req = 0.4A"
+
+--- MOLÉCULE CHIMIQUE ---
+"Formule développée: CH3-CH2-OH (éthanol)
+- Groupes: OH (fonction alcool), CH3 (méthyle), CH2 (méthylène)
+- Liaisons: C-C simples, C-O simple, O-H simple"
+
+RÈGLES GÉNÉRALES DE CORRECTION :
+- Sois EXTRÊMEMENT RIGOUREUX dans tous les calculs
+- Vérifie systématiquement tes résultats intermédiaires  
+- Ne laisse JAMAIS une question sans réponse complète
+- Donne TOUTES les étapes de calcul détaillées
+- Les réponses doivent être NUMÉRIQUEMENT EXACTES
+
+FORMAT DE RÉPONSE :
+- Réponses complètes avec tous les calculs
+- Références aux schémas quand ils existent ("D'après le schéma...")
+- Justifications détaillées pour chaque étape
+- Ne jamais dire "je pense" ou "c'est ambigu"
+
+POUR LES GRAPHIQUES :
+- Dès qu'un exercice demande un graphique, utilise la balise ---corrigé--- suivie du JSON
+- Types supportés: "fonction", "histogramme", "diagramme à bandes", "nuage de points", etc.
+
+"Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python."
+
+EXEMPLES :
+
+--- EX 1 : Fonction ---
+Corrigé détaillé...
+---corrigé---
+{"graphique": {"type": "fonction", "expression": "x*2 - 2*x + 1", "x_min": -1, "x_max": 3, "titre": "Courbe parabole"}}
+
+--- EX 2 : Cercle trigo ---
+...
+---corrigé---
+{"graphique": {"type":"cercle trigo", "angles":["-pi/4","pi/4"], "labels":["S1","S2"], "titre":"Solutions trigonométriques"}}
+
+--- EX 3 : Histogramme ---
+...
+---corrigé---
+{"graphique": {"type": "histogramme", "intervalles": ["0-5","5-10","10-15"], "effectifs":[3,5,7], "titre":"Histogramme des effectifs"}}
+
+--- EX 4 : Diagramme à bandes ---
+---corrigé---
+{"graphique": {"type":"diagramme à bandes","categories":["A","B","C"],"effectifs":[10,7,12],"titre":"Comparaison"}}
+
+--- EX 5 : Nuage de points ---
+---corrigé---
+{"graphique": {"type":"nuage de points","x":[1,2,3,4],"y":[2,5,7,3],"titre":"Nuage"}}
+
+--- EX 6 : Effectifs cumulés ---
+---corrigé---
+{"graphique": {"type":"effectifs cumulés","x":[5,10,15,20],"y":[3,9,16,20],"titre":"Effectifs cumulés"}}
+
+--- EX 7 : Diagramme circulaire ---
+---corrigé---
+{"graphique":{"type":"camembert","categories":["L1","L2","L3"],"effectifs":[4,6,5],"titre":"Répartition"}}
+
+--- EX 8 : Polygone ---
+---corrigé---
+{"graphique": {"type": "polygone", "points": [[0,0],[5,3],[10,9]], "titre": "Polygone des ECC", "x_label": "Borne", "y_label": "ECC"}}
+
+Rappels :
+- Si plusieurs graphiques, recommence cette structure à chaque question concernée.
+- Pas de texte entre ---corrigé--- et le JSON.
+- Le JSON est obligatoire dès qu'un tracé est demandé.
+
+"Rends TOUJOURS le JSON avec des guillemets doubles, jamais de dict Python. Pour les listes/types, toujours notation JSON [ ... ] et jamais { ... } sauf pour des objets. N’insère JAMAIS de virgule en trop."
+"""
+
+
+
+
+# ============== FONCTIONS PRINCIPALES AVEC DÉCOUPAGE ==============
+def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere, donnees_vision=None,demande=None):
     """
-    Tâche asynchrone OPTIMISÉE pour corriger UN exercice isolé.
-    Utilise les données déjà extraites SANS re-extraire.
+    Traitement direct pour les épreuves courtes avec données vision.
     """
-    print(f"🚀 === DÉBUT TÂCHE ASYNCHRONE === soumission_id={soumission_id}")
+    print("🎯 Traitement DIRECT avec analyse vision")
+    print("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
+          "/", type(demande))
 
-    try:
-        soum = SoumissionIA.objects.get(id=soumission_id)
-        dem = soum.demande
+    # ✅ PASSER les données vision à la fonction de génération
+    return generer_corrige_par_exercice(texte_enonce, contexte, matiere, donnees_vision,demande=demande)
 
-        print(f"✅ Soumission trouvée: ID={soum.id}")
-        print(f"📋 Demande: ID={dem.id}, Fichier={'OUI' if dem.fichier else 'NON'}")
-        print(f"🔢 Exercice index: {soum.exercice_index}")
-        print(f"🎓 Département: {dem.departement.nom if dem.departement else 'AUCUN'}")
-        print(f"📁 Données stockées: {'OUI' if dem.exercices_data else 'NON'}")
 
-        # ========== ÉTAPE 1 : RÉCUPÉRATION DONNÉES DÉJÀ STOCKÉES ==========
-        print(f"🔍 Recherche données déjà extraites pour demande {dem.id}...")
+def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=None, demande=None):
+    """
+    Traitement par découpage pour les épreuves longues avec données vision,
+    utilisant la nouvelle fonction unifiée.
+    """
+    # 1) Sépare le texte en exercices AVEC la nouvelle fonction
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
 
-        donnees_extraction = None
-        fragment = None
-        ex_data = None
-        exercices_stockes = []
+    # 2) Traitement séquentiel
+    tous_corriges = []
+    tous_graphiques = []
 
-        if dem.exercices_data:
-            try:
-                donnees_extraction = json.loads(dem.exercices_data)
-                print(f"✅ Données extraction PRÉSENTES dans la demande")
-
-                # Déterminer le format des données
-                if isinstance(donnees_extraction, dict) and "exercices" in donnees_extraction:
-                    # ⭐ NOUVEAU FORMAT STRUCTURÉ (depuis SplitExercisesAPIView)
-                    exercices_stockes = donnees_extraction["exercices"]
-                    metadata = donnees_extraction.get("metadata", {})
-
-                    print(f"   📋 Format: nouveau structuré")
-                    print(f"   📊 {len(exercices_stockes)} exercice(s) stocké(s)")
-                    print(f"   🎯 Pipeline: {metadata.get('pipeline', 'inconnu')}")
-                    print(f"   🏷️ Département: {metadata.get('departement', 'inconnu')}")
-
-                    # Vérifier si l'index demandé existe
-                    idx = soum.exercice_index or 0
-                    if idx < len(exercices_stockes):
-                        ex_stocke = exercices_stockes[idx]
-                        fragment = ex_stocke.get("contenu", "")
-                        ex_data = {
-                            'titre': ex_stocke.get('titre', f"Exercice {idx + 1}"),
-                            'titre_complet': ex_stocke.get('titre_complet', f"Exercice {idx + 1}"),
-                            'contenu': fragment
-                        }
-
-                        print(f"   🎯 Exercice {idx + 1} récupéré depuis stockage")
-                        print(f"   📏 Longueur: {len(fragment)} caractères")
-                        print(f"   🔤 Titre: {ex_data['titre'][:50]}...")
-
-                        # ⭐⭐ CRITIQUE : PASSER DIRECTEMENT À LA CORRECTION ! ⭐⭐
-                        # On saute TOUTE l'extraction et le découpage
-
-                        print("⏭️ PASSAGE DIRECT À LA CORRECTION (données déjà disponibles)")
-
-                        # Appeler une fonction qui fait juste la correction
-                        return traiter_exercice_directement(
-                            soum, dem, fragment, ex_data, idx,
-                            optimisation_utilisee="donnees_stockees"
-                        )
-
-                    else:
-                        print(f"⚠️ Index {idx} hors limites des {len(exercices_stockes)} exercices stockés")
-                        extraction_faite = False
-
-                elif isinstance(donnees_extraction, list):
-                    # ⭐ ANCIEN FORMAT (liste directe)
-                    exercices_stockes = donnees_extraction
-                    idx = soum.exercice_index or 0
-
-                    print(f"   📋 Format: ancien liste")
-                    print(f"   📊 {len(exercices_stockes)} exercice(s) stocké(s)")
-
-                    if idx < len(exercices_stockes):
-                        ex_stocke = exercices_stockes[idx]
-                        fragment = ex_stocke.get("contenu", "")
-                        ex_data = {
-                            'titre': ex_stocke.get('titre', f"Exercice {idx + 1}"),
-                            'titre_complet': ex_stocke.get('titre_complet', f"Exercice {idx + 1}"),
-                            'contenu': fragment
-                        }
-
-                        print(f"   🎯 Exercice {idx + 1} récupéré depuis stockage")
-                        print(f"   📏 Longueur: {len(fragment)} caractères")
-
-                        # ⭐⭐ PASSAGE DIRECT À LA CORRECTION ! ⭐⭐
-                        print("⏭️ PASSAGE DIRECT À LA CORRECTION (données déjà disponibles - ancien format)")
-
-                        return traiter_exercice_directement(
-                            soum, dem, fragment, ex_data, idx,
-                            optimisation_utilisee="donnees_stockees_ancien_format"
-                        )
-
-                    else:
-                        extraction_faite = False
-                else:
-                    print("⚠️ Format de données inconnu")
-                    extraction_faite = False
-
-            except json.JSONDecodeError as e:
-                print(f"⚠️ JSON corrompu dans exercices_data: {e}")
-                extraction_faite = False
-            except Exception as e:
-                print(f"⚠️ Erreur lecture données stockées: {e}")
-                extraction_faite = False
-        else:
-            print("📦 Aucune donnée extraction stockée")
-            extraction_faite = False
-
-        # ========== ÉTAPE 2 : EXTRACTION SI NÉCESSAIRE ==========
-        # Si on arrive ici, c'est qu'on n'avait pas de données stockées ou qu'elles étaient invalides
-        print("🔄 Extraction nécessaire (données non disponibles ou invalides)...")
-        soum.statut = 'extraction'
-        soum.progression = 10
-        soum.save()
-
-        if dem.fichier:
-            temp_dir = tempfile.gettempdir()
-            local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
-            with open(local_path, "wb") as f:
-                for chunk in dem.fichier.chunks():
-                    f.write(chunk)
-
-            # Extraction complète
-            analyse_complete = analyser_document_scientifique(local_path, departement=dem.departement)
-            texte_complet = analyse_complete.get("texte_complet", "")
-
-            # Découpage
-            exercices_detaillees = separer_exercices_avec_titres(texte_complet)
-            idx = soum.exercice_index or 0
-
-            if idx >= len(exercices_detaillees):
-                print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
-                idx = len(exercices_detaillees) - 1
-
-            ex_data = exercices_detaillees[idx]
-            fragment = ex_data['contenu']
-
-            try:
-                os.unlink(local_path)
-            except:
-                pass
-
-            decoupage_fait = True
-            print(f"✅ Extraction + découpage terminés")
-
-        else:
-            # Fallback: texte direct
-            texte_complet = dem.enonce_texte or ""
-            fragment = texte_complet
-            ex_data = {
-                'titre': f"Exercice {soum.exercice_index + 1}",
-                'titre_complet': f"Exercice {soum.exercice_index + 1}",
-                'contenu': fragment
-            }
-            decoupage_fait = True
-
-        # Mise à jour statut découpage
-        soum.statut = 'decoupage'
-        soum.progression = 30
-        soum.save()
-
-        # ========== ÉTAPE 3 : VÉRIFICATION FINALE ==========
-        if not ex_data or not fragment:
-            print("❌ ERREUR: Aucun exercice ou fragment disponible")
-            soum.statut = 'erreur'
-            soum.save()
-            return False
-
-        print(f"✅ Exercice {soum.exercice_index + 1} prêt: {ex_data.get('titre', 'Sans titre')}")
-        print(f"   📏 Longueur contenu: {len(fragment)} caractères")
-
-        # ========== ÉTAPE 4 : PRÉPARATION DONNÉES VISION ==========
-        donnees_vision_exercice = None
-
-        # Vérifier si département scientifique (avec gestion d'erreur)
-        try:
-            est_scientifique = False
-            if dem.departement:
-                est_scientifique = detecter_departement_scientifique_avance(dem.departement)
-                print(f"🔬 Département scientifique: {est_scientifique}")
-
-            if est_scientifique:
-                print(f"⚠️ Département scientifique détecté mais données vision non stockées")
-                print(f"   → Enrichissement Reasoner NON disponible")
-
-        except Exception as e:
-            print(f"⚠️ Erreur détection scientifique: {e}")
-
-        # ========== ÉTAPE 5 : GÉNÉRATION DU CORRIGÉ ==========
-        soum.statut = 'analyse_ia'
-        soum.progression = 50
-        soum.save()
-
-        mat = dem.matiere if dem.matiere else Matiere.objects.first()
-        contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {soum.exercice_index + 1}')}"
-
-        print(f"🧠 Génération du corrigé avec IA...")
-        corrige_txt, _ = generer_corrige_par_exercice(
-            texte_exercice=fragment,
+    for idx, ex_data in enumerate(exercices_data, start=1):
+        # Utiliser le contenu nettoyé de l'exercice
+        corrige_html, graphs = generer_corrige_par_exercice(
+            texte_exercice=ex_data['contenu'],
             contexte=contexte,
-            matiere=mat,
-            donnees_vision=donnees_vision_exercice,
-            demande=dem,
-            exercice_index=soum.exercice_index + 1
+            matiere=matiere,
+            donnees_vision=donnees_vision,
+            demande=demande
         )
 
-        # ========== ÉTAPE 6 : GÉNÉRATION PDF ==========
-        soum.statut = 'formatage_pdf'
-        soum.progression = 80
-        soum.save()
+        # Préfixe avec le titre réel pour une meilleure organisation
+        titre_affichage = ex_data['titre']
+        if len(titre_affichage) > 50:
+            titre_affichage = f"Exercice {idx}"
 
-        from .pdf_utils import generer_pdf_corrige
-        pdf_url = generer_pdf_corrige(
-            {
-                "titre_corrige": contexte,
-                "corrige_html": corrige_txt,
-                "soumission_id": soum.id,
-                "titre_exercice": ex_data.get('titre_complet', f"Exercice {soum.exercice_index + 1}")
-            },
-            soum.id
-        )
+        tous_corriges.append(f"\n\n## 📝 {titre_affichage}\n\n{corrige_html}")
 
-        # ========== ÉTAPE 7 : DÉBIT CRÉDIT ==========
-        if not debiter_credit_abonnement(dem.user):
-            print("❌ Crédits insuffisants")
-            soum.statut = 'erreur_credit'
-            soum.save()
-            return False
+        # Collecte des graphiques si existants
+        if graphs:
+            tous_graphiques.extend(graphs)
 
-        # ========== ÉTAPE 8 : CRÉATION CORRIGEPARTIEL ==========
-        pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
-        pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
+    # 3) Retour
+    return "".join(tous_corriges), tous_graphiques
 
-        titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {soum.exercice_index + 1}"))
-        if len(titre_reel) > 200:
-            titre_reel = titre_reel[:197] + "..."
 
-        try:
-            with open(pdf_absolute_path, 'rb') as f:
-                corrige = CorrigePartiel.objects.create(
-                    soumission=soum,
-                    titre_exercice=titre_reel,
-                )
-                corrige.fichier_pdf.save(
-                    f"corrige_{dem.id}_ex{soum.exercice_index + 1}_{soum.id}.pdf",
-                    File(f)
-                )
-                corrige.save()
-            print(f"💾 CorrigePartiel créé: {titre_reel[:50]}...")
-        except Exception as e:
-            print(f"⚠️ Erreur création CorrigePartiel: {e}")
+def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
+                                    demande=None, donnees_vision=None):
+    """
+    Nouvelle version avec système unifié d'extraction.
+    """
+    print("\n[DEBUG] --> generer_corrige_ia_et_graphique called avec demande:",
+          getattr(demande, 'id', None), "/",
+          type(demande))
 
-        # ========== ÉTAPE 9 : FINALISATION ==========
-        soum.statut = 'termine'
-        soum.progression = 100
-        soum.resultat_json = {
-            "exercice_index": soum.exercice_index,
-            "exercice_titre": titre_reel,
-            "corrige_text": corrige_txt,
-            "pdf_url": pdf_url,
-            "exercice_data": ex_data,
-            "optimisation_utilisee": "extraction_fraiche"
+    if lecons_contenus is None:
+        lecons_contenus = []
+    if exemples_corriges is None:
+        exemples_corriges = []
+
+    print("\n" + "=" * 60)
+    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION (SYSTÈME UNIFIÉ)")
+    print("=" * 60)
+    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+
+    # Données vision
+    if donnees_vision:
+        print(f"🔬 Données vision disponibles:")
+        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
+        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
+
+    # 1. ESTIMER LA COMPLEXITÉ
+    tokens_estimes = estimer_tokens(texte_enonce)
+
+    # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
+    if tokens_estimes < 1500:  # Épreuve courte
+        print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
+        return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
+                                      donnees_vision, demande=demande)
+    else:  # Épreuve longue
+        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
+        # Utiliser la nouvelle version unifiée
+        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande=demande)
+
+#les fonctions utilitaires , utilisables ou non, donc optionnelles
+def extraire_exercice_par_index(texte_epreuve, index=0):
+    """
+    Fonction utilitaire pour extraire un exercice spécifique par son index.
+    Utile pour les API et le frontend.
+    """
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+
+    if index < 0 or index >= len(exercices_data):
+        return None
+
+    ex_data = exercices_data[index]
+
+    # Ajouter des métadonnées utiles
+    ex_data.update({
+        'index': index,
+        'total_exercices': len(exercices_data),
+        'extraction_date': datetime.now().isoformat()  # ← datetime IMPORTÉ
+    })
+
+    return ex_data
+
+
+def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
+    """
+    Retourne la liste de tous les exercices détectés.
+    Optionnellement avec un aperçu du contenu.
+    """
+    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+
+    result = []
+    for i, ex in enumerate(exercices_data):
+        item = {
+            'index': i,
+            'titre': ex['titre'],
+            'titre_complet': ex['titre_complet'],
+            'longueur_contenu': len(ex['contenu'])
         }
-        soum.save()
 
-        print(f"🎉 Exercice {soum.exercice_index + 1} traité avec succès!")
-        print(f"   📊 Optimisation: NON (extraction nécessaire)")
-        print(f"   📄 PDF généré: {pdf_url}")
-        return True
+        if avec_preview:
+            # Ajouter un aperçu des premières lignes
+            lignes = ex['contenu'].split('\n')[:3]
+            preview_text = ' '.join([l[:100] for l in lignes if l.strip()])
+            item['preview'] = (preview_text[:200] + '...') if len(preview_text) > 200 else preview_text
 
-    except Exception as e:
-        print(f"❌ ERREUR CRITIQUE dans generer_corrige_exercice_async: {e}")
-        import traceback
-        traceback.print_exc()
-        try:
-            soum = SoumissionIA.objects.get(id=soumission_id)
-            soum.statut = 'erreur'
-            soum.save()
-        except:
-            pass
-        return False
+        result.append(item)
+
+    return result
 
 
-def traiter_exercice_directement(soum, dem, fragment, ex_data, idx, optimisation_utilisee="donnees_stockees"):
-    """
-    Traite un exercice directement avec les données déjà disponibles.
-    Saut complètement l'extraction et le découpage.
-    """
-    print(f"⚡ TRAITEMENT DIRECT exercice {idx + 1}")
-
-    # ========== ÉTAPE 1 : PRÉPARATION DONNÉES VISION ==========
-    donnees_vision_exercice = None
-
-    # Vérifier si département scientifique
-    try:
-        est_scientifique = False
-        if dem.departement:
-            est_scientifique = detecter_departement_scientifique_avance(dem.departement)
-            print(f"🔬 Département scientifique: {est_scientifique}")
-    except Exception as e:
-        print(f"⚠️ Erreur détection scientifique: {e}")
-
-    # ========== ÉTAPE 2 : GÉNÉRATION DU CORRIGÉ ==========
-    soum.statut = 'analyse_ia'
-    soum.progression = 50
-    soum.save()
-
-    mat = dem.matiere if dem.matiere else Matiere.objects.first()
-    contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
-
-    print(f"🧠 Génération du corrigé avec IA...")
-    corrige_txt, _ = generer_corrige_par_exercice(
-        texte_exercice=fragment,
-        contexte=contexte,
-        matiere=mat,
-        donnees_vision=donnees_vision_exercice,
-        demande=dem,
-        exercice_index=idx + 1
-    )
-
-    # ========== ÉTAPE 3 : GÉNÉRATION PDF ==========
-    soum.statut = 'formatage_pdf'
-    soum.progression = 80
-    soum.save()
-
-    from .pdf_utils import generer_pdf_corrige
-    pdf_url = generer_pdf_corrige(
-        {
-            "titre_corrige": contexte,
-            "corrige_html": corrige_txt,
-            "soumission_id": soum.id,
-            "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
-        },
-        soum.id
-    )
-
-    # ========== ÉTAPE 4 : DÉBIT CRÉDIT ==========
-    if not debiter_credit_abonnement(dem.user):
-        print("❌ Crédits insuffisants")
-        soum.statut = 'erreur_credit'
-        soum.save()
-        return False
-
-    # ========== ÉTAPE 5 : CRÉATION CORRIGEPARTIEL ==========
-    pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
-    pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
-
-    titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
-    if len(titre_reel) > 200:
-        titre_reel = titre_reel[:197] + "..."
-
-    try:
-        with open(pdf_absolute_path, 'rb') as f:
-            corrige = CorrigePartiel.objects.create(
-                soumission=soum,
-                titre_exercice=titre_reel,
-            )
-            corrige.fichier_pdf.save(
-                f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
-                File(f)
-            )
-            corrige.save()
-        print(f"💾 CorrigePartiel créé: {titre_reel[:50]}...")
-    except Exception as e:
-        print(f"⚠️ Erreur création CorrigePartiel: {e}")
-
-    # ========== ÉTAPE 6 : FINALISATION ==========
-    soum.statut = 'termine'
-    soum.progression = 100
-    soum.resultat_json = {
-        "exercice_index": idx,
-        "exercice_titre": titre_reel,
-        "corrige_text": corrige_txt,
-        "pdf_url": pdf_url,
-        "exercice_data": ex_data,
-        "optimisation_utilisee": optimisation_utilisee
-    }
-    soum.save()
-
-    print(f"🎉 Exercice {idx + 1} traité avec succès!")
-    print(f"   📊 Optimisation: {optimisation_utilisee}")
-    print(f"   📄 PDF généré: {pdf_url}")
-    return True
+# ============== TÂCHE ASYNCHRONE ==============
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
-    """
-    Tâche pour traitement complet (conservée pour compatibilité).
-    """
+    from correction.models import DemandeCorrection, SoumissionIA
+    from resources.models import Matiere
+
     try:
-        from correction.models import DemandeCorrection
+        # Récupération de la demande et création de la soumission IA
         demande = DemandeCorrection.objects.get(id=demande_id)
         soumission = SoumissionIA.objects.get(demande=demande)
 
-        # Extraction complète UNE FOIS
-        if demande.fichier and not demande.exercices_data:
+        # Étape 1 : Extraction du texte brut AVEC VISION
+        soumission.statut = 'extraction'
+        soumission.progression = 20
+        soumission.save()
+
+        donnees_vision_complete = None
+        texte_brut = ""
+
+        if demande.fichier:
+            # 1) Sauvegarde locale
             temp_dir = tempfile.gettempdir()
             local_path = os.path.join(temp_dir, os.path.basename(demande.fichier.name))
             with open(local_path, "wb") as f:
                 for chunk in demande.fichier.chunks():
                     f.write(chunk)
 
-            analyse_complete = analyser_document_scientifique(local_path, departement=demande.departement)
-
-            # Stocker pour réutilisation future
-            donnees_completes = {
-                "texte_complet": analyse_complete.get("texte_complet", ""),
-                "donnees_vision": {
-                    "elements_visuels": analyse_complete.get("elements_visuels", []),
-                    "formules_latex": analyse_complete.get("formules_latex", []),
-                    "graphs": analyse_complete.get("graphs", []),
-                    "angles": analyse_complete.get("angles", []),
-                    "numbers": analyse_complete.get("numbers", []),
-                    "pipeline_utilise": analyse_complete.get("pipeline", "inconnu")
-                }
+            # 2) Appel unique d'analyse scientifique
+            analyse_complete = analyser_document_scientifique(local_path)
+            donnees_vision_complete = {
+                "elements_visuels": analyse_complete.get("elements_visuels", []),
+                "formules_latex": analyse_complete.get("formules_latex", []),
+                "graphs": analyse_complete.get("graphs", []),
+                "angles": analyse_complete.get("angles", []),
+                "numbers": analyse_complete.get("numbers", []),
+                "structure_exercices": analyse_complete.get("structure_exercices", [])
             }
+            texte_brut = analyse_complete.get("texte_complet", "")
 
-            demande.exercices_data = json.dumps(donnees_completes, ensure_ascii=False)
-            demande.save()
-
+            # 3) Nettoyage
             try:
                 os.unlink(local_path)
             except:
                 pass
+        else:
+            texte_brut = demande.enonce_texte or ""
 
+        print("📥 TEXTE BRUT AVEC VISION (premiers 500 chars) :")
+        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
+
+        # Étape 1b : Extraire les exercices et stocker les données
+        exercices_data = separer_exercices_avec_titres(texte_brut)
+        print(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
+
+        # Stocker les données des exercices dans la demande
+        demande.exercices_data = json.dumps([
+            {
+                'titre': ex['titre'],
+                'titre_complet': ex['titre_complet'],
+                'contenu': ex['contenu'][:500] + '...' if len(ex['contenu']) > 500 else ex['contenu']
+            }
+            for ex in exercices_data
+        ])
+        demande.save()
+
+        # Étape 2 : Texte final pour l'IA
+        texte_enonce = texte_brut
+
+        # Étape 3 : Lancement du traitement IA AVEC DONNÉES VISION
+        soumission.statut = 'analyse_ia'
+        soumission.progression = 40
+        soumission.save()
+
+        matiere = Matiere.objects.get(id=matiere_id) if matiere_id else demande.matiere
+        contexte = f"Exercice de {matiere.nom} - {demande.classe.nom if demande.classe else ''}"
+
+        # Étape 4 : Génération graphique (si département scientifique)
+        departement = demande.departement
+        if is_departement_scientifique(departement):
+            print(f"⚗️ Département scientifique : {departement.nom}")
+            soumission.statut = 'generation_graphiques'
+            soumission.progression = 60
+            soumission.save()
+        else:
+            print(f"⚡ Département non scientifique ({departement.nom if departement else 'inconnu'}), skip graphiques")
+
+        # APPEL AVEC DONNÉES VISION
+        corrige_txt, graph_list = generer_corrige_ia_et_graphique(
+            texte_enonce,
+            contexte,
+            matiere=matiere,
+            donnees_vision=donnees_vision_complete,
+            demande=demande
+        )
+
+        # Étape 5 : Génération PDF
+        soumission.statut = 'formatage_pdf'
+        soumission.progression = 80
+        soumission.save()
+
+        from .pdf_utils import generer_pdf_corrige
+        pdf_path = generer_pdf_corrige(
+            {
+                "titre_corrige": contexte,
+                "corrige_html": corrige_txt,
+                "soumission_id": demande_id,
+                "exercices_data": exercices_data  # Passer les données des exercices
+            },
+            demande_id
+        )
+
+        # Débit de crédit
+        from abonnement.services import debiter_credit_abonnement
+        if not debiter_credit_abonnement(demande.user):
+            soumission.statut = 'erreur_credit'
+            soumission.save()
+            return False
+
+        # Étape 6 : Mise à jour du statut et sauvegarde
         soumission.statut = 'termine'
         soumission.progression = 100
+        soumission.resultat_json = {
+            'corrige_text': corrige_txt,
+            'pdf_url': pdf_path,
+            'graphiques': graph_list or [],
+            'analyse_vision': donnees_vision_complete,
+            'exercices_detectes': len(exercices_data),
+            'exercices_titres': [ex['titre'] for ex in exercices_data]
+        }
         soumission.save()
+
+        demande.corrigé = corrige_txt
+        demande.save()
+
+        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        print(f"   Exercices détectés: {len(exercices_data)}")
+        for i, ex in enumerate(exercices_data, 1):
+            print(f"   {i}. {ex['titre'][:50]}...")
 
         return True
 
@@ -1995,43 +1877,118 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         return False
 
 
-# ========== FONCTIONS UTILITAIRES SUPPLEMENTAIRES ==========
-def extraire_exercice_par_index(texte_epreuve, index=0):
-    """Fonction utilitaire pour extraire un exercice spécifique."""
-    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+@shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
+def generer_corrige_exercice_async(soumission_id):
+    """
+    Tâche asynchrone pour corriger UN exercice isolé.
+    Version mise à jour avec système unifié.
+    """
+    try:
+        soum = SoumissionIA.objects.get(id=soumission_id)
+        dem = soum.demande
 
-    if index < 0 or index >= len(exercices_data):
-        return None
+        # 1) Préparer le texte complet depuis le fichier d'énoncé
+        texte = extraire_texte_fichier(dem.fichier)
 
-    ex_data = exercices_data[index]
-    ex_data.update({
-        'index': index,
-        'total_exercices': len(exercices_data),
-        'extraction_date': datetime.now().isoformat()
-    })
+        # 2) Séparer et extraire le fragment avec la NOUVELLE fonction
+        exercices_data = separer_exercices_avec_titres(texte)
+        idx = soum.exercice_index or 0
 
-    return ex_data
+        # Vérifier l'index
+        if idx >= len(exercices_data):
+            print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+            idx = len(exercices_data) - 1
 
+        ex_data = exercices_data[idx]
+        fragment = ex_data['contenu']
 
-def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
-    """Retourne la liste de tous les exercices détectés."""
-    exercices_data = separer_exercices_avec_titres(texte_epreuve)
+        print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
+        print(f"   Longueur contenu: {len(fragment)} caractères")
 
-    result = []
-    for i, ex in enumerate(exercices_data):
-        item = {
-            'index': i,
-            'titre': ex['titre'],
-            'titre_complet': ex['titre_complet'],
-            'longueur_contenu': len(ex['contenu'])
+        # 3) Mise à jour statut pour analyse IA
+        soum.statut = 'analyse_ia'
+        soum.progression = 20
+        soum.save()
+
+        # 4) Lancer la génération (IA + graph) sur ce fragment
+        mat = dem.matiere if dem.matiere else Matiere.objects.first()
+        contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
+
+        corrige_txt, _ = generer_corrige_ia_et_graphique(
+            texte_enonce=fragment,
+            contexte=contexte,
+            matiere=mat,
+            demande=dem
+        )
+
+        # 5) Mise à jour PDF
+        soum.statut = 'formatage_pdf'
+        soum.progression = 60
+        soum.save()
+
+        pdf_url = generer_pdf_corrige(
+            {
+                "titre_corrige": contexte,
+                "corrige_html": corrige_txt,
+                "soumission_id": soum.id,
+                "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
+            },
+            soum.id
+        )
+
+        # 6) Débit de crédit
+        if not debiter_credit_abonnement(dem.user):
+            soum.statut = 'erreur_credit'
+            soum.save()
+            return False
+
+        # 7) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
+        pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
+        pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
+
+        # Utiliser le titre réel de l'exercice
+        titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
+
+        # Nettoyer un peu le titre si trop long
+        if len(titre_reel) > 200:
+            titre_reel = titre_reel[:197] + "..."
+
+        # Ouvre le fichier PDF
+        with open(pdf_absolute_path, 'rb') as f:
+            # Crée le CorrigePartiel avec le VRAI titre
+            corrige = CorrigePartiel.objects.create(
+                soumission=soum,
+                titre_exercice=titre_reel,
+            )
+            # Attache le fichier PDF
+            corrige.fichier_pdf.save(
+                f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
+                File(f)
+            )
+            corrige.save()
+
+        # 8) Finalisation
+        soum.statut = 'termine'
+        soum.progression = 100
+        soum.resultat_json = {
+            "exercice_index": idx,
+            "exercice_titre": titre_reel,
+            "corrige_text": corrige_txt,
+            "pdf_url": pdf_url,
+            "exercice_data": ex_data  # Stocker toutes les données de l'exercice
         }
+        soum.save()
 
-        if avec_preview:
-            lignes = ex['contenu'].split('\n')[:3]
-            preview_text = ' '.join([l[:100] for l in lignes if l.strip()])
-            item['preview'] = (preview_text[:200] + '...') if len(preview_text) > 200 else preview_text
-
-        result.append(item)
-
-    return result
+        return True
+    except Exception as e:
+        print(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            soum = SoumissionIA.objects.get(id=soumission_id)
+            soum.statut = 'erreur'
+            soum.save()
+        except:
+            pass
+        return False
 
