@@ -1674,11 +1674,38 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande=demande)
 
 #les fonctions utilitaires , utilisables ou non, donc optionnelles
-def extraire_exercice_par_index(texte_epreuve, index=0):
+def extraire_exercice_par_index(texte_epreuve, index=0, demande=None):
     """
     Fonction utilitaire pour extraire un exercice spécifique par son index.
-    Utile pour les API et le frontend.
+    Version optimisée : utilise exercices_data si disponible.
+
+    Args:
+        texte_epreuve: Texte complet (fallback si pas de demande)
+        index: Index de l'exercice
+        demande: DemandeCorrection optionnelle (pour utiliser exercices_data)
+
+    Returns:
+        dict avec titre et contenu, ou None
     """
+    # PRIORITÉ : Utiliser exercices_data si disponible
+    if demande and demande.exercices_data:
+        try:
+            exercices_list = json.loads(demande.exercices_data)
+            for ex in exercices_list:
+                if ex.get('index') == index:
+                    # Retourner le contenu complet si disponible
+                    contenu = ex.get('contenu_complet') or ex.get('contenu', '')
+                    return {
+                        'index': index,
+                        'titre': ex.get('titre_complet', ex.get('titre', f"Exercice {index + 1}")),
+                        'contenu': contenu,
+                        'extrait': ex.get('extrait', ''),
+                        'source': 'exercices_data'  # Pour le debug
+                    }
+        except json.JSONDecodeError as e:
+            print(f"❌ [extraire_exercice_par_index] Erreur JSON: {e}")
+
+    # FALLBACK : Extraction traditionnelle
     exercices_data = separer_exercices_avec_titres(texte_epreuve)
 
     if index < 0 or index >= len(exercices_data):
@@ -1686,15 +1713,13 @@ def extraire_exercice_par_index(texte_epreuve, index=0):
 
     ex_data = exercices_data[index]
 
-    # Ajouter des métadonnées utiles
-    ex_data.update({
+    return {
         'index': index,
-        'total_exercices': len(exercices_data),
-        'extraction_date': datetime.now().isoformat()  # ← datetime IMPORTÉ
-    })
-
-    return ex_data
-
+        'titre': ex_data.get('titre', f"Exercice {index + 1}"),
+        'titre_complet': ex_data.get('titre_complet', ''),
+        'contenu': ex_data.get('contenu', ''),
+        'source': 'extraction_fraiche'  # Pour le debug
+    }
 
 def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
     """
@@ -1881,38 +1906,86 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 def generer_corrige_exercice_async(soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
-    Version mise à jour avec système unifié.
+    Version optimisée : utilise le contenu déjà stocké dans exercices_data.
     """
     try:
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
 
-        # 1) Préparer le texte complet depuis le fichier d'énoncé
-        texte = extraire_texte_fichier(dem.fichier)
+        # 1) VÉRIFIER SI LE CONTENU EST DÉJÀ STOCKÉ DANS exercices_data
+        fragment = None
 
-        # 2) Séparer et extraire le fragment avec la NOUVELLE fonction
-        exercices_data = separer_exercices_avec_titres(texte)
-        idx = soum.exercice_index or 0
+        if dem.exercices_data:
+            try:
+                exercices_list = json.loads(dem.exercices_data)
 
-        # Vérifier l'index
-        if idx >= len(exercices_data):
-            print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
-            idx = len(exercices_data) - 1
+                # Chercher l'exercice à l'index spécifié
+                for ex in exercices_list:
+                    if ex.get('index') == soum.exercice_index:
+                        # PRIORITÉ : utiliser contenu_complet si disponible
+                        if 'contenu_complet' in ex:
+                            fragment = ex['contenu_complet']
+                            print(
+                                f"✅ [generer_corrige_exercice_async] Contenu complet récupéré depuis exercices_data ({len(fragment)} chars)")
+                            break
+                        # Fallback : utiliser 'contenu' (ancienne version)
+                        elif 'contenu' in ex:
+                            fragment = ex['contenu']
+                            print(
+                                f"⚠️  [generer_corrige_exercice_async] Contenu limité récupéré ({len(fragment)} chars)")
+                            break
+            except json.JSONDecodeError as e:
+                print(f"❌ [generer_corrige_exercice_async] Erreur JSON exercices_data: {e}")
 
-        ex_data = exercices_data[idx]
-        fragment = ex_data['contenu']
+        # 2) FALLBACK : Si pas de contenu stocké, extraire depuis le fichier
+        if not fragment:
+            print(f"🔄 [generer_corrige_exercice_async] Fallback: extraction depuis fichier")
 
-        print(f"✅ Exercice {idx + 1} extrait: {ex_data.get('titre', 'Sans titre')}")
-        print(f"   Longueur contenu: {len(fragment)} caractères")
+            # Extraction depuis fichier
+            texte_complet = extraire_texte_fichier(dem.fichier)
+            if not texte_complet:
+                raise ValueError("Impossible d'extraire le texte du fichier")
 
-        # 3) Mise à jour statut pour analyse IA
+            # Séparation des exercices
+            exercices_data = separer_exercices_avec_titres(texte_complet)
+            idx = soum.exercice_index or 0
+
+            if idx >= len(exercices_data):
+                print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+                idx = len(exercices_data) - 1
+
+            ex_data = exercices_data[idx]
+            fragment = ex_data.get('contenu', '')
+
+            print(f"✅ Exercice {idx + 1} extrait via fallback: {len(fragment)} caractères")
+
+        # 3) Validation du fragment
+        if not fragment or len(fragment.strip()) < 10:
+            raise ValueError("Fragment d'exercice trop court ou vide")
+
+        print(f"✅ [generer_corrige_exercice_async] Fragment prêt: {len(fragment)} caractères")
+
+        # 4) Mise à jour statut pour analyse IA
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
 
-        # 4) Lancer la génération (IA + graph) sur ce fragment
+        # 5) Lancer la génération (IA + graph) sur ce fragment
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
-        contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
+        titre_exercice = f"Exercice {soum.exercice_index + 1}" if soum.exercice_index is not None else "Exercice"
+
+        # Récupérer le titre réel si disponible dans exercices_data
+        if dem.exercices_data:
+            try:
+                exercices_list = json.loads(dem.exercices_data)
+                for ex in exercices_list:
+                    if ex.get('index') == soum.exercice_index:
+                        titre_exercice = ex.get('titre_complet', ex.get('titre', titre_exercice))
+                        break
+            except:
+                pass
+
+        contexte = f"Exercice de {mat.nom} – {titre_exercice}"
 
         corrige_txt, _ = generer_corrige_ia_et_graphique(
             texte_enonce=fragment,
