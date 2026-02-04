@@ -1601,9 +1601,17 @@ def generer_corrige_exercice_async(soumission_id):
                         print(f"   📏 Longueur: {len(fragment)} caractères")
                         print(f"   🔤 Titre: {ex_data['titre'][:50]}...")
 
-                        # Marquer que tout est déjà prêt
-                        extraction_faite = True
-                        decoupage_fait = True
+                        # ⭐⭐ CRITIQUE : PASSER DIRECTEMENT À LA CORRECTION ! ⭐⭐
+                        # On saute TOUTE l'extraction et le découpage
+
+                        print("⏭️ PASSAGE DIRECT À LA CORRECTION (données déjà disponibles)")
+
+                        # Appeler une fonction qui fait juste la correction
+                        return traiter_exercice_directement(
+                            soum, dem, fragment, ex_data, idx,
+                            optimisation_utilisee="donnees_stockees"
+                        )
+
                     else:
                         print(f"⚠️ Index {idx} hors limites des {len(exercices_stockes)} exercices stockés")
                         extraction_faite = False
@@ -1624,8 +1632,18 @@ def generer_corrige_exercice_async(soumission_id):
                             'titre_complet': ex_stocke.get('titre_complet', f"Exercice {idx + 1}"),
                             'contenu': fragment
                         }
-                        extraction_faite = True
-                        decoupage_fait = True
+
+                        print(f"   🎯 Exercice {idx + 1} récupéré depuis stockage")
+                        print(f"   📏 Longueur: {len(fragment)} caractères")
+
+                        # ⭐⭐ PASSAGE DIRECT À LA CORRECTION ! ⭐⭐
+                        print("⏭️ PASSAGE DIRECT À LA CORRECTION (données déjà disponibles - ancien format)")
+
+                        return traiter_exercice_directement(
+                            soum, dem, fragment, ex_data, idx,
+                            optimisation_utilisee="donnees_stockees_ancien_format"
+                        )
+
                     else:
                         extraction_faite = False
                 else:
@@ -1643,58 +1661,57 @@ def generer_corrige_exercice_async(soumission_id):
             extraction_faite = False
 
         # ========== ÉTAPE 2 : EXTRACTION SI NÉCESSAIRE ==========
-        if not extraction_faite:
-            print("🔄 Extraction nécessaire (données non disponibles ou invalides)...")
-            soum.statut = 'extraction'
-            soum.progression = 10
-            soum.save()
+        # Si on arrive ici, c'est qu'on n'avait pas de données stockées ou qu'elles étaient invalides
+        print("🔄 Extraction nécessaire (données non disponibles ou invalides)...")
+        soum.statut = 'extraction'
+        soum.progression = 10
+        soum.save()
 
-            if dem.fichier:
-                temp_dir = tempfile.gettempdir()
-                local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
-                with open(local_path, "wb") as f:
-                    for chunk in dem.fichier.chunks():
-                        f.write(chunk)
+        if dem.fichier:
+            temp_dir = tempfile.gettempdir()
+            local_path = os.path.join(temp_dir, os.path.basename(dem.fichier.name))
+            with open(local_path, "wb") as f:
+                for chunk in dem.fichier.chunks():
+                    f.write(chunk)
 
-                # Extraction complète
-                analyse_complete = analyser_document_scientifique(local_path, departement=dem.departement)
-                texte_complet = analyse_complete.get("texte_complet", "")
+            # Extraction complète
+            analyse_complete = analyser_document_scientifique(local_path, departement=dem.departement)
+            texte_complet = analyse_complete.get("texte_complet", "")
 
-                # Découpage
-                exercices_detaillees = separer_exercices_avec_titres(texte_complet)
-                idx = soum.exercice_index or 0
+            # Découpage
+            exercices_detaillees = separer_exercices_avec_titres(texte_complet)
+            idx = soum.exercice_index or 0
 
-                if idx >= len(exercices_detaillees):
-                    print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
-                    idx = len(exercices_detaillees) - 1
+            if idx >= len(exercices_detaillees):
+                print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
+                idx = len(exercices_detaillees) - 1
 
-                ex_data = exercices_detaillees[idx]
-                fragment = ex_data['contenu']
+            ex_data = exercices_detaillees[idx]
+            fragment = ex_data['contenu']
 
-                try:
-                    os.unlink(local_path)
-                except:
-                    pass
+            try:
+                os.unlink(local_path)
+            except:
+                pass
 
-                decoupage_fait = True
-                print(f"✅ Extraction + découpage terminés")
+            decoupage_fait = True
+            print(f"✅ Extraction + découpage terminés")
 
-            else:
-                # Fallback: texte direct
-                texte_complet = dem.enonce_texte or ""
-                fragment = texte_complet
-                ex_data = {
-                    'titre': f"Exercice {soum.exercice_index + 1}",
-                    'titre_complet': f"Exercice {soum.exercice_index + 1}",
-                    'contenu': fragment
-                }
-                decoupage_fait = True
         else:
-            # Extraction déjà faite, on saute cette étape
-            print("⏭️ Extraction déjà faite, étape sautée")
-            soum.statut = 'decoupage'
-            soum.progression = 30
-            soum.save()
+            # Fallback: texte direct
+            texte_complet = dem.enonce_texte or ""
+            fragment = texte_complet
+            ex_data = {
+                'titre': f"Exercice {soum.exercice_index + 1}",
+                'titre_complet': f"Exercice {soum.exercice_index + 1}",
+                'contenu': fragment
+            }
+            decoupage_fait = True
+
+        # Mise à jour statut découpage
+        soum.statut = 'decoupage'
+        soum.progression = 30
+        soum.save()
 
         # ========== ÉTAPE 3 : VÉRIFICATION FINALE ==========
         if not ex_data or not fragment:
@@ -1705,12 +1722,6 @@ def generer_corrige_exercice_async(soumission_id):
 
         print(f"✅ Exercice {soum.exercice_index + 1} prêt: {ex_data.get('titre', 'Sans titre')}")
         print(f"   📏 Longueur contenu: {len(fragment)} caractères")
-
-        # Mise à jour statut découpage si nécessaire
-        if not decoupage_fait:
-            soum.statut = 'decoupage'
-            soum.progression = 30
-            soum.save()
 
         # ========== ÉTAPE 4 : PRÉPARATION DONNÉES VISION ==========
         donnees_vision_exercice = None
@@ -1723,16 +1734,11 @@ def generer_corrige_exercice_async(soumission_id):
                 print(f"🔬 Département scientifique: {est_scientifique}")
 
             if est_scientifique:
-                # Pour l'instant, on n'a pas les données vision stockées
-                # Donc on ne peut pas faire l'enrichissement Reasoner
                 print(f"⚠️ Département scientifique détecté mais données vision non stockées")
                 print(f"   → Enrichissement Reasoner NON disponible")
-                # Note: On pourrait extraire les données vision ici, mais c'est coûteux
-                # Pour l'instant, on passe sans enrichissement
 
         except Exception as e:
             print(f"⚠️ Erreur détection scientifique: {e}")
-            # Continuer sans enrichissement
 
         # ========== ÉTAPE 5 : GÉNÉRATION DU CORRIGÉ ==========
         soum.statut = 'analyse_ia'
@@ -1747,7 +1753,7 @@ def generer_corrige_exercice_async(soumission_id):
             texte_exercice=fragment,
             contexte=contexte,
             matiere=mat,
-            donnees_vision=donnees_vision_exercice,  # None pour l'instant
+            donnees_vision=donnees_vision_exercice,
             demande=dem,
             exercice_index=soum.exercice_index + 1
         )
@@ -1797,7 +1803,6 @@ def generer_corrige_exercice_async(soumission_id):
             print(f"💾 CorrigePartiel créé: {titre_reel[:50]}...")
         except Exception as e:
             print(f"⚠️ Erreur création CorrigePartiel: {e}")
-            # Continuer quand même
 
         # ========== ÉTAPE 9 : FINALISATION ==========
         soum.statut = 'termine'
@@ -1808,12 +1813,12 @@ def generer_corrige_exercice_async(soumission_id):
             "corrige_text": corrige_txt,
             "pdf_url": pdf_url,
             "exercice_data": ex_data,
-            "optimisation_utilisee": "donnees_stockees" if extraction_faite else "extraction_fraiche"
+            "optimisation_utilisee": "extraction_fraiche"
         }
         soum.save()
 
         print(f"🎉 Exercice {soum.exercice_index + 1} traité avec succès!")
-        print(f"   📊 Optimisation: {'OUI' if extraction_faite else 'NON'}")
+        print(f"   📊 Optimisation: NON (extraction nécessaire)")
         print(f"   📄 PDF généré: {pdf_url}")
         return True
 
@@ -1829,6 +1834,107 @@ def generer_corrige_exercice_async(soumission_id):
             pass
         return False
 
+
+def traiter_exercice_directement(soum, dem, fragment, ex_data, idx, optimisation_utilisee="donnees_stockees"):
+    """
+    Traite un exercice directement avec les données déjà disponibles.
+    Saut complètement l'extraction et le découpage.
+    """
+    print(f"⚡ TRAITEMENT DIRECT exercice {idx + 1}")
+
+    # ========== ÉTAPE 1 : PRÉPARATION DONNÉES VISION ==========
+    donnees_vision_exercice = None
+
+    # Vérifier si département scientifique
+    try:
+        est_scientifique = False
+        if dem.departement:
+            est_scientifique = detecter_departement_scientifique_avance(dem.departement)
+            print(f"🔬 Département scientifique: {est_scientifique}")
+    except Exception as e:
+        print(f"⚠️ Erreur détection scientifique: {e}")
+
+    # ========== ÉTAPE 2 : GÉNÉRATION DU CORRIGÉ ==========
+    soum.statut = 'analyse_ia'
+    soum.progression = 50
+    soum.save()
+
+    mat = dem.matiere if dem.matiere else Matiere.objects.first()
+    contexte = f"Exercice de {mat.nom} – {ex_data.get('titre', f'Exercice {idx + 1}')}"
+
+    print(f"🧠 Génération du corrigé avec IA...")
+    corrige_txt, _ = generer_corrige_par_exercice(
+        texte_exercice=fragment,
+        contexte=contexte,
+        matiere=mat,
+        donnees_vision=donnees_vision_exercice,
+        demande=dem,
+        exercice_index=idx + 1
+    )
+
+    # ========== ÉTAPE 3 : GÉNÉRATION PDF ==========
+    soum.statut = 'formatage_pdf'
+    soum.progression = 80
+    soum.save()
+
+    from .pdf_utils import generer_pdf_corrige
+    pdf_url = generer_pdf_corrige(
+        {
+            "titre_corrige": contexte,
+            "corrige_html": corrige_txt,
+            "soumission_id": soum.id,
+            "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
+        },
+        soum.id
+    )
+
+    # ========== ÉTAPE 4 : DÉBIT CRÉDIT ==========
+    if not debiter_credit_abonnement(dem.user):
+        print("❌ Crédits insuffisants")
+        soum.statut = 'erreur_credit'
+        soum.save()
+        return False
+
+    # ========== ÉTAPE 5 : CRÉATION CORRIGEPARTIEL ==========
+    pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
+    pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
+
+    titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
+    if len(titre_reel) > 200:
+        titre_reel = titre_reel[:197] + "..."
+
+    try:
+        with open(pdf_absolute_path, 'rb') as f:
+            corrige = CorrigePartiel.objects.create(
+                soumission=soum,
+                titre_exercice=titre_reel,
+            )
+            corrige.fichier_pdf.save(
+                f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
+                File(f)
+            )
+            corrige.save()
+        print(f"💾 CorrigePartiel créé: {titre_reel[:50]}...")
+    except Exception as e:
+        print(f"⚠️ Erreur création CorrigePartiel: {e}")
+
+    # ========== ÉTAPE 6 : FINALISATION ==========
+    soum.statut = 'termine'
+    soum.progression = 100
+    soum.resultat_json = {
+        "exercice_index": idx,
+        "exercice_titre": titre_reel,
+        "corrige_text": corrige_txt,
+        "pdf_url": pdf_url,
+        "exercice_data": ex_data,
+        "optimisation_utilisee": optimisation_utilisee
+    }
+    soum.save()
+
+    print(f"🎉 Exercice {idx + 1} traité avec succès!")
+    print(f"   📊 Optimisation: {optimisation_utilisee}")
+    print(f"   📄 PDF généré: {pdf_url}")
+    return True
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
 def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
