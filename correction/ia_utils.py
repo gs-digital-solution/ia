@@ -734,189 +734,370 @@ def build_promptia_messages(promptia, contexte):
     return {"role": "system", "content": system_content}, \
            {"role": "user",   "content": user_content}
 
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None,demande=None):
+
+def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None, demande=None):
     """
     Génère le corrigé pour un seul exercice en exploitant les données vision.
+    Version robuste avec logging détaillé, retries intelligents et gestion d'erreurs.
 
     Args:
         texte_exercice: Texte de l'exercice
         contexte: Contexte de l'exercice
         matiere: Matière concernée
         donnees_vision: Données d'analyse vision (schémas, formules, etc.)
+        demande: Objet DemandeCorrection
 
     Returns:
         Tuple (corrige_text, graph_list)
     """
-    print("🎯 Génération corrigé avec analyse vision...")
-    print("\n[DEBUG] ==> generer_corrige_par_exercice avec demande:",
-          getattr(demande, 'id', None), "/", type(demande))
+    import time
+    from datetime import datetime
 
-    # 1) Récupère le prompt métier (ou None)
-    promptia = get_best_promptia(demande)
+    start_time = time.time()
 
-    # 2) Construit les deux messages
-    contexte = f"Contexte : Exercice de {matiere.nom} – {getattr(demande.classe, 'nom', '')}"
-    msg_system, msg_user = build_promptia_messages(promptia, contexte)
+    print(f"\n{'=' * 70}")
+    print(f"🤖 DÉBUT generer_corrige_par_exercice - {datetime.now().strftime('%H:%M:%S')}")
+    print(f"{'=' * 70}")
 
-    # 3) Enrichir le user_message avec l'exercice et la vision
-    user_blocks = [
-        msg_user["content"],
-        "----- EXERCICE À CORRIGER -----",
-        texte_exercice.strip()
-    ]
+    if demande:
+        print(f"📋 Informations demande:")
+        print(f"   - ID: {demande.id}")
+        print(f"   - Matière: {demande.matiere.nom if demande.matiere else 'Non spécifiée'}")
+        print(f"   - Classe: {demande.classe.nom if demande.classe else 'Non spécifiée'}")
+        print(f"   - Département: {demande.departement.nom if demande.departement else 'Non spécifiée'}")
+
+    print(f"📊 Métriques:")
+    print(f"   - Longueur exercice: {len(texte_exercice)} caractères")
+    print(f"   - Contexte: {contexte}")
+    print(f"   - Données vision: {'PRÉSENTES' if donnees_vision else 'ABSENTES'}")
+
     if donnees_vision:
-        # Schémas identifiés
-        if donnees_vision.get("elements_visuels"):
-            user_blocks.append("----- SCHÉMAS IDENTIFIÉS -----")
-            for element in donnees_vision["elements_visuels"]:
-                desc = element.get("description", "")
-                user_blocks.append(f"- {desc}")
+        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
+        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
+        print(f"   - Graphiques détectés: {len(donnees_vision.get('graphs', []))}")
 
-        # Formules LaTeX
-        if donnees_vision.get("formules_latex"):
-            user_blocks.append("----- FORMULES DÉTECTÉES -----")
-            for formule in donnees_vision["formules_latex"]:
-                user_blocks.append(f"- {formule}")
-
-        # Données graphiques brutes (JSON)
-        if donnees_vision.get("graphs"):
-            user_blocks.append("----- DONNÉES GRAPHIQUES (JSON) -----")
-            user_blocks.append(
-                json.dumps(donnees_vision["graphs"], ensure_ascii=False, indent=2)
-            )
-
-        # Angles détectés
-        if donnees_vision.get("angles"):
-            user_blocks.append("----- ANGLES IDENTIFIÉS -----")
-            for angle in donnees_vision["angles"]:
-                val = angle.get("valeur", "")
-                unit = angle.get("unité", "")
-                coord = angle.get("coord", "")
-                user_blocks.append(f"- {val}{unit} à coord {coord}")
-
-        # Nombres détectés
-        if donnees_vision.get("numbers"):
-            user_blocks.append("----- NOMBRES ET UNITÉS -----")
-            for num in donnees_vision["numbers"]:
-                val = num.get("valeur", "")
-                unit = num.get("unité", "")
-                coord = num.get("coord", "")
-                user_blocks.append(f"- {val}{unit} à coord {coord}")
-
-    # On reconstitue le contenu utilisateur final
-    msg_user["content"] = "\n\n".join(user_blocks)
-
-    # 4) Préparation de l’appel API avec deux messages
-    data = {
-        "model": "deepseek-chat",
-        "messages": [msg_system, msg_user],
-        "temperature": 0.1,
-        "max_tokens": 6000,
-        "top_p": 0.9,
-        "frequency_penalty": 0.1
-    }
-    # URL et en-têtes pour l'appel DeepSeek
-    api_url = "https://api.deepseek.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",  # Assurez-vous que DEEPSEEK_API_KEY est dans vos env vars
-        "Content-Type": "application/json"
-    }
     try:
-        print("📡 Appel API DeepSeek avec analyse vision...")
+        # 1) RÉCUPÉRATION DU PROMPT MÉTIER
+        prompt_start = time.time()
+        promptia = get_best_promptia(demande)
+        prompt_time = time.time() - prompt_start
 
-        # Tentative avec vérification de qualité
+        print(f"\n{'─' * 40}")
+        print(f"📝 RÉCUPÉRATION PROMPT")
+        print(f"{'─' * 40}")
+        print(f"✅ Prompt trouvé: {'OUI' if promptia else 'NON (DEFAULT)'}")
+        print(f"⏱️  Temps recherche: {prompt_time:.1f}s")
+
+        if promptia:
+            print(f"   - ID Prompt: {promptia.id}")
+            print(f"   - Pays: {promptia.pays.nom if promptia.pays else 'Global'}")
+            print(f"   - Matière: {promptia.matiere.nom if promptia.matiere else 'Global'}")
+
+        # 2) CONSTRUCTION DES MESSAGES
+        msg_system, msg_user = build_promptia_messages(promptia, contexte)
+
+        # 3) ENRICHISSEMENT AVEC DONNÉES VISION
+        user_blocks = [
+            msg_user["content"],
+            "----- EXERCICE À CORRIGER -----",
+            texte_exercice.strip()
+        ]
+
+        vision_elements_count = 0
+        if donnees_vision:
+            # Schémas identifiés
+            if donnees_vision.get("elements_visuels"):
+                elements = donnees_vision["elements_visuels"]
+                user_blocks.append(f"----- SCHÉMAS IDENTIFIÉS ({len(elements)}) -----")
+                for element in elements[:5]:  # Limiter à 5 pour éviter payload trop gros
+                    desc = element.get("description", "")
+                    user_blocks.append(f"- {desc}")
+                    vision_elements_count += 1
+                if len(elements) > 5:
+                    user_blocks.append(f"- ... et {len(elements) - 5} autres schémas")
+
+            # Formules LaTeX
+            if donnees_vision.get("formules_latex"):
+                formules = donnees_vision["formules_latex"]
+                user_blocks.append(f"----- FORMULES DÉTECTÉES ({len(formules)}) -----")
+                for formule in formules[:10]:  # Limiter à 10 formules
+                    user_blocks.append(f"- {formule}")
+                    vision_elements_count += 1
+                if len(formules) > 10:
+                    user_blocks.append(f"- ... et {len(formules) - 10} autres formules")
+
+            # Données graphiques brutes (JSON limité)
+            if donnees_vision.get("graphs"):
+                graphs = donnees_vision["graphs"]
+                user_blocks.append(f"----- DONNÉES GRAPHIQUES ({len(graphs)}) -----")
+                # Limiter la taille du JSON
+                if len(graphs) <= 3:
+                    user_blocks.append(json.dumps(graphs, ensure_ascii=False, indent=2))
+                else:
+                    user_blocks.append(f"[{len(graphs)} graphiques détectés - JSON tronqué pour taille]")
+                vision_elements_count += len(graphs)
+
+        msg_user["content"] = "\n\n".join(user_blocks)
+
+        print(f"\n{'─' * 40}")
+        print(f"📦 CONSTRUCTION MESSAGE IA")
+        print(f"{'─' * 40}")
+        print(f"✅ Message construit")
+        print(f"   - Longueur système: {len(msg_system['content'])} caractères")
+        print(f"   - Longueur utilisateur: {len(msg_user['content'])} caractères")
+        print(f"   - Éléments vision intégrés: {vision_elements_count}")
+        print(f"   - Total tokens estimé: {estimer_tokens(msg_user['content'])}")
+
+        # 4) PRÉPARATION APPEL API
+        api_url = "https://api.deepseek.com/v1/chat/completions"
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+
+        if not api_key:
+            error_msg = "❌ API KEY DeepSeek non configurée"
+            print(f"\n{error_msg}")
+            return error_msg, None
+
+        data = {
+            "model": "deepseek-chat",
+            "messages": [msg_system, msg_user],
+            "temperature": 0.1,
+            "max_tokens": 6000,
+            "top_p": 0.9,
+            "frequency_penalty": 0.1,
+            "stream": False
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "CIS-Education/1.0"
+        }
+
+        print(f"\n{'─' * 40}")
+        print(f"📡 CONFIGURATION API DEEPSEEK")
+        print(f"{'─' * 40}")
+        print(f"🔧 Paramètres:")
+        print(f"   - Modèle: {data['model']}")
+        print(f"   - Température: {data['temperature']}")
+        print(f"   - Max tokens: {data['max_tokens']}")
+        print(f"   - Timeout: 120s")
+        print(f"   - URL: {api_url[:50]}...")
+
+        # 5) APPEL API AVEC RETRIES INTELLIGENTS
+        print(f"\n{'─' * 40}")
+        print(f"🔄 DÉBUT APPEL API DEEPSEEK")
+        print(f"{'─' * 40}")
+
         output = None
-        for tentative in range(2):  # Maximum 2 tentatives
-            response = requests.post(api_url, headers=headers, json=data, timeout=90)
-            response_data = response.json()
+        final_response_data = None
+        last_error = None
 
-            if response.status_code != 200:
-                error_msg = f"Erreur API: {response_data.get('message', 'Pas de détail')}"
-                print(f"❌ {error_msg}")
-                return error_msg, None
+        for tentative in range(3):  # 3 tentatives maximum
+            print(f"\n   🔄 TENTATIVE {tentative + 1}/3")
+            api_call_start = time.time()
 
-            # Récupération de la réponse
-            output = response_data['choices'][0]['message']['content']
-            print(f"✅ Réponse IA brute (tentative {tentative + 1}): {len(output)} caractères")
-
-            # Vérification de la qualité
-            if verifier_qualite_corrige(output, texte_exercice):
-                print("✅ Qualité du corrigé validée")
-                break
-            else:
-                print(f"🔄 Tentative {tentative + 1} - Qualité insuffisante, régénération...")
-                # Ajouter une consigne de rigueur pour la prochaine tentative
-                data["messages"][1][
-                    "content"] += "\n\n⚠️ ATTENTION : Sois plus rigoureux ! Exploite mieux les schémas identifiés. Vérifie tous tes calculs."
-
-                if tentative == 0:  # Attendre un peu avant la 2ème tentative
-                    import time
-                    time.sleep(2)
-        else:
-            print("❌ Échec après 2 tentatives - qualité insuffisante")
-            return "Erreur: Qualité du corrigé insuffisante après plusieurs tentatives", None
-
-        # Traitement de la réponse (identique à avant)
-        output = response_data['choices'][0]['message']['content']
-        print("✅ Réponse IA brute (début):")
-        print(output[:500].replace("\n", "\\n"))
-        print("… (total", len(output), "caractères)\n")
-
-        output = flatten_multiline_latex_blocks(output)
-        print("🛠️ Après flatten_multiline_latex_blocks (début):")
-        print(output[:500].replace("\n", "\\n"))
-        print("… (total", len(output), "caractères)\n")
-
-        output_structured = format_corrige_pdf_structure(output)
-        print("🧩 output_structured après format_corrige_pdf_structure:")
-        print(output_structured[:500].replace("\n", "\\n"), "\n…\n")
-
-        # Initialisation des variables de retour
-        corrige_txt = output_structured
-        graph_list = []
-
-        # Extraction graphique
-        json_blocks = extract_json_blocks(output_structured)
-        print(f"🔍 JSON blocks détectés : {len(json_blocks)}")
-
-        # Afficher chaque JSON brut
-        for i, (graph_dict, start, end) in enumerate(json_blocks, start=1):
-            raw_json = output_structured[start:end]
-            print(f"   ▶️ Bloc JSON {i} brut:")
-            print(raw_json.replace("\n", "\\n"))
-            print("   ▶️ Parsed Python dict :", graph_dict)
-
-        # Traitement des graphiques (identique à avant)
-        json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
-
-        for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
             try:
-                output_name = f"graphique_{idx}.png"
-                img_path = tracer_graphique(graph_dict, output_name)
-                if img_path is None:
-                    raise ValueError("tracer_graphique a retourné None")
-
-                abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
-                img_tag = (
-                    f'<img src="file://{abs_path}" alt="Graphique {idx}" '
-                    f'style="max-width:100%;margin:10px 0;" />'
+                # Appel API avec timeout augmenté
+                response = requests.post(
+                    api_url,
+                    headers=headers,
+                    json=data,
+                    timeout=120,  # Timeout augmenté à 120s
+                    verify=True  # SSL verification
                 )
-                corrige_txt = corrige_txt[:start] + img_tag + corrige_txt[end:]
-                graph_list.append(graph_dict)
-                print(f"✅ Graphique {idx} inséré")
+
+                api_call_time = time.time() - api_call_start
+                print(f"   ✅ Réponse reçue ({api_call_time:.1f}s)")
+                print(f"   📊 Status code: {response.status_code}")
+
+                if response.status_code == 200:
+                    response_data = response.json()
+
+                    # Vérification structure réponse
+                    if 'choices' not in response_data or not response_data['choices']:
+                        print(f"   ⚠️  Structure réponse invalide, pas de 'choices'")
+                        last_error = "Structure réponse API invalide"
+                        continue
+
+                    if 'message' not in response_data['choices'][0]:
+                        print(f"   ⚠️  Structure réponse invalide, pas de 'message'")
+                        last_error = "Structure réponse API invalide"
+                        continue
+
+                    output = response_data['choices'][0]['message']['content']
+                    final_response_data = response_data
+
+                    print(f"   📝 Réponse IA: {len(output)} caractères")
+                    print(f"   📊 Usage tokens: {response_data.get('usage', {}).get('total_tokens', 'N/A')}")
+
+                    # Vérification qualité
+                    if verifier_qualite_corrige(output, texte_exercice):
+                        print(f"   ✅ Qualité validée (tentative {tentative + 1})")
+                        break
+                    else:
+                        print(f"   🔄 Qualité insuffisante, préparation nouvelle tentative...")
+                        last_error = "Qualité insuffisante"
+
+                        # Ajout consigne pour amélioration
+                        data["messages"][1][
+                            "content"] += "\n\n⚠️ IMPORTANT: Sois extrêmement rigoureux ! Vérifie chaque calcul, explique chaque étape, sois précis et complet."
+
+                        # Attente exponentielle avant prochaine tentative
+                        wait_time = 2 * (tentative + 1)
+                        print(f"   ⏳ Attente {wait_time}s...")
+                        time.sleep(wait_time)
+
+                else:
+                    # Erreur HTTP
+                    error_detail = response.text[:200] if response.text else "Pas de détail"
+                    print(f"   ❌ Erreur HTTP {response.status_code}: {error_detail}")
+                    last_error = f"HTTP {response.status_code}: {error_detail}"
+
+                    # Attente exponentielle
+                    wait_time = 5 * (tentative + 1)
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    time.sleep(wait_time)
+
+            except requests.exceptions.Timeout:
+                api_call_time = time.time() - api_call_start
+                print(f"   ⏰ TIMEOUT après {api_call_time:.1f}s")
+                last_error = f"Timeout après {api_call_time:.1f}s"
+
+                if tentative < 2:  # Pas la dernière tentative
+                    wait_time = 10 * (tentative + 1)
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    time.sleep(wait_time)
+
+            except requests.exceptions.ConnectionError as e:
+                print(f"   🔌 ERREUR CONNEXION: {str(e)[:100]}")
+                last_error = f"ConnectionError: {str(e)[:100]}"
+
+                if tentative < 2:
+                    wait_time = 15 * (tentative + 1)
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    time.sleep(wait_time)
+
             except Exception as e:
-                print(f"❌ Erreur génération graphique {idx}: {e}")
-                continue
+                api_call_time = time.time() - api_call_start
+                print(f"   ❌ EXCEPTION: {type(e).__name__}: {str(e)[:100]}")
+                last_error = f"{type(e).__name__}: {str(e)[:100]}"
 
-        print("📝 Corrigé final (début) :")
-        print(corrige_txt[:1000].replace("\n", "\\n"))
-        print("… fin extrait Corrigé\n")
+                if tentative < 2:
+                    wait_time = 8 * (tentative + 1)
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    time.sleep(wait_time)
 
-        return corrige_txt.strip(), graph_list
+        # 6) VÉRIFICATION SUCCÈS APPEL API
+        if not output or not final_response_data:
+            total_api_time = time.time() - start_time
+            error_msg = f"Échec après 3 tentatives. Dernière erreur: {last_error}"
+            print(f"\n❌ {error_msg}")
+            print(f"⏱️  Temps total API: {total_api_time:.1f}s")
+            return f"Erreur IA: {error_msg}", None
+
+        # 7) POST-TRAITEMENT DE LA RÉPONSE
+        print(f"\n{'─' * 40}")
+        print(f"🛠️  POST-TRAITEMENT RÉPONSE IA")
+        print(f"{'─' * 40}")
+
+        postprocess_start = time.time()
+
+        # Étape 1: Fusion LaTeX multilignes
+        output = flatten_multiline_latex_blocks(output)
+        print(f"✅ Fusion LaTeX multilignes")
+
+        # Étape 2: Structuration pour PDF
+        output_structured = format_corrige_pdf_structure(output)
+        print(f"✅ Structuration pour PDF")
+
+        # Étape 3: Extraction JSON graphiques
+        json_blocks = extract_json_blocks(output_structured)
+        print(f"✅ JSON blocks détectés: {len(json_blocks)}")
+
+        # 8) GÉNÉRATION GRAPHIQUES
+        graph_list = []
+        if json_blocks:
+            print(f"\n{'─' * 40}")
+            print(f"🖼️  GÉNÉRATION GRAPHIQUES")
+            print(f"{'─' * 40}")
+
+            json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
+
+            for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
+                try:
+                    print(f"   🔧 Graphique {idx}/{len(json_blocks)}")
+
+                    output_name = f"graphique_{idx}_{int(time.time())}.png"
+                    img_path = tracer_graphique(graph_dict, output_name)
+
+                    if img_path:
+                        abs_path = os.path.join(settings.MEDIA_ROOT, img_path)
+                        img_tag = (
+                            f'<img src="file://{abs_path}" alt="Graphique {idx}" '
+                            f'style="max-width:100%;margin:10px 0;border:1px solid #ddd;" />'
+                        )
+
+                        # Insertion dans le texte
+                        output_structured = output_structured[:start] + img_tag + output_structured[end:]
+                        graph_list.append(graph_dict)
+
+                        print(f"   ✅ Graphique inséré: {img_path}")
+                    else:
+                        print(f"   ⚠️  Échec génération graphique")
+                        # Remplacement par message d'erreur
+                        error_tag = f'<div class="graph-error">[Graphique non généré - Erreur technique]</div>'
+                        output_structured = output_structured[:start] + error_tag + output_structured[end:]
+
+                except Exception as e:
+                    print(f"   ❌ Erreur graphique {idx}: {type(e).__name__}: {str(e)[:100]}")
+                    continue
+
+        postprocess_time = time.time() - postprocess_start
+
+        # 9) FINALISATION
+        total_time = time.time() - start_time
+
+        print(f"\n{'=' * 70}")
+        print(f"✅ SUCCÈS generer_corrige_par_exercice")
+        print(f"{'=' * 70}")
+        print(f"📊 STATISTIQUES:")
+        print(f"   ⏱️  Temps total: {total_time:.1f}s")
+        print(f"   📝 Longueur corrigé final: {len(output_structured)} caractères")
+        print(f"   🖼️  Graphiques générés: {len(graph_list)}/{len(json_blocks)}")
+        print(f"   🔄 Tentatives API: {min(tentative + 1, 3)}/3")
+        print(f"   📦 Taille réponse IA: {len(output)} caractères")
+        print(f"   🕐 {datetime.now().strftime('%H:%M:%S')}")
+
+        # Aperçu du corrigé
+        print(f"\n📋 APERÇU CORRIGÉ (premiers 300 caractères):")
+        preview = output_structured[:300].replace('\n', ' ')
+        print(f"   \"{preview}...\"")
+        print(f"{'=' * 70}")
+
+        return output_structured.strip(), graph_list
 
     except Exception as e:
-        error_msg = f"Erreur: {str(e)}"
-        print(f"❌ {error_msg}")
+        total_time = time.time() - start_time
+
+        print(f"\n{'=' * 70}")
+        print(f"❌ ERREUR CRITIQUE dans generer_corrige_par_exercice")
+        print(f"{'=' * 70}")
+        print(f"⏱️  Temps écoulé: {total_time:.1f}s")
+        print(f"📛 Type erreur: {type(e).__name__}")
+        print(f"📄 Message: {str(e)[:300]}")
+        print(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+
+        # Traceback détaillé
+        import traceback
+        print(f"\n🔍 TRACEBACK:")
+        tb_lines = traceback.format_exc().split('\n')[:10]
+        for line in tb_lines:
+            if line.strip():
+                print(f"   {line}")
+
+        print(f"{'=' * 70}")
+
+        error_msg = f"Erreur traitement IA: {type(e).__name__}: {str(e)[:200]}"
         return error_msg, None
 
 
@@ -1638,21 +1819,19 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
                                     demande=None, donnees_vision=None):
     """
-    Nouvelle version avec système unifié d'extraction.
+    Version SIMPLIFIÉE pour les exercices uniques.
+    Appelle directement generer_corrige_par_exercice sans logique de décision.
     """
-    print("\n[DEBUG] --> generer_corrige_ia_et_graphique called avec demande:",
-          getattr(demande, 'id', None), "/",
-          type(demande))
+    print("\n" + "=" * 60)
+    print("🚀 DÉBUT TRAITEMENT IA POUR EXERCICE UNIQUE")
+    print("=" * 60)
+    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+    print(f"📝 Contexte: {contexte}")
 
     if lecons_contenus is None:
         lecons_contenus = []
     if exemples_corriges is None:
         exemples_corriges = []
-
-    print("\n" + "=" * 60)
-    print("🚀 DÉBUT TRAITEMENT INTELLIGENT AVEC VISION (SYSTÈME UNIFIÉ)")
-    print("=" * 60)
-    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
 
     # Données vision
     if donnees_vision:
@@ -1660,18 +1839,16 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
         print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
 
-    # 1. ESTIMER LA COMPLEXITÉ
-    tokens_estimes = estimer_tokens(texte_enonce)
+    # POUR LES EXERCICES UNIQUES : APPEL DIRECT
+    print("🎯 Appel direct à generer_corrige_par_exercice")
 
-    # 2. DÉCISION : TRAITEMENT DIRECT OU DÉCOUPÉ
-    if tokens_estimes < 1500:  # Épreuve courte
-        print("🎯 Décision: TRAITEMENT DIRECT (épreuve courte)")
-        return generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_corriges, matiere,
-                                      donnees_vision, demande=demande)
-    else:  # Épreuve longue
-        print("🎯 Décision: DÉCOUPAGE (épreuve longue)")
-        # Utiliser la nouvelle version unifiée
-        return generer_corrige_decoupe(texte_enonce, contexte, matiere, donnees_vision, demande=demande)
+    return generer_corrige_par_exercice(
+        texte_exercice=texte_enonce,
+        contexte=contexte,
+        matiere=matiere,
+        donnees_vision=donnees_vision,
+        demande=demande
+    )
 
 #les fonctions utilitaires , utilisables ou non, donc optionnelles
 def extraire_exercice_par_index(texte_epreuve, index=0, demande=None):
@@ -1902,145 +2079,261 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         return False
 
 
-@shared_task(name='correction.ia_utils.generer_corrige_exercice_async')
-def generer_corrige_exercice_async(soumission_id):
+@shared_task(name='correction.ia_utils.generer_corrige_exercice_async',
+             bind=True,
+             max_retries=3,
+             default_retry_delay=60)
+def generer_corrige_exercice_async(self, soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
-    Version optimisée : utilise le contenu déjà stocké dans exercices_data.
+    Version robuste avec retries automatiques, timeout gérés et logging détaillé.
     """
+    import time
+    from datetime import datetime
+
+    task_start = time.time()
+    print(f"\n{'=' * 70}")
+    print(f"🎯 DÉBUT TÂCHE ASYNC - {datetime.now().strftime('%H:%M:%S')}")
+    print(f"   Soumission ID: {soumission_id}")
+    print(f"{'=' * 70}")
+
     try:
+        # 1) RÉCUPÉRATION DE LA SOUMISSION
+        recovery_start = time.time()
         soum = SoumissionIA.objects.get(id=soumission_id)
         dem = soum.demande
+        recovery_time = time.time() - recovery_start
 
-        # 1) VÉRIFIER SI LE CONTENU EST DÉJÀ STOCKÉ DANS exercices_data
-        fragment = None
+        print(f"✅ Soumission récupérée ({recovery_time:.1f}s)")
+        print(f"   - Demande ID: {dem.id}")
+        print(f"   - Exercice index: {soum.exercice_index}")
+        print(f"   - Statut initial: {soum.statut}")
 
-        if dem.exercices_data:
-            try:
-                exercices_list = json.loads(dem.exercices_data)
-
-                # Chercher l'exercice à l'index spécifié
-                for ex in exercices_list:
-                    if ex.get('index') == soum.exercice_index:
-                        # PRIORITÉ : utiliser contenu_complet si disponible
-                        if 'contenu_complet' in ex:
-                            fragment = ex['contenu_complet']
-                            print(
-                                f"✅ [generer_corrige_exercice_async] Contenu complet récupéré depuis exercices_data ({len(fragment)} chars)")
-                            break
-                        # Fallback : utiliser 'contenu' (ancienne version)
-                        elif 'contenu' in ex:
-                            fragment = ex['contenu']
-                            print(
-                                f"⚠️  [generer_corrige_exercice_async] Contenu limité récupéré ({len(fragment)} chars)")
-                            break
-            except json.JSONDecodeError as e:
-                print(f"❌ [generer_corrige_exercice_async] Erreur JSON exercices_data: {e}")
-
-        # 2) FALLBACK : Si pas de contenu stocké, extraire depuis le fichier
-        if not fragment:
-            print(f"🔄 [generer_corrige_exercice_async] Fallback: extraction depuis fichier")
-
-            # Extraction depuis fichier
-            texte_complet = extraire_texte_fichier(dem.fichier)
-            if not texte_complet:
-                raise ValueError("Impossible d'extraire le texte du fichier")
-
-            # Séparation des exercices
-            exercices_data = separer_exercices_avec_titres(texte_complet)
-            idx = soum.exercice_index or 0
-
-            if idx >= len(exercices_data):
-                print(f"⚠️ Index {idx} hors limites, utilisation du dernier exercice")
-                idx = len(exercices_data) - 1
-
-            ex_data = exercices_data[idx]
-            fragment = ex_data.get('contenu', '')
-
-            print(f"✅ Exercice {idx + 1} extrait via fallback: {len(fragment)} caractères")
-
-        # 3) Validation du fragment
-        if not fragment or len(fragment.strip()) < 10:
-            raise ValueError("Fragment d'exercice trop court ou vide")
-
-        print(f"✅ [generer_corrige_exercice_async] Fragment prêt: {len(fragment)} caractères")
-
-        # 4) Mise à jour statut pour analyse IA
+        # 2) MISE À JOUR STATUT IMMÉDIATE
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
+        print(f"📊 Statut mis à jour: analyse_ia (20%)")
 
-        # 5) Lancer la génération (IA + graph) sur ce fragment
-        mat = dem.matiere if dem.matiere else Matiere.objects.first()
-        titre_exercice = f"Exercice {soum.exercice_index + 1}" if soum.exercice_index is not None else "Exercice"
+        # 3) RÉCUPÉRATION OPTIMISÉE DU CONTENU
+        extraction_start = time.time()
+        fragment = None
+        source = "unknown"
+        idx = soum.exercice_index or 0
 
-        # Récupérer le titre réel si disponible dans exercices_data
+        # Tentative 1: Récupération depuis exercices_data
         if dem.exercices_data:
             try:
                 exercices_list = json.loads(dem.exercices_data)
                 for ex in exercices_list:
-                    if ex.get('index') == soum.exercice_index:
+                    if ex.get('index') == idx:
+                        fragment = ex.get('contenu_complet') or ex.get('contenu', '')
+                        source = "exercices_data"
+                        print(f"✅ Contenu récupéré depuis exercices_data")
+                        print(f"   - Source: {source}")
+                        print(f"   - Longueur: {len(fragment)} caractères")
+                        break
+            except json.JSONDecodeError as e:
+                print(f"⚠️  Erreur JSON exercices_data: {e}")
+
+        # Tentative 2: Fallback extraction fichier
+        if not fragment and dem.fichier:
+            print(f"🔄 Fallback: extraction depuis fichier")
+            try:
+                texte_complet = extraire_texte_fichier(dem.fichier)
+                if texte_complet and len(texte_complet.strip()) > 50:
+                    exercices_data = separer_exercices_avec_titres(texte_complet)
+
+                    if idx >= len(exercices_data):
+                        print(f"⚠️  Index {idx} hors limites, ajustement")
+                        idx = len(exercices_data) - 1 if exercices_data else 0
+
+                    ex_data = exercices_data[idx] if exercices_data else {}
+                    fragment = ex_data.get('contenu', '')
+                    source = "extraction_fraiche"
+                    print(f"✅ Contenu extrait via fallback")
+                    print(f"   - Source: {source}")
+                    print(f"   - Longueur: {len(fragment)} caractères")
+                else:
+                    print(f"⚠️  Texte extrait trop court: {len(texte_complet or '')} caractères")
+            except Exception as e:
+                print(f"❌ Erreur extraction fichier: {type(e).__name__}: {str(e)[:100]}")
+
+        extraction_time = time.time() - extraction_start
+
+        # 4) VALIDATION DU FRAGMENT
+        if not fragment or len(fragment.strip()) < 20:
+            error_msg = f"Fragment invalide (longueur: {len(fragment or '')} chars, source: {source})"
+            print(f"❌ {error_msg}")
+            print(f"⏱️  Temps extraction: {extraction_time:.1f}s")
+
+            # Mise à jour statut erreur
+            soum.statut = 'erreur'
+            soum.save()
+
+            raise ValueError(error_msg)
+
+        print(f"✅ Fragment validé")
+        print(f"⏱️  Extraction totale: {extraction_time:.1f}s")
+        print(f"📝 Début fragment: {fragment[:100].replace(chr(10), ' ')}...")
+
+        # 5) PRÉPARATION CONTEXTE IA
+        mat = dem.matiere if dem.matiere else Matiere.objects.first()
+        titre_exercice = f"Exercice {idx + 1}"
+
+        # Récupération titre depuis exercices_data si disponible
+        if dem.exercices_data and source == "exercices_data":
+            try:
+                exercices_list = json.loads(dem.exercices_data)
+                for ex in exercices_list:
+                    if ex.get('index') == idx:
                         titre_exercice = ex.get('titre_complet', ex.get('titre', titre_exercice))
                         break
             except:
                 pass
 
-        contexte = f"Exercice de {mat.nom} – {titre_exercice}"
+        contexte = f"Exercice de {mat.nom if mat else 'Matière'} – {titre_exercice}"
+        print(f"🎯 Contexte IA: {contexte}")
 
-        corrige_txt, _ = generer_corrige_ia_et_graphique(
-            texte_enonce=fragment,
-            contexte=contexte,
-            matiere=mat,
-            demande=dem
-        )
+        # 6) GÉNÉRATION IA AVEC GESTION D'ERREURS ROBUSTE
+        ia_start = time.time()
+        print(f"\n{'─' * 40}")
+        print(f"🤖 DÉBUT GÉNÉRATION IA")
+        print(f"{'─' * 40}")
 
-        # 5) Mise à jour PDF
+        try:
+            # Appel IA avec timeout global
+            corrige_txt, _ = generer_corrige_ia_et_graphique(
+                texte_enonce=fragment,
+                contexte=contexte,
+                matiere=mat,
+                demande=dem
+            )
+
+            ia_time = time.time() - ia_start
+            print(f"✅ Génération IA réussie ({ia_time:.1f}s)")
+            print(f"📝 Longueur corrigé: {len(corrige_txt or '')} caractères")
+
+            # Validation basique du corrigé
+            if not corrige_txt or len(corrige_txt.strip()) < 50:
+                error_msg = f"Corrigé trop court: {len(corrige_txt or '')} caractères"
+                print(f"⚠️  {error_msg}")
+                raise ValueError(error_msg)
+
+        except Exception as ia_error:
+            ia_time = time.time() - ia_start
+            print(f"\n❌ ÉCHEC GÉNÉRATION IA ({ia_time:.1f}s)")
+            print(f"   Type erreur: {type(ia_error).__name__}")
+            print(f"   Message: {str(ia_error)[:200]}")
+            print(f"{'─' * 40}")
+
+            # Retry automatique après délai
+            print(f"🔄 Retry automatique dans 60s...")
+            raise self.retry(exc=ia_error, countdown=60)
+
+        # 7) MISE À JOUR STATUT INTERMÉDIAIRE
         soum.statut = 'formatage_pdf'
         soum.progression = 60
         soum.save()
+        print(f"📊 Statut mis à jour: formatage_pdf (60%)")
 
-        pdf_url = generer_pdf_corrige(
-            {
-                "titre_corrige": contexte,
-                "corrige_html": corrige_txt,
-                "soumission_id": soum.id,
-                "titre_exercice": ex_data.get('titre_complet', f"Exercice {idx + 1}")
-            },
-            soum.id
-        )
+        # 8) GÉNÉRATION PDF
+        pdf_start = time.time()
+        print(f"\n{'─' * 40}")
+        print(f"📄 DÉBUT GÉNÉRATION PDF")
+        print(f"{'─' * 40}")
 
-        # 6) Débit de crédit
-        if not debiter_credit_abonnement(dem.user):
-            soum.statut = 'erreur_credit'
-            soum.save()
-            return False
-
-        # 7) CRÉATION DU CorrigePartiel - AVEC TITRE RÉEL
-        pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
-        pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
-
-        # Utiliser le titre réel de l'exercice
-        titre_reel = ex_data.get('titre_complet', ex_data.get('titre', f"Exercice {idx + 1}"))
-
-        # Nettoyer un peu le titre si trop long
-        if len(titre_reel) > 200:
-            titre_reel = titre_reel[:197] + "..."
-
-        # Ouvre le fichier PDF
-        with open(pdf_absolute_path, 'rb') as f:
-            # Crée le CorrigePartiel avec le VRAI titre
-            corrige = CorrigePartiel.objects.create(
-                soumission=soum,
-                titre_exercice=titre_reel,
+        try:
+            pdf_url = generer_pdf_corrige(
+                {
+                    "titre_corrige": contexte,
+                    "corrige_html": corrige_txt,
+                    "soumission_id": soum.id,
+                    "titre_exercice": titre_exercice
+                },
+                soum.id
             )
-            # Attache le fichier PDF
-            corrige.fichier_pdf.save(
-                f"corrige_{dem.id}_ex{idx + 1}_{soum.id}.pdf",
-                File(f)
-            )
-            corrige.save()
 
-        # 8) Finalisation
+            pdf_time = time.time() - pdf_start
+            print(f"✅ Génération PDF réussie ({pdf_time:.1f}s)")
+            print(f"📎 URL PDF: {pdf_url}")
+
+        except Exception as pdf_error:
+            pdf_time = time.time() - pdf_start
+            print(f"❌ Échec génération PDF ({pdf_time:.1f}s)")
+            print(f"   Erreur: {type(pdf_error).__name__}: {str(pdf_error)[:200]}")
+            raise pdf_error
+
+        # 9) DÉBIT CRÉDIT
+        debit_start = time.time()
+        print(f"\n{'─' * 40}")
+        print(f"💳 DÉBIT CRÉDIT UTILISATEUR")
+        print(f"{'─' * 40}")
+
+        try:
+            if not debiter_credit_abonnement(dem.user):
+                error_msg = "Crédits insuffisants"
+                print(f"❌ {error_msg}")
+
+                soum.statut = 'erreur_credit'
+                soum.save()
+
+                raise ValueError(error_msg)
+
+            debit_time = time.time() - debit_start
+            print(f"✅ Débit crédit réussi ({debit_time:.1f}s)")
+
+        except Exception as debit_error:
+            print(f"❌ Erreur débit crédit: {type(debit_error).__name__}")
+            raise debit_error
+
+        # 10) CRÉATION CORRIGEPARTIEL
+        corrige_start = time.time()
+        print(f"\n{'─' * 40}")
+        print(f"📁 CRÉATION CORRIGEPARTIEL")
+        print(f"{'─' * 40}")
+
+        try:
+            # Préparation titre
+            titre_reel = titre_exercice
+            if len(titre_reel) > 200:
+                titre_reel = titre_reel[:197] + "..."
+
+            # Récupération chemin PDF
+            pdf_relative_path = pdf_url.replace(settings.MEDIA_URL, '')
+            pdf_absolute_path = os.path.join(settings.MEDIA_ROOT, pdf_relative_path)
+
+            if not os.path.exists(pdf_absolute_path):
+                error_msg = f"Fichier PDF non trouvé: {pdf_absolute_path}"
+                print(f"❌ {error_msg}")
+                raise FileNotFoundError(error_msg)
+
+            # Création CorrigePartiel
+            with open(pdf_absolute_path, 'rb') as f:
+                corrige = CorrigePartiel.objects.create(
+                    soumission=soum,
+                    titre_exercice=titre_reel,
+                )
+                corrige.fichier_pdf.save(
+                    f"corrige_{dem.id}_ex{idx + 1}_{soum.id}_{int(time.time())}.pdf",
+                    File(f)
+                )
+                corrige.save()
+
+            corrige_time = time.time() - corrige_start
+            print(f"✅ CorrigePartiel créé ({corrige_time:.1f}s)")
+            print(f"   - ID: {corrige.id}")
+            print(f"   - Titre: {titre_reel}")
+
+        except Exception as corrige_error:
+            corrige_time = time.time() - corrige_start
+            print(f"❌ Erreur création CorrigePartiel ({corrige_time:.1f}s)")
+            print(f"   Erreur: {type(corrige_error).__name__}: {str(corrige_error)[:200]}")
+            raise corrige_error
+
+        # 11) FINALISATION
+        total_time = time.time() - task_start
+
         soum.statut = 'termine'
         soum.progression = 100
         soum.resultat_json = {
@@ -2048,20 +2341,54 @@ def generer_corrige_exercice_async(soumission_id):
             "exercice_titre": titre_reel,
             "corrige_text": corrige_txt,
             "pdf_url": pdf_url,
-            "exercice_data": ex_data  # Stocker toutes les données de l'exercice
+            "timestamp": datetime.now().isoformat(),
+            "processing_time": total_time,
+            "source_content": source
         }
         soum.save()
 
+        print(f"\n{'=' * 70}")
+        print(f"✅ TÂCHE TERMINÉE AVEC SUCCÈS!")
+        print(f"   Temps total: {total_time:.1f}s")
+        print(f"   Exercice: {titre_reel}")
+        print(f"   Source contenu: {source}")
+        print(f"   Corrigé: {len(corrige_txt)} caractères")
+        print(f"   {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'=' * 70}")
+
         return True
+
     except Exception as e:
-        print(f"❌ Erreur dans generer_corrige_exercice_async: {e}")
+        total_time = time.time() - task_start
+
+        print(f"\n{'=' * 70}")
+        print(f"❌ ERREUR CRITIQUE DANS LA TÂCHE")
+        print(f"   Temps écoulé: {total_time:.1f}s")
+        print(f"   Type erreur: {type(e).__name__}")
+        print(f"   Message: {str(e)[:300]}")
+        print(f"   Soumission ID: {soumission_id}")
+        print(f"   {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'=' * 70}")
+
+        # Log détaillé de l'erreur
         import traceback
-        traceback.print_exc()
+        error_details = traceback.format_exc()
+        print(f"\n📋 TRACEBACK COMPLET:")
+        print(error_details[:1000])  # Limité pour éviter logs trop longs
+
+        # Mise à jour statut erreur si possible
         try:
             soum = SoumissionIA.objects.get(id=soumission_id)
             soum.statut = 'erreur'
             soum.save()
         except:
             pass
-        return False
 
+        # Si c'est une erreur réseau/timeout, on retry
+        error_type = type(e).__name__
+        if error_type in ['Timeout', 'ConnectionError', 'ReadTimeout', 'ConnectTimeout']:
+            print(f"🔄 Erreur réseau détectée, retry automatique...")
+            raise self.retry(exc=e, countdown=120)
+
+        # Pour les autres erreurs, on ne retry pas
+        return False
