@@ -535,6 +535,7 @@ class SplitExercisesAPIView(APIView):
     - Crée une DemandeCorrection
     - Stocke les exercices avec leurs titres complets dans exercices_data
     - Retourne { demande_id: ..., exercices: [...] } avec vrais titres
+    - Gestion intelligente de l'extraction : MathPix pour les départements scientifiques
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
@@ -595,8 +596,30 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et découper en exercices
-        texte = extraire_texte_fichier(fichier)  # ← Extraction UNE FOIS
+        # 4) DÉTERMINER LA MÉTHODE D'EXTRACTION SELON LE DÉPARTEMENT
+        departement = None
+        methode_extraction = "standard"
+
+        if depart_id:
+            try:
+                departement = Departement.objects.get(id=depart_id)
+                # Vérifier si c'est un département scientifique
+                from .ia_utils import is_departement_scientifique
+                if is_departement_scientifique(departement):
+                    methode_extraction = "mathpix"
+                    print(f"⚛️  [SplitExercises] Département scientifique détecté: {departement.nom}")
+                    print(f"   → Utilisation de MathPix pour l'extraction")
+                else:
+                    print(f"📄 [SplitExercises] Département non scientifique: {departement.nom}")
+                    print(f"   → Utilisation de l'OCR standard")
+            except Departement.DoesNotExist:
+                print(f"⚠️  [SplitExercises] Département ID {depart_id} non trouvé")
+            except Exception as e:
+                print(f"⚠️  [SplitExercises] Erreur détection département: {e}")
+
+        # 5) Extraire le texte avec la méthode appropriée
+        print(f"🔍 [SplitExercises] Début extraction avec méthode: {methode_extraction}")
+        texte = extraire_texte_fichier(fichier, departement)  # ← AJOUT du paramètre département
 
         if not texte:
             return Response(
@@ -604,12 +627,32 @@ class SplitExercisesAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
+        # 6) ANALYSE DE L'EXTRACTION RÉALISÉE
+        texte_extraite_caracteres = len(texte)
+        formules_latex_count = texte.count("\\[") + texte.count("\\(")
 
-        # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
+        print(f"✅ [SplitExercises] Texte extrait: {texte_extraite_caracteres} caractères")
+        print(f"📊 [SplitExercises] Méthode utilisée: {methode_extraction}")
+        print(f"📐 [SplitExercises] Formules LaTeX détectées: {formules_latex_count}")
+
+        # Log supplémentaire pour MathPix
+        if methode_extraction == "mathpix":
+            # Vérifier les credentials MathPix
+            from .ia_utils import MATHPIX_APP_ID, MATHPIX_APP_KEY
+            if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
+                print("⚠️  [SplitExercises] ALERTE: Credentials MathPix non configurés!")
+            else:
+                print("🔑 [SplitExercises] Credentials MathPix OK")
+
+            # Afficher un extrait avec LaTeX
+            if texte_extraite_caracteres > 0:
+                extrait_affichage = texte[:300].replace("\n", " ")
+                print(f"📝 [SplitExercises] Extrait (avec LaTeX): {extrait_affichage}...")
+
+        # 7) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
+        # 8) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
         exercices_complets = []
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
@@ -638,49 +681,78 @@ class SplitExercisesAPIView(APIView):
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu_complet": contenu_complet,  # ← NOUVEAU : CONTENU COMPLET
-                "longueur_contenu": len(contenu_complet)
+                "contenu_complet": contenu_complet,  # ← CONTENU COMPLET
+                "longueur_contenu": len(contenu_complet),
+                "formules_latex_count": contenu_complet.count("\\[") + contenu_complet.count("\\(")
             })
 
-        # 7) Stocker les exercices COMPLETS dans la demande
+        # 9) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
+
+        # Ajouter des métadonnées d'extraction
+        demande.metadata_extraction = json.dumps({
+            "methode": methode_extraction,
+            "departement": departement.nom if departement else None,
+            "caracteres_extraits": texte_extraite_caracteres,
+            "formules_latex_total": formules_latex_count,
+            "timestamp": time.time()
+        }, ensure_ascii=False)
+
         demande.save()
 
         print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
 
-        # 8) Construire la réponse pour le frontend (extraits seulement)
+        # Statistiques détaillées
+        total_formules = sum(ex.get('formules_latex_count', 0) for ex in exercices_complets)
+        print(f"📊 [SplitExercises] Statistiques:")
+        print(f"   - Exercices détectés: {len(exercices_complets)}")
+        print(f"   - Formules LaTeX totales: {total_formules}")
+        print(f"   - Méthode d'extraction: {methode_extraction}")
+
+        # 10) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
                 "titre": ex["titre"],
-                "extrait": ex["extrait"]
+                "extrait": ex["extrait"],
+                "has_latex": ex.get("formules_latex_count", 0) > 0
             })
 
-        # 9) Répondre
+        # 11) Répondre avec informations d'extraction
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, contenu complet stocké"
+            "departement": departement.nom if departement else "Non spécifié",
+            "methode_extraction": methode_extraction,
+            "formules_detectees": total_formules > 0,
+            "info": f"{len(exercices_complets)} exercices détectés ({methode_extraction}), {total_formules} formules LaTeX"
         })
 
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
+    """
+    POST /api/soumission/exercice/
+    - Correction partielle d'un exercice spécifique
+    - Utilise MathPix si département scientifique
+    - Optimisation avec contenu pré-stocké
+    """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         try:
             user = request.user
-            # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
+            # ===== VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
             if not user_abonnement_actif(user):
                 return Response(
                     {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
                     status=status.HTTP_402_PAYMENT_REQUIRED
                 )
-            # ===========================================================
+            # ====================================================
+
             demande_id = request.data.get("demande_id")
             idx = request.data.get("index")
 
@@ -690,6 +762,7 @@ class PartialCorrectionAPIView(APIView):
                     {"error": "demande_id et index sont requis"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
             # Conversion et revalidation
             try:
                 idx = int(idx)
@@ -702,8 +775,30 @@ class PartialCorrectionAPIView(APIView):
             # 2) Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
+            # 2b) RÉCUPÉRER LES MÉTADONNÉES D'EXTRACTION
+            methode_extraction_originale = "standard"
+            departement = demande.departement
+
+            if demande.metadata_extraction:
+                try:
+                    metadata = json.loads(demande.metadata_extraction)
+                    methode_extraction_originale = metadata.get("methode", "standard")
+                    print(f"📊 [PartialCorrection] Méthode extraction originale: {methode_extraction_originale}")
+                except:
+                    pass
+
+            # Détection département scientifique
+            from .ia_utils import is_departement_scientifique
+            est_departement_scientifique = False
+            if departement:
+                est_departement_scientifique = is_departement_scientifique(departement)
+                print(f"🔬 [PartialCorrection] Département: {departement.nom}")
+                print(f"   - Scientifique: {est_departement_scientifique}")
+
             # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
             fragment_trouve = False
+            contenu_prestocke = ""
+            formules_latex_count = 0
 
             if demande.exercices_data:
                 try:
@@ -713,10 +808,15 @@ class PartialCorrectionAPIView(APIView):
                             # Vérifier qu'on a du contenu complet
                             if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
                                 fragment_trouve = True
+                                contenu_prestocke = ex['contenu_complet']
+                                formules_latex_count = ex.get('formules_latex_count', 0)
+
                                 print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
+                                print(f"   - Longueur: {len(contenu_prestocke)} caractères")
+                                print(f"   - Formules LaTeX: {formules_latex_count}")
                                 break
-                except json.JSONDecodeError:
-                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
+                except json.JSONDecodeError as e:
+                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data: {e}")
 
             # 4) Si pas de contenu stocké, vérifier qu'on a un fichier
             if not fragment_trouve and not demande.fichier:
@@ -725,40 +825,94 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 5) Création de la soumission
+            # 5) Création de la soumission avec métadonnées d'extraction
             soumission = SoumissionIA.objects.create(
                 user=user,
                 demande=demande,
                 statut='en_attente',
                 progression=0,
-                exercice_index=idx
+                exercice_index=idx,
+                metadata_extraction=json.dumps({
+                    "methode_originale": methode_extraction_originale,
+                    "departement": departement.nom if departement else None,
+                    "departement_scientifique": est_departement_scientifique,
+                    "contenu_prestocke": fragment_trouve,
+                    "formules_latex_prestockees": formules_latex_count,
+                    "timestamp": time.time()
+                }, ensure_ascii=False)
             )
 
-            # 6) Information de debug
+            # 6) Information de debug détaillée
             print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
             print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
             print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
+            print(f"   - Département: {departement.nom if departement else 'Non spécifié'}")
+            print(f"   - Scientifique: {est_departement_scientifique}")
+            print(f"   - Méthode originale: {methode_extraction_originale}")
 
-            # 7) Lancement asynchrone
-            generer_corrige_exercice_async.delay(soumission.id)
+            if fragment_trouve:
+                print(f"   - Formules LaTeX dans contenu: {formules_latex_count}")
 
-            # 8) Réponse
+                # Afficher un extrait du contenu pré-stocké
+                extrait_affichage = contenu_prestocke[:200].replace("\n", " ").replace("\r", "")
+                print(f"   - Extrait: {extrait_affichage}...")
+
+            # Vérification credentials MathPix si nécessaire
+            if est_departement_scientifique and not fragment_trouve:
+                from .ia_utils import MATHPIX_APP_ID, MATHPIX_APP_KEY
+                if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
+                    print(
+                        "⚠️  [PartialCorrection] ALERTE: Département scientifique mais credentials MathPix manquants!")
+                    print("   → L'extraction utilisera l'OCR standard en fallback")
+                else:
+                    print("🔑 [PartialCorrection] Credentials MathPix OK pour extraction scientifique")
+
+            # 7) Lancement asynchrone AVEC PARAMÈTRES D'EXTRACTION
+            # Passer le département à la tâche pour extraction optimisée
+            generer_corrige_exercice_async.delay(
+                soumission.id,
+                departement_id=departement.id if departement else None
+            )
+
+            # 8) Réponse enrichie
             return Response({
                 "success": True,
                 "soumission_exercice_id": soumission.id,
                 "message": "Exercice envoyé au traitement.",
-                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction"
+                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction",
+                "departement_scientifique": est_departement_scientifique,
+                "methode_extraction": methode_extraction_originale,
+                "formules_latex_presentes": formules_latex_count > 0,
+                "metadata": {
+                    "exercice_index": idx,
+                    "demande_id": demande_id,
+                    "departement": departement.nom if departement else None,
+                    "timestamp": time.time()
+                }
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
             # Affiche la stack complète dans les logs
             traceback.print_exc()
+
+            # Log supplémentaire pour debugging
+            print(f"🔴 [PartialCorrection] Erreur critique:")
+            print(f"   - demande_id: {demande_id}")
+            print(f"   - index: {idx}")
+            print(f"   - User: {user.id if user else 'None'}")
+            print(f"   - Erreur: {str(e)}")
+
             # Renvoie un message minimal au front
+            error_message = str(e)
+            if "DoesNotExist" in str(e):
+                error_message = "La demande spécifiée n'existe pas."
+            elif "permission" in str(e).lower():
+                error_message = "Vous n'avez pas la permission d'accéder à cette ressource."
+
             return Response(
-                {"error": f"Erreur interne: {str(e)}"},
+                {"error": f"Erreur interne: {error_message}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 #Lister les corrigés partiels d’une soumission
 class CorrigesListAPIView(generics.ListAPIView):
     serializer_class = CorrigePartielSerializer

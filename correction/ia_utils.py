@@ -34,6 +34,108 @@ import logging
 # Logger dédié
 logger = logging.getLogger(__name__)
 
+# ======= CONFIGURATION MATHPIX =======
+MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
+MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
+
+
+def ocr_mathpix(path_image: str) -> dict:
+    """
+    Appelle l'API MathPix pour extraire texte + LaTeX.
+    Retourne un dict avec 'text' et 'latex_simplified'.
+    """
+    try:
+        # Vérification des credentials
+        if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
+            print("⚠️ MathPix credentials non configurés")
+            return {"text": "", "latex_simplified": ""}
+
+        # Encodage base64 de l'image
+        with open(path_image, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode()
+
+        headers = {
+            "app_id": MATHPIX_APP_ID,
+            "app_key": MATHPIX_APP_KEY,
+            "Content-type": "application/json"
+        }
+
+        payload = {
+            "src": f"data:image/png;base64,{img_b64}",
+            "formats": ["text", "latex_simplified"],
+            "format_options": {
+                "text": {
+                    "include_latex": True,  # Inclure LaTeX dans le texte
+                    "include_line_data": False
+                },
+                "latex_simplified": {
+                    "transforms": ["rm_spaces"]  # Nettoyer les espaces
+                }
+            }
+        }
+
+        resp = requests.post(
+            "https://api.mathpix.com/v3/text",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        resp.raise_for_status()
+
+        result = resp.json()
+        print(f"✅ MathPix: {len(result.get('text', ''))} caractères extraits")
+
+        return {
+            "text": result.get("text", ""),
+            "latex_simplified": result.get("latex_simplified", "")
+        }
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Erreur API MathPix: {e}")
+        return {"text": "", "latex_simplified": ""}
+    except Exception as e:
+        print(f"❌ Erreur MathPix: {e}")
+        return {"text": "", "latex_simplified": ""}
+
+
+def extraire_avec_mathpix(fichier_path: str) -> str:
+    """
+    Extraction complète via MathPix avec formatage LaTeX propre.
+    Convertit les $$...$$ en \[...\] et $...$ en \(...\)
+    """
+    try:
+        print(f"🔬 [MathPix] Extraction pour {os.path.basename(fichier_path)}")
+
+        # Appel MathPix
+        result = ocr_mathpix(fichier_path)
+        texte_brut = result.get("text", "")
+        latex_brut = result.get("latex_simplified", "")
+
+        # Fusion intelligente
+        if latex_brut and not latex_brut.startswith("\\begin"):
+            # Si c'est une formule simple, l'encapsuler
+            latex_brut = f"\\[{latex_brut}\\]"
+
+        # Formater le texte avec LaTeX
+        texte_formate = ""
+
+        if texte_brut:
+            # Remplacer $$...$$ par \[...\]
+            texte_formate = re.sub(r'\$\$([^$]+)\$\$', r'\\[\1\\]', texte_brut)
+            # Remplacer $...$ par \(...\)
+            texte_formate = re.sub(r'(?<!\$)\$([^$]+)\$(?!\$)', r'\\(\1\\)', texte_formate)
+
+        # Ajouter le LaTeX simplifié si présent
+        if latex_brut and latex_brut not in texte_formate:
+            texte_formate += f"\n\n{latex_brut}"
+
+        print(f"✅ [MathPix] Extraction réussie: {len(texte_formate)} caractères")
+        return texte_formate.strip()
+
+    except Exception as e:
+        print(f"❌ [MathPix] Erreur extraction: {e}")
+        return ""
+
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -197,11 +299,17 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
-def analyser_document_scientifique(fichier_path: str) -> dict:
+def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
     """
-    Analyse scientifique avancée avec deepseek-vl2 :
-    - OCR (Tesseract) en fallback
-    - appel multimodal deepseek-vl2 pour texte + schémas
+    Analyse scientifique avancée avec choix d'OCR selon le département :
+    - MathPix pour les départements scientifiques (LaTeX préservé)
+    - OCR Tesseract standard pour les autres
+    - Appel multimodal deepseek-vl2 pour texte + schémas
+
+    Args:
+        fichier_path (str): Chemin vers le fichier
+        departement (Departement, optional): Département associé
+
     Retourne un dict avec :
       - texte_complet (str)
       - elements_visuels (list of captions)
@@ -210,81 +318,189 @@ def analyser_document_scientifique(fichier_path: str) -> dict:
       - angles          (list of {"valeur","unité","coord"})
       - numbers         (list of {"valeur","unité","coord"})
       - structure_exercices (list)
+      - methode_extraction (str) : "mathpix", "standard", "deepseek"
     """
     logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
 
-    # 1) OCR fallback pour avoir un premier texte
-    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
+    # DÉTERMINER LA MÉTHODE D'EXTRACTION
+    utiliser_mathpix = False
+    methode_utilisee = "standard"
+
+    if departement and is_departement_scientifique(departement):
+        utiliser_mathpix = True
+        methode_utilisee = "mathpix"
+        logger.info("⚛️  Département scientifique détecté: %s → Utilisation MathPix",
+                    departement.nom if departement else "inconnu")
+    else:
+        logger.info("📄 Département non scientifique → Extraction standard")
+
+    # 1) EXTRACTION INITIALE SELON LA MÉTHODE
     texte_ocr = ""
-    try:
-        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img = Image.open(fichier_path)
-            clean = preprocess_image_for_ocr(img)
-            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
-            logger.info("    ✓ OCR image brut extrait %d caractères", len(texte_ocr))
 
-        elif fichier_path.lower().endswith('.pdf'):
-            texte_ocr = extraire_texte_pdf(fichier_path)
-            logger.info("    ✓ PDFMiner extrait %d caractères", len(texte_ocr))
-            if len(texte_ocr) < 50:
-                logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
-                pages = convert_from_path(fichier_path, dpi=300)
-                txts = []
-                for page in pages:
-                    clean = preprocess_image_for_ocr(page)
-                    txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
-                texte_ocr = "\n".join(txts)
-                logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
+    if utiliser_mathpix:
+        # 1a) EXTRACTION AVEC MATHPIX POUR LES SCIENCES
+        try:
+            texte_ocr = extraire_avec_mathpix(fichier_path)
 
-        else:
-            raise ValueError(f"Format non supporté pour OCR : {fichier_path}")
+            if texte_ocr and len(texte_ocr) > 100:
+                logger.info("✅ MathPix: %d caractères extraits avec LaTeX", len(texte_ocr))
 
-    except Exception:
-        logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
-        # on ne stoppe pas, on continue avec texte_ocr vide
+                # Nettoyage spécifique MathPix
+                texte_ocr = texte_ocr.strip()
 
-    # 2) Appel deepseek-vl2 pour tout : texte + schémas + JSON
-    try:
-        vision_json = call_deepseek_vision(fichier_path)
+                # Log des formules LaTeX détectées
+                latex_count = texte_ocr.count("\\[") + texte_ocr.count("\\(")
+                logger.info("📐 MathPix: %d formules LaTeX détectées", latex_count)
 
-        # 2a) Texte complet : fallback sur OCR si résultat trop court
-        texte_json = vision_json.get("text", "") or ""
-        if len(texte_json) < 50:
-            texte_json = texte_ocr
+            else:
+                logger.warning("⚠️ MathPix a retourné peu de texte (%d chars), fallback OCR standard",
+                               len(texte_ocr))
+                utiliser_mathpix = False
+                methode_utilisee = "standard"
 
-        # 2b) Récupération des blocs
-        captions     = vision_json.get("captions", [])
-        latex_blocks = vision_json.get("latex_blocks", [])
-        graphs       = vision_json.get("graphs", [])
-        angles       = vision_json.get("angles", [])
-        numbers      = vision_json.get("numbers", [])
-        struct_exos  = vision_json.get("structure_exercices", [])
+        except Exception as e:
+            logger.error("❌ MathPix échoué: %s, fallback OCR standard", str(e)[:100])
+            utiliser_mathpix = False
+            methode_utilisee = "standard"
 
-        logger.info("✅ deepseek-vl2 OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
-                    len(texte_json), len(captions), len(latex_blocks), len(angles), len(numbers))
+    # 1b) FALLBACK: OCR STANDARD (Tesseract)
+    if not utiliser_mathpix or not texte_ocr or len(texte_ocr) < 50:
+        logger.info("🔄 Utilisation de l'OCR standard (Tesseract)...")
 
-        return {
-            "texte_complet": texte_json,
-            "elements_visuels": captions,
-            "formules_latex": latex_blocks,
-            "graphs": graphs,
-            "angles": angles,
-            "numbers": numbers,
-            "structure_exercices": struct_exos
-        }
+        config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
 
-    except Exception as e:
-        logger.exception("❌ Erreur deepseek-vl2 pour %s: %s", fichier_path, e)
-        # fallback minimal
-        return {
-            "texte_complet": texte_ocr,
-            "elements_visuels": [],
-            "formules_latex": [],
-            "graphs": [],
-            "angles": [],
-            "numbers": [],
-            "structure_exercices": []
-        }
+        try:
+            if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                img = Image.open(fichier_path)
+                clean = preprocess_image_for_ocr(img)
+                texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
+                logger.info("    ✓ OCR image brut extrait %d caractères", len(texte_ocr))
+
+            elif fichier_path.lower().endswith('.pdf'):
+                texte_ocr = extraire_texte_pdf(fichier_path)
+                logger.info("    ✓ PDFMiner extrait %d caractères", len(texte_ocr))
+
+                if len(texte_ocr) < 50:
+                    logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
+                    pages = convert_from_path(fichier_path, dpi=300)
+                    txts = []
+                    for page in pages:
+                        clean = preprocess_image_for_ocr(page)
+                        txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
+                    texte_ocr = "\n".join(txts)
+                    logger.info("    ✓ fallback OCR pages donne %d caractères", len(texte_ocr))
+
+            else:
+                raise ValueError(f"Format non supporté pour OCR : {fichier_path}")
+
+        except Exception:
+            logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
+            # on ne stoppe pas, on continue avec texte_ocr vide
+
+    # 2) APPEL DEEPSEEK-VL2 POUR ANALYSE MULTIMODALE
+    # (Seulement si l'extraction initiale a réussi)
+    texte_final = texte_ocr
+    captions = []
+    latex_blocks = []
+    graphs = []
+    angles = []
+    numbers = []
+    struct_exos = []
+
+    if texte_ocr and len(texte_ocr) > 50:
+        try:
+            logger.info("🔬 Appel DeepSeek Vision pour analyse multimodale...")
+            vision_json = call_deepseek_vision(fichier_path)
+            methode_utilisee = "deepseek"  # On a utilisé DeepSeek en complément
+
+            # 2a) Texte complet : fusion intelligente
+            texte_json = vision_json.get("text", "") or ""
+
+            if texte_json and len(texte_json) > 50:
+                # Si MathPix a été utilisé, prioriser son texte (avec LaTeX)
+                if utiliser_mathpix:
+                    logger.info("📊 Fusion MathPix + DeepSeek Vision")
+                    # On garde le texte MathPix (avec LaTeX) mais on peut ajouter des éléments de DeepSeek
+                    texte_final = texte_ocr
+                else:
+                    # Sinon, utiliser DeepSeek si meilleur
+                    if len(texte_json) > len(texte_ocr) * 1.5:  # 50% plus long
+                        texte_final = texte_json
+                        logger.info("✅ DeepSeek Vision fournit un texte plus complet")
+                    else:
+                        texte_final = texte_ocr
+            else:
+                texte_final = texte_ocr
+
+            # 2b) Récupération des éléments multimodaux
+            captions = vision_json.get("captions", [])
+            graphs = vision_json.get("graphs", [])
+            angles = vision_json.get("angles", [])
+            numbers = vision_json.get("numbers", [])
+            struct_exos = vision_json.get("structure_exercices", [])
+
+            # 2c) Traitement spécial des formules LaTeX
+            if utiliser_mathpix:
+                # Si MathPix a été utilisé, extraire les blocs LaTeX du texte
+                latex_blocks = []
+                # Chercher \[...\] et \(...\) dans le texte MathPix
+                import re
+                display_math = re.findall(r'\\\[(.*?)\\\]', texte_ocr, re.DOTALL)
+                inline_math = re.findall(r'\\\((.*?)\\\)', texte_ocr, re.DOTALL)
+
+                latex_blocks = [f"\\[{m}\\]" for m in display_math if m.strip()]
+                latex_blocks.extend([f"\\({m}\\)" for m in inline_math if m.strip()])
+            else:
+                # Sinon, utiliser les blocs de DeepSeek
+                latex_blocks = vision_json.get("latex_blocks", [])
+
+            logger.info("✅ Analyse multimodale OK : texte %d chars, %d schémas, %d formules, %d angles, %d nombres",
+                        len(texte_final), len(captions), len(latex_blocks), len(angles), len(numbers))
+
+            # Ajouter la méthode d'extraction aux résultats
+            resultat = {
+                "texte_complet": texte_final,
+                "elements_visuels": captions,
+                "formules_latex": latex_blocks,
+                "graphs": graphs,
+                "angles": angles,
+                "numbers": numbers,
+                "structure_exercices": struct_exos,
+                "methode_extraction": methode_utilisee,
+                "departement_scientifique": utiliser_mathpix
+            }
+
+            return resultat
+
+        except Exception as e:
+            logger.exception("❌ Erreur deepseek-vl2 pour %s: %s", fichier_path, e)
+            # Continuer avec l'extraction initiale
+
+    # 3) FALLBACK MINIMAL (si DeepSeek a échoué ou n'a pas été appelé)
+    logger.info("🔄 Utilisation de l'extraction initiale uniquement")
+
+    # Extraire les formules LaTeX si MathPix a été utilisé
+    latex_blocks = []
+    if utiliser_mathpix and texte_ocr:
+        import re
+        display_math = re.findall(r'\\\[(.*?)\\\]', texte_ocr, re.DOTALL)
+        inline_math = re.findall(r'\\\((.*?)\\\)', texte_ocr, re.DOTALL)
+
+        latex_blocks = [f"\\[{m}\\]" for m in display_math if m.strip()]
+        latex_blocks.extend([f"\\({m}\\)" for m in inline_math if m.strip()])
+        logger.info("📐 Extraction LaTeX depuis MathPix: %d formules", len(latex_blocks))
+
+    return {
+        "texte_complet": texte_ocr,
+        "elements_visuels": [],
+        "formules_latex": latex_blocks,
+        "graphs": [],
+        "angles": [],
+        "numbers": [],
+        "structure_exercices": [],
+        "methode_extraction": methode_utilisee,
+        "departement_scientifique": utiliser_mathpix
+    }
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
@@ -1350,9 +1566,9 @@ def extraire_texte_pdf(fichier_path):
 
 
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
-def extraire_texte_fichier(fichier_field):
+def extraire_texte_fichier(fichier_field, departement=None):
     """
-    Extraction robuste via analyse scientifique avec fallback OCR pour images.
+    Extraction robuste avec choix d'OCR selon le département.
     """
     if not fichier_field:
         return ""
@@ -1364,48 +1580,60 @@ def extraire_texte_fichier(fichier_field):
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    # 2) Détecter le type de fichier
     ext = os.path.splitext(local_path)[1].lower()
 
-    # 3) Pour les images, essayer d'abord un OCR simple et rapide
+    # DÉTERMINER LA MÉTHODE D'EXTRACTION
+    utiliser_mathpix = False
+    if departement and is_departement_scientifique(departement):
+        utiliser_mathpix = True
+        print(f"⚛️  Extraction MathPix pour département: {departement.nom}")
+
     texte = ""
-    if ext in ['.png', '.jpg', '.jpeg']:
-        print(f"🖼️  Fichier image détecté: {ext}, tentative OCR Tesseract...")
+
+    # 2) EXTRACTION AVEC MATHPIX (si scientifique)
+    if utiliser_mathpix and ext in ['.png', '.jpg', '.jpeg', '.pdf']:
         try:
-            import pytesseract
-            from PIL import Image
-            image = Image.open(local_path)
+            if ext == '.pdf':
+                # Convertir la première page en image pour MathPix
+                pages = convert_from_path(local_path, dpi=200, first_page=1, last_page=1)
+                if pages:
+                    temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                    pages[0].save(temp_img.name, 'PNG')
+                    texte = extraire_avec_mathpix(temp_img.name)
+                    os.unlink(temp_img.name)
+                else:
+                    raise ValueError("PDF vide")
+            else:
+                # Image directe
+                texte = extraire_avec_mathpix(local_path)
 
-            # Préprocess pour améliorer l'OCR
-            image = image.convert('L')  # Niveaux de gris
-            texte = pytesseract.image_to_string(image, lang='fra+eng')
-            print(f"✅ OCR Tesseract réussi: {len(texte)} caractères")
-
-            if len(texte) > 100:  # Si l'OCR a bien fonctionné
-                # Nettoyer
+            if texte and len(texte) > 100:
+                print(f"✅ MathPix réussi: {len(texte)} caractères")
+                # Nettoyage et retour
                 try:
                     os.unlink(local_path)
                 except:
                     pass
                 return texte.strip()
             else:
-                print("⚠️  OCR Tesseract a retourné peu de texte, essai DeepSeek...")
-        except Exception as e:
-            print(f"⚠️  OCR Tesseract échoué: {e}, passage à DeepSeek...")
+                print("⚠️  MathPix a retourné peu de texte, fallback...")
 
-    # 4) Appel à l'analyse scientifique (DeepSeek) - pour PDF et images avec OCR faible
+        except Exception as e:
+            print(f"⚠️  MathPix échoué: {e}, passage à l'OCR standard")
+
+    # 3) FALLBACK: ANALYSE SCIENTIFIQUE STANDARD
     try:
-        analyse = analyser_document_scientifique(local_path)
+        analyse = analyser_document_scientifique(local_path, departement)
         texte = analyse.get("texte_complet", "")
-        print(f"🔬 Analyse scientifique: {len(texte)} caractères")
+        print(f"🔬 Analyse standard: {len(texte)} caractères")
     except Exception as e:
         print(f"❌ Analyse scientifique échouée: {e}")
         texte = ""
 
-    # 5) Fallback final pour images si tout échoue
+    # 4) FALLBACK FINAL POUR IMAGES
     if not texte or len(texte) < 50:
         if ext in ['.png', '.jpg', '.jpeg']:
-            print("🔄 Fallback final: OCR brut sans prétraitement...")
+            print("🔄 Fallback final: OCR Tesseract brut...")
             try:
                 import pytesseract
                 from PIL import Image
@@ -1414,9 +1642,9 @@ def extraire_texte_fichier(fichier_field):
                 print(f"✅ Fallback OCR: {len(texte)} caractères")
             except Exception as e:
                 print(f"❌ Tous les OCR ont échoué: {e}")
-                texte = "Impossible d'extraire le texte de cette image."
+                texte = "Impossible d'extraire le texte de ce document."
 
-    # 6) Nettoyage
+    # 5) Nettoyage
     try:
         os.unlink(local_path)
     except:
