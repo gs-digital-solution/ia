@@ -8,6 +8,8 @@ import cv2
 from pdf2image import convert_from_path
 import matplotlib
 import openai
+import time
+from datetime import datetime
 from datetime import datetime
 import logging
 import camelot
@@ -91,6 +93,113 @@ def is_departement_scientifique(departement):
         dep_name = departement.nom.lower()
         return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
     return False
+
+
+# ========== FONCTIONS MATHPIX POUR SCIENCES ==========
+
+def extraire_texte_avec_mathpix(fichier_path, departement=None):
+    """
+    Extraction optimisée pour les matières scientifiques avec Mathpix.
+    Retourne le texte avec équations en LaTeX \(...\) ou \[...\].
+    """
+
+    # Configuration Mathpix
+    MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
+    MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
+
+    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
+        print("⚠️ Mathpix non configuré, fallback OCR")
+        return None
+
+    # Préparer l'image pour Mathpix
+    try:
+        with open(fichier_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode()
+    except Exception as e:
+        print(f"❌ Erreur lecture fichier pour Mathpix: {e}")
+        return None
+
+    headers = {
+        "app_id": MATHPIX_APP_ID,
+        "app_key": MATHPIX_APP_KEY,
+        "Content-type": "application/json"
+    }
+
+    data = {
+        "src": f"data:image/jpeg;base64,{image_data}",
+        "formats": ["text", "latex_styled"],
+        "ocr": ["math", "text"],
+        "include_line_data": True,
+        "format_options": {
+            "text": {
+                "transforms": ["rm_spaces", "rm_newlines"]
+            }
+        }
+    }
+
+    try:
+        response = requests.post(
+            "https://api.mathpix.com/v3/text",
+            json=data,
+            headers=headers,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+
+            # Extraire le texte avec LaTeX
+            texte_complet = ""
+            if "latex_styled" in result:
+                texte_complet = result["latex_styled"]
+            elif "text" in result:
+                texte_complet = result["text"]
+
+            # Nettoyer et formater le LaTeX
+            texte_complet = formater_latex_mathpix(texte_complet)
+
+            print(f"✅ Mathpix réussi: {len(texte_complet)} caractères (LaTeX inclus)")
+            return texte_complet
+
+        else:
+            print(f"❌ Mathpix error {response.status_code}: {response.text[:200]}")
+            return None
+
+    except requests.exceptions.Timeout:
+        print("⏰ Timeout Mathpix API")
+        return None
+    except Exception as e:
+        print(f"❌ Mathpix exception: {e}")
+        return None
+
+
+def formater_latex_mathpix(texte):
+    """
+    Convertit le format Mathpix en LaTeX correct \(...\) ou \[...\].
+    """
+    if not texte:
+        return ""
+
+    # Mathpix utilise $$...$$ pour display math
+    texte = re.sub(r'\$\$(.+?)\$\$', r'\\[\1\\]', texte, flags=re.DOTALL)
+
+    # $...$ pour inline math
+    texte = re.sub(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)',
+                   r'\\(\1\\)', texte, flags=re.DOTALL)
+
+    # Nettoyer les espaces dans les équations
+    def nettoyer_equation(match):
+        eq = match.group(1).strip()
+        eq = re.sub(r'\s+', ' ', eq)  # Un seul espace
+        return f'\\({eq}\\)'
+
+    texte = re.sub(r'\\\((.+?)\\\)', nettoyer_equation, texte, flags=re.DOTALL)
+
+    # Assurer la cohérence des balises
+    texte = re.sub(r'\\\[', r'\[', texte)
+    texte = re.sub(r'\\\]', r'\]', texte)
+
+    return texte
 
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
 def get_best_promptia(demande):
@@ -1453,9 +1562,10 @@ def extraire_texte_pdf(fichier_path):
 
 
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
-def extraire_texte_fichier(fichier_field):
+
+def extraire_texte_fichier(fichier_field, departement=None):
     """
-    Extraction robuste via analyse scientifique avec fallback OCR pour images.
+    Extraction intelligente : Mathpix pour scientifiques, OCR standard sinon.
     """
     if not fichier_field:
         return ""
@@ -1470,16 +1580,39 @@ def extraire_texte_fichier(fichier_field):
     # 2) Détecter le type de fichier
     ext = os.path.splitext(local_path)[1].lower()
 
-    # 3) Pour les images, essayer d'abord un OCR simple et rapide
+    # 3) STRATÉGIE D'EXTRACTION INTELLIGENTE
     texte = ""
+
+    # A) POUR LES PDF SCIENTIFIQUES : ESSAYER MATHPIX D'ABORD
+    if ext == '.pdf' and departement and is_departement_scientifique(departement):
+        print(f"🔬 Département scientifique ({departement.nom}), tentative Mathpix...")
+        texte = extraire_texte_avec_mathpix(local_path, departement)
+
+        if texte and len(texte) > 100:
+            print(f"✅ Mathpix utilisé pour {departement.nom}")
+            # Appliquer le filtrage des entêtes
+            texte = filtrer_entetes_pieds_page(texte)
+
+            try:
+                os.unlink(local_path)
+            except:
+                pass
+
+            return texte.strip()
+        else:
+            print(f"⚠️ Mathpix échoué ou résultat court, fallback OCR standard")
+            texte = ""  # Réinitialiser pour OCR standard
+
+    # B) OCR STANDARD (VOTRE CODE ORIGINAL - MODIFIÉ POUR ACCEPTER local_path)
+    print(f"🔄 Extraction standard pour {ext}")
+
+    # Pour les images, essayer d'abord un OCR simple et rapide
     if ext in ['.png', '.jpg', '.jpeg']:
         print(f"🖼️  Fichier image détecté: {ext}, tentative OCR Tesseract...")
         try:
             import pytesseract
             from PIL import Image
             image = Image.open(local_path)
-
-            # Préprocess pour améliorer l'OCR
             image = image.convert('L')  # Niveaux de gris
             texte = pytesseract.image_to_string(image, lang='fra+eng')
             print(f"✅ OCR Tesseract réussi: {len(texte)} caractères")
@@ -1490,6 +1623,9 @@ def extraire_texte_fichier(fichier_field):
                     os.unlink(local_path)
                 except:
                     pass
+
+                # Appliquer le filtrage
+                texte = filtrer_entetes_pieds_page(texte)
                 return texte.strip()
             else:
                 print("⚠️  OCR Tesseract a retourné peu de texte, essai DeepSeek...")
@@ -1519,7 +1655,7 @@ def extraire_texte_fichier(fichier_field):
                 print(f"❌ Tous les OCR ont échoué: {e}")
                 texte = "Impossible d'extraire le texte de cette image."
 
-    # 6) FILTRAGE DES ENTÊTES/PIEDS DE PAGE (NOUVEAU)
+    # 6) FILTRAGE DES ENTÊTES/PIEDS DE PAGE
     if texte and len(texte) > 100:
         texte = filtrer_entetes_pieds_page(texte)
         print(f"🧹 Texte filtré: {len(texte)} caractères")
@@ -2196,8 +2332,7 @@ def generer_corrige_exercice_async(self, soumission_id):
     Tâche asynchrone pour corriger UN exercice isolé.
     Version robuste avec retries automatiques, timeout gérés et logging détaillé.
     """
-    import time
-    from datetime import datetime
+
 
     task_start = time.time()
     print(f"\n{'=' * 70}")
@@ -2248,7 +2383,7 @@ def generer_corrige_exercice_async(self, soumission_id):
         if not fragment and dem.fichier:
             print(f"🔄 Fallback: extraction depuis fichier")
             try:
-                texte_complet = extraire_texte_fichier(dem.fichier)
+                texte_complet = extraire_texte_fichier(dem.fichier, departement=dem.departement)
                 if texte_complet and len(texte_complet.strip()) > 50:
                     exercices_data = separer_exercices_avec_titres(texte_complet)
 

@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from .models import DemandeCorrection, SoumissionIA
-from .ia_utils import generer_corrige_ia_et_graphique_async
+from .ia_utils import generer_corrige_ia_et_graphique_async, is_departement_scientifique
 from resources.models import Pays, SousSysteme, Classe, Matiere, TypeExercice,Lecon,Departement
 import json
 from rest_framework.parsers import MultiPartParser, JSONParser
@@ -545,13 +545,13 @@ class SplitExercisesAPIView(APIView):
         # 1) Récupérer les IDs passés
         pays_id = request.data.get('pays')
         sous_id = request.data.get('sous_systeme')
-        depart_id = request.data.get('departement')
+        departement_id = request.data.get('departement')
         classe_id = request.data.get('classe')
         matiere_id = request.data.get('matiere')
         type_exo_id = request.data.get('type_exercice')
         lecons_ids = request.data.get('lecons_ids')
 
-        # 2) Récupérer le fichier d'énoncé et vérifier sa présence
+        # 2) Récupérer le fichier d'énoncé
         fichier = request.FILES.get('fichier')
         if not fichier:
             return Response(
@@ -560,13 +560,13 @@ class SplitExercisesAPIView(APIView):
             )
 
         # 2b) VÉRIFICATION TAILLE FICHIER (1 Mo max)
-        if fichier.size > 1048576:  # 1 Mo en octets
+        if fichier.size > 1048576:
             return Response(
                 {"error": "Le fichier ne doit pas dépasser 1 Mo."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2c) VÉRIFICATION FORMAT (PDF ou images)
+        # 2c) VÉRIFICATION FORMAT
         ext = os.path.splitext(fichier.name)[1].lower()
         allowed_ext = ['.pdf', '.png', '.jpg', '.jpeg']
         if ext not in allowed_ext:
@@ -575,12 +575,12 @@ class SplitExercisesAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3) Créer la demande (nom_fichier sera auto-rempli via save())
+        # 3) Créer la demande
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
             sous_systeme_id=sous_id,
-            departement_id=depart_id,
+            departement_id=departement_id,
             classe_id=classe_id,
             matiere_id=matiere_id,
             type_exercice_id=type_exo_id,
@@ -595,8 +595,17 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et découper en exercices
-        texte = extraire_texte_fichier(fichier)  # ← Extraction UNE FOIS
+        # 4) RÉCUPÉRER LE DÉPARTEMENT POUR L'EXTRACTION
+        departement = None
+        if departement_id:
+            departement = Departement.objects.filter(pk=departement_id).first()
+
+        if departement:
+            print(f"📁 Département pour extraction: {departement.nom}")
+            print(f"   Scientifique? {is_departement_scientifique(departement)}")
+
+        # 5) Extraire le texte avec la méthode adaptée
+        texte = extraire_texte_fichier(fichier, departement)  # ← DEPARTEMENT PASSÉ ICI !
 
         if not texte:
             return Response(
@@ -605,18 +614,13 @@ class SplitExercisesAPIView(APIView):
             )
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
+        print(
+            f"   Méthode: {'Mathpix' if departement and is_departement_scientifique(departement) else 'OCR standard'}")
 
-        # Log des premières lignes pour vérification
-        lignes = texte.split('\n')[:10]
-        print("📋 Premières lignes après filtrage:")
-        for i, ligne in enumerate(lignes):
-            if ligne.strip():
-                print(f"   {i+1}: {ligne[:80]}...")
-
-        # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
+        # 6) Séparation + validation index
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
+        # 7) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
         exercices_complets = []
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
@@ -649,13 +653,13 @@ class SplitExercisesAPIView(APIView):
                 "longueur_contenu": len(contenu_complet)
             })
 
-        # 7) Stocker les exercices COMPLETS dans la demande
+        # 8) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
         print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
 
-        # 8) Construire la réponse pour le frontend (extraits seulement)
+        # 9) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
@@ -664,7 +668,7 @@ class SplitExercisesAPIView(APIView):
                 "extrait": ex["extrait"]
             })
 
-        # 9) Répondre
+        # 10) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
