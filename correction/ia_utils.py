@@ -703,6 +703,15 @@ def filtrer_entetes_pieds_page(texte_complet):
         # Lignes trop courtes et répétitives (souvent des entêtes)
         r'^\s*\w{1,3}\s*$',  # "MAT", "PHY"
     ]
+    # Ajouter ces patterns
+    patterns_a_supprimer += [
+        r'^\s*MINESEC.*$',
+        r'^\s*Coefficient.*$',
+        r'^\s*PROBATOIRE.*$',
+        r'^\s*Session.*$',
+        r'^\s*BACCALAUREAT.*$',
+
+    ]
 
     # Compiler les regex une fois
     compiled_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in patterns_a_supprimer]
