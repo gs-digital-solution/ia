@@ -100,9 +100,8 @@ def is_departement_scientifique(departement):
 def extraire_texte_avec_mathpix(fichier_path, departement=None):
     """
     Extraction optimisée pour les matières scientifiques avec Mathpix.
-    Retourne le texte avec équations en LaTeX \(...\) ou \[...\].
+    Version améliorée avec meilleure gestion des échecs.
     """
-
     # Configuration Mathpix
     MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
     MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
@@ -125,16 +124,24 @@ def extraire_texte_avec_mathpix(fichier_path, departement=None):
         "Content-type": "application/json"
     }
 
+    # Configuration optimisée pour les équations
     data = {
         "src": f"data:image/jpeg;base64,{image_data}",
-        "formats": ["text", "latex_styled"],
+        "formats": ["text", "latex_styled", "latex_mathpix"],
         "ocr": ["math", "text"],
         "include_line_data": True,
+        "math_inline_delimiters": ["$", "$"],
+        "math_display_delimiters": ["$$", "$$"],
         "format_options": {
             "text": {
                 "transforms": ["rm_spaces", "rm_newlines"]
+            },
+            "latex_styled": {
+                "transforms": ["rm_spaces"]
             }
-        }
+        },
+        "skip_recrop": True,
+        "skip_face_detection": True
     }
 
     try:
@@ -142,64 +149,175 @@ def extraire_texte_avec_mathpix(fichier_path, departement=None):
             "https://api.mathpix.com/v3/text",
             json=data,
             headers=headers,
-            timeout=30
+            timeout=45  # Timeout augmenté
         )
 
         if response.status_code == 200:
             result = response.json()
 
-            # Extraire le texte avec LaTeX
+            # DEBUG: Afficher la structure complète
+            print(f"📊 [Mathpix Response] Keys: {result.keys()}")
+
+            # Priorité aux formats avec LaTeX
             texte_complet = ""
-            if "latex_styled" in result:
+
+            if "latex_mathpix" in result:
+                texte_complet = result["latex_mathpix"]
+                print("✅ Utilisation latex_mathpix")
+            elif "latex_styled" in result:
                 texte_complet = result["latex_styled"]
+                print("✅ Utilisation latex_styled")
             elif "text" in result:
                 texte_complet = result["text"]
+                print("⚠️  Fallback text (pas de LaTeX)")
+
+            # Vérifier si on a des équations
+            has_math = re.search(r'\\[\[\(]', texte_complet)
+            if not has_math:
+                print("⚠️  Mathpix n'a pas extrait d'équations LaTeX")
+                # Analyser pourquoi
+                if "error" in result:
+                    print(f"❌ Erreur Mathpix: {result['error']}")
 
             # Nettoyer et formater le LaTeX
-            texte_complet = formater_latex_mathpix(texte_complet)
+            texte_formate = formater_latex_mathpix(texte_complet)
 
-            print(f"✅ Mathpix réussi: {len(texte_complet)} caractères (LaTeX inclus)")
-            return texte_complet
+            # Vérifier la qualité
+            math_blocks = re.findall(r'\\[\[\(].+?\\[\]\)]', texte_formate, re.DOTALL)
+            print(f"✅ Mathpix réussi: {len(texte_formate)} caractères")
+            print(f"   - Équations détectées: {len(math_blocks)}")
+
+            if len(math_blocks) > 0:
+                print(f"   - Exemple équation: {math_blocks[0][:100]}...")
+
+            return texte_formate
 
         else:
-            print(f"❌ Mathpix error {response.status_code}: {response.text[:200]}")
+            error_msg = f"❌ Mathpix error {response.status_code}"
+            if response.text:
+                error_details = response.text[:200]
+                print(f"{error_msg}: {error_details}")
+            else:
+                print(error_msg)
             return None
 
     except requests.exceptions.Timeout:
-        print("⏰ Timeout Mathpix API")
+        print("⏰ Timeout Mathpix API (45s)")
         return None
     except Exception as e:
-        print(f"❌ Mathpix exception: {e}")
+        print(f"❌ Mathpix exception: {type(e).__name__}: {str(e)[:200]}")
         return None
-
 
 def formater_latex_mathpix(texte):
     """
     Convertit le format Mathpix en LaTeX correct \(...\) ou \[...\].
+    Version améliorée pour éviter les équations vides.
     """
     if not texte:
         return ""
 
-    # Mathpix utilise $$...$$ pour display math
+    # Debug : Afficher ce que retourne Mathpix
+    print(f"🔧 [Mathpix Raw] {texte[:500]}...")
+
+    # 1) Remplacer les anciens formats
+    # $$...$$ → \[...\]
     texte = re.sub(r'\$\$(.+?)\$\$', r'\\[\1\\]', texte, flags=re.DOTALL)
 
-    # $...$ pour inline math
-    texte = re.sub(r'(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)',
+    # $...$ → \(...\)
+    texte = re.sub(r'(?<!\$)\$(.+?)(?<!\$)\$(?!\$)',
                    r'\\(\1\\)', texte, flags=re.DOTALL)
 
-    # Nettoyer les espaces dans les équations
-    def nettoyer_equation(match):
-        eq = match.group(1).strip()
-        eq = re.sub(r'\s+', ' ', eq)  # Un seul espace
-        return f'\\({eq}\\)'
+    # 2) Gérer les formats LaTeX déjà présents mais mal formatés
+    # Cas 1: \\( équation \\) avec mauvais échappement
+    texte = re.sub(r'\\\\([\[(])(.+?)\\\\\([\]\)])',
+                   lambda m: f'\\{m.group(1)}{m.group(2)}\\{m.group(3)}',
+                   texte, flags=re.DOTALL)
 
-    texte = re.sub(r'\\\((.+?)\\\)', nettoyer_equation, texte, flags=re.DOTALL)
+    # Cas 2: Équations sans contenu - vérifier et nettoyer
+    def valider_equation(match):
+        eq_content = match.group(1).strip()
+        # Si l'équation est vide ou ne contient que des espaces/punctuation
+        if not eq_content or re.match(r'^[\s,.•\-]*$', eq_content):
+            print(f"⚠️  Équation vide détectée: '{eq_content}'")
+            # On pourrait soit la supprimer, soit la marquer
+            return f'\\[\\text{{[équation manquante]}}\\]'
 
-    # Assurer la cohérence des balises
-    texte = re.sub(r'\\\[', r'\[', texte)
-    texte = re.sub(r'\\\]', r'\]', texte)
+        # Nettoyer les espaces multiples mais garder les espaces nécessaires
+        eq_content = re.sub(r'\s+', ' ', eq_content)
+        return f'\\[{eq_content}\\]'
+
+    # Appliquer la validation aux display math
+    texte = re.sub(r'\\\[(.+?)\\\]', valider_equation, texte, flags=re.DOTALL)
+
+    # 3) Corriger les vecteurs et notations spéciales
+    # Vecteurs : \vec{i}, \vec{j}, \vec{k}
+    texte = re.sub(r'(\\vec\s*\{?\s*[ijkt]\s*\}?)',
+                   lambda m: m.group(1).replace(' ', ''),
+                   texte)
+
+    # 4) Normaliser les commandes LaTeX
+    replacements = {
+        r'\\begin\{equation\}': r'\\[',
+        r'\\end\{equation\}': r'\\]',
+        r'\\begin\{align\}': r'\\[\\begin{aligned}',
+        r'\\end\{align\}': r'\\end{aligned}\\]',
+        r'\\displaystyle': '',
+        r'\\textstyle': '',
+    }
+
+    for pattern, replacement in replacements.items():
+        texte = re.sub(pattern, replacement, texte)
+
+    # 5) S'assurer que les parenthèses sont correctes
+    # Éviter les \\( \\) sans contenu
+    texte = re.sub(r'\\\(\s*\\\)', '', texte)  # Équation vide inline
+    texte = re.sub(r'\\\[\s*\\\]', '', texte)  # Équation vide display
+
+    # 6) Debug : Afficher le résultat formaté
+    print(f"✅ [Mathpix Formatté] {texte[:500]}...")
 
     return texte
+
+
+def evaluer_qualite_mathpix(texte):
+    """
+    Évalue si l'extraction Mathpix est de bonne qualité.
+    Retourne un score et une décision.
+    """
+    if not texte:
+        return {"score": 0, "decision": "fallback", "raison": "texte vide"}
+
+    # Critères de qualité
+    criteres = {
+        "longueur_min": len(texte) > 100,  # Au moins 100 caractères
+        "a_des_equations": bool(re.search(r'\\[\[\(]', texte)),  # Contient du LaTeX
+        "pas_trop_d_espaces": len(re.findall(r'\s{5,}', texte)) < 3,  # Pas trop d'espaces multiples
+        "contient_mots_cles": any(word in texte.lower() for word in
+                                  ['équation', 'calcul', 'résoudre', 'déterminer',
+                                   'montrer', 'exprimer', 'donnée'])
+    }
+
+    # Calcul du score
+    score = sum(1 for critere in criteres.values() if critere)
+    total_criteres = len(criteres)
+
+    # Décision
+    if score >= total_criteres - 1:  # 3/4 critères minimum
+        decision = "keep"
+        raison = f"Score élevé: {score}/{total_criteres}"
+    elif score >= 2:
+        decision = "keep_with_warning"
+        raison = f"Score moyen: {score}/{total_criteres}"
+    else:
+        decision = "fallback"
+        raison = f"Score faible: {score}/{total_criteres}"
+
+    # Debug
+    print(f"📊 Évaluation Mathpix: {raison}")
+    for nom, valeur in criteres.items():
+        print(f"   - {nom}: {'✓' if valeur else '✗'}")
+
+    return {"score": score, "decision": decision, "raison": raison}
 
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
 def get_best_promptia(demande):
@@ -1565,7 +1683,7 @@ def extraire_texte_pdf(fichier_path):
 
 def extraire_texte_fichier(fichier_field, departement=None):
     """
-    Extraction intelligente : Mathpix pour scientifiques, OCR standard sinon.
+    Extraction intelligente avec validation de qualité.
     """
     if not fichier_field:
         return ""
@@ -1580,87 +1698,61 @@ def extraire_texte_fichier(fichier_field, departement=None):
     # 2) Détecter le type de fichier
     ext = os.path.splitext(local_path)[1].lower()
 
-    # 3) STRATÉGIE D'EXTRACTION INTELLIGENTE
+    # 3) STRATÉGIE POUR LES SCIENTIFIQUES
     texte = ""
-
-    # A) POUR LES PDF SCIENTIFIQUES : ESSAYER MATHPIX D'ABORD
     if ext == '.pdf' and departement and is_departement_scientifique(departement):
         print(f"🔬 Département scientifique ({departement.nom}), tentative Mathpix...")
-        texte = extraire_texte_avec_mathpix(local_path, departement)
 
-        if texte and len(texte) > 100:
-            print(f"✅ Mathpix utilisé pour {departement.nom}")
-            # Appliquer le filtrage des entêtes
-            texte = filtrer_entetes_pieds_page(texte)
+        # Premier essai avec Mathpix
+        texte_mathpix = extraire_texte_avec_mathpix(local_path, departement)
 
-            try:
-                os.unlink(local_path)
-            except:
-                pass
+        if texte_mathpix:
+            # Évaluer la qualité
+            evaluation = evaluer_qualite_mathpix(texte_mathpix)
 
-            return texte.strip()
-        else:
-            print(f"⚠️ Mathpix échoué ou résultat court, fallback OCR standard")
-            texte = ""  # Réinitialiser pour OCR standard
-
-    # B) OCR STANDARD (VOTRE CODE ORIGINAL - MODIFIÉ POUR ACCEPTER local_path)
-    print(f"🔄 Extraction standard pour {ext}")
-
-    # Pour les images, essayer d'abord un OCR simple et rapide
-    if ext in ['.png', '.jpg', '.jpeg']:
-        print(f"🖼️  Fichier image détecté: {ext}, tentative OCR Tesseract...")
-        try:
-            import pytesseract
-            from PIL import Image
-            image = Image.open(local_path)
-            image = image.convert('L')  # Niveaux de gris
-            texte = pytesseract.image_to_string(image, lang='fra+eng')
-            print(f"✅ OCR Tesseract réussi: {len(texte)} caractères")
-
-            if len(texte) > 100:  # Si l'OCR a bien fonctionné
-                # Nettoyer
-                try:
-                    os.unlink(local_path)
-                except:
-                    pass
-
-                # Appliquer le filtrage
-                texte = filtrer_entetes_pieds_page(texte)
-                return texte.strip()
+            if evaluation["decision"] in ["keep", "keep_with_warning"]:
+                print(f"✅ Mathpix accepté ({evaluation['raison']})")
+                texte = texte_mathpix
             else:
-                print("⚠️  OCR Tesseract a retourné peu de texte, essai DeepSeek...")
+                print(f"⚠️  Mathpix rejeté, fallback OCR ({evaluation['raison']})")
+                texte = ""
+        else:
+            print(f"⚠️  Mathpix échoué, fallback OCR")
+            texte = ""
+
+    # 4) Fallback OCR si nécessaire
+    if not texte or len(texte.strip()) < 100:
+        print(f"🔄 Fallback OCR standard pour {ext}")
+
+        # Utiliser l'analyse scientifique (DeepSeek)
+        try:
+            analyse = analyser_document_scientifique(local_path)
+            texte = analyse.get("texte_complet", "")
+            print(f"🔬 Analyse scientifique: {len(texte)} caractères")
         except Exception as e:
-            print(f"⚠️  OCR Tesseract échoué: {e}, passage à DeepSeek...")
+            print(f"❌ Analyse scientifique échouée: {e}")
+            texte = ""
 
-    # 4) Appel à l'analyse scientifique (DeepSeek) - pour PDF et images avec OCR faible
-    try:
-        analyse = analyser_document_scientifique(local_path)
-        texte = analyse.get("texte_complet", "")
-        print(f"🔬 Analyse scientifique: {len(texte)} caractères")
-    except Exception as e:
-        print(f"❌ Analyse scientifique échouée: {e}")
-        texte = ""
+        # Fallback final OCR simple
+        if not texte or len(texte) < 50:
+            if ext in ['.png', '.jpg', '.jpeg']:
+                print("🔄 Fallback final: OCR Tesseract...")
+                try:
+                    image = Image.open(local_path)
+                    texte = pytesseract.image_to_string(image, lang='fra+eng')
+                except Exception as e:
+                    print(f"❌ OCR Tesseract échoué: {e}")
+                    texte = ""
 
-    # 5) Fallback final pour images si tout échoue
-    if not texte or len(texte) < 50:
-        if ext in ['.png', '.jpg', '.jpeg']:
-            print("🔄 Fallback final: OCR brut sans prétraitement...")
-            try:
-                import pytesseract
-                from PIL import Image
-                image = Image.open(local_path)
-                texte = pytesseract.image_to_string(image, lang='fra+eng')
-                print(f"✅ Fallback OCR: {len(texte)} caractères")
-            except Exception as e:
-                print(f"❌ Tous les OCR ont échoué: {e}")
-                texte = "Impossible d'extraire le texte de cette image."
-
-    # 6) FILTRAGE DES ENTÊTES/PIEDS DE PAGE
+    # 5) FILTRAGE DES ENTÊTES/PIEDS DE PAGE
     if texte and len(texte) > 100:
         texte = filtrer_entetes_pieds_page(texte)
         print(f"🧹 Texte filtré: {len(texte)} caractères")
 
-    # 7) Nettoyage
+        # Debug: Afficher un échantillon
+        print(f"📄 Échantillon extrait: {texte[:300].replace(chr(10), ' ')}...")
+
+    # 6) Nettoyage
     try:
         os.unlink(local_path)
     except:
