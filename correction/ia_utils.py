@@ -452,7 +452,12 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
     if not texte_epreuve:
         return []
 
-    lignes = texte_epreuve.splitlines()
+    # FILTRAGE SUPPLÉMENTAIRE (NOUVEAU)
+    texte_filtre = filtrer_entetes_pieds_page(texte_epreuve)
+    print(f"📊 Avant filtrage: {len(texte_epreuve)} chars, Après: {len(texte_filtre)} chars")
+
+    # Utiliser le texte filtré pour la suite
+    lignes = texte_filtre.splitlines()
 
     # ========== LISTE ÉTENDUE DE MOTS-CLÉS ==========
     mots_cles_exercices = [
@@ -658,6 +663,95 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             })
 
     return resultats
+
+
+def filtrer_entetes_pieds_page(texte_complet):
+    """
+    Filtre les entêtes et pieds de page courants dans les documents académiques.
+    Retourne le texte nettoyé.
+    """
+    if not texte_complet:
+        return ""
+
+    lignes = texte_complet.split('\n')
+    lignes_filtrees = []
+
+    # Patterns pour entêtes/pieds de page (à enrichir selon vos documents)
+    patterns_a_supprimer = [
+        # Pieds de page avec numérotation
+        r'^\s*page\s*\d+\s*/\s*\d+\s*$',  # "Page 1/3"
+        r'^\s*\d+\s*/\s*\d+\s*$',  # "1/3"
+        r'^\s*-\s*\d+\s*-\s*$',  # "- 1 -"
+
+        # Entêtes répétitives
+        r'^\s*épreuve\s+de\s+[\w\s]+$',  # "Épreuve de Mathématiques"
+        r'^\s*classe\s*:.*$',  # "Classe : Terminale S"
+        r'^\s*année\s+scolaire.*$',  # "Année scolaire 2024-2025"
+        r'^\s*durée\s*:.*$',  # "Durée : 2 heures"
+
+        # Numéros de page seuls
+        r'^\s*\d+\s*$',  # "1", "2"
+
+        # En-têtes de colonnes répétitives
+        r'^\s*nom\s+et\s+prénom.*$',
+        r'^\s*établissement.*$',
+
+        # Codes d'identification
+        r'^\s*code\s*:.*$',
+        r'^\s*réf\..*$',
+
+        # Lignes trop courtes et répétitives (souvent des entêtes)
+        r'^\s*\w{1,3}\s*$',  # "MAT", "PHY"
+    ]
+
+    # Compiler les regex une fois
+    compiled_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in patterns_a_supprimer]
+
+    # Détecter les lignes qui se répètent (indice d'entête/pied de page)
+    compteur_lignes = {}
+    for ligne in lignes:
+        ligne_nettoyee = ligne.strip().lower()
+        if ligne_nettoyee:
+            compteur_lignes[ligne_nettoyee] = compteur_lignes.get(ligne_nettoyee, 0) + 1
+
+    for ligne in lignes:
+        ligne_stripped = ligne.strip()
+
+        # Ignorer les lignes vides
+        if not ligne_stripped:
+            lignes_filtrees.append(ligne)  # Garder les sauts de ligne
+            continue
+
+        # Vérifier les patterns
+        a_supprimer = False
+        for pattern in compiled_patterns:
+            if pattern.match(ligne_stripped):
+                a_supprimer = True
+                break
+
+        # Vérifier si la ligne se répète trop (plus de 2 fois = probable entête/pied)
+        if not a_supprimer and len(lignes) > 20:  # Seulement pour docs longs
+            ligne_lower = ligne_stripped.lower()
+            if compteur_lignes.get(ligne_lower, 0) > 2:
+                a_supprimer = True
+
+        # Vérifier si c'est une numérotation isolée
+        if not a_supprimer and re.match(r'^\s*[ivxldcm]+\s*$', ligne_stripped, re.IGNORECASE):
+            a_supprimer = True
+
+        if not a_supprimer:
+            lignes_filtrees.append(ligne)
+        else:
+            print(f"🔍 Ligne filtrée: '{ligne_stripped[:50]}...'")
+
+    # Reconstruire le texte
+    texte_filtre = '\n'.join(lignes_filtrees)
+
+    # Nettoyer les multiples lignes vides
+    texte_filtre = re.sub(r'\n{3,}', '\n\n', texte_filtre)
+
+    print(f"✅ Filtrage: {len(lignes)} → {len(lignes_filtrees)} lignes")
+    return texte_filtre
 
 def estimer_tokens(texte):
     """
@@ -1416,7 +1510,12 @@ def extraire_texte_fichier(fichier_field):
                 print(f"❌ Tous les OCR ont échoué: {e}")
                 texte = "Impossible d'extraire le texte de cette image."
 
-    # 6) Nettoyage
+    # 6) FILTRAGE DES ENTÊTES/PIEDS DE PAGE (NOUVEAU)
+    if texte and len(texte) > 100:
+        texte = filtrer_entetes_pieds_page(texte)
+        print(f"🧹 Texte filtré: {len(texte)} caractères")
+
+    # 7) Nettoyage
     try:
         os.unlink(local_path)
     except:

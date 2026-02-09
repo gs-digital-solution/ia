@@ -606,6 +606,13 @@ class SplitExercisesAPIView(APIView):
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
 
+        # Log des premières lignes pour vérification
+        lignes = texte.split('\n')[:10]
+        print("📋 Premières lignes après filtrage:")
+        for i, ligne in enumerate(lignes):
+            if ligne.strip():
+                print(f"   {i+1}: {ligne[:80]}...")
+
         # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
