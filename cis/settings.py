@@ -271,7 +271,7 @@ LOGGING = {
     'disable_existing_loggers': False,
     'handlers': {
         'file': {
-            'level': 'INFO',       # passez à INFO ici
+            'level': 'DEBUG',       # passez à INFO ici
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'django-error.log'),
         },
