@@ -86,7 +86,35 @@ DEPARTEMENTS_SCIENTIFIQUES = [
     'mathematiques', 'mathématiques', 'physique', 'chimie',
     'biologie', 'svt', 'sciences', 'informatique'
 ]
+def is_departement_scientifique(departement):
+    """
+    Version améliorée avec matching flexible.
+    Retourne True si le département est considéré comme scientifique.
+    """
+    if not departement or not departement.nom:
+        return False
 
+    dep_name = departement.nom.lower().strip()
+
+    # Mots-clés scientifiques (en minuscules)
+    scientific_keywords = [
+        'math', 'physique', 'chimie', 'biologie', 'svt',
+        'science', 'informatique', 'technologie', 'ingenierie',
+        'calcul', 'algebre', 'geometrie', 'statistique'
+    ]
+
+    # Vérifier si un mot-clé est présent dans le nom
+    for keyword in scientific_keywords:
+        if keyword in dep_name:
+            return True
+
+    # Abréviations courantes
+    abbreviations = ['math', 'phy', 'chim', 'bio', 'sci', 'info', 'tech']
+    for abbrev in abbreviations:
+        if abbrev in dep_name:
+            return True
+
+    return False
 
 def debug_departement_logic(departement):
     """
