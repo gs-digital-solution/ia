@@ -83,17 +83,30 @@ def get_blip_model():
 
 
 DEPARTEMENTS_SCIENTIFIQUES = [
-    'MATHEMATIQUES', 'PHYSIQUE', 'CHIMIE', 'biologie', 'svt', 'sciences', 'informatique'
+    'mathematiques', 'mathématiques', 'physique', 'chimie',
+    'biologie', 'svt', 'sciences', 'informatique'
 ]
+
+
 def is_departement_scientifique(departement):
     """
-    Renvoie True si le département fait partie des filières scientifiques définies globalement.
+    Renvoie True si le département fait partie des filières scientifiques.
+    Version améliorée avec logs.
     """
-    if departement and departement.nom:
-        dep_name = departement.nom.lower()
-        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
-    return False
+    if not departement or not departement.nom:
+        return False
 
+    dep_name = departement.nom.lower().strip()
+    print(f"🔍 [is_departement_scientifique] Analyse: '{dep_name}'")
+
+    # Vérifier chaque terme scientifique
+    for scientific_term in DEPARTEMENTS_SCIENTIFIQUES:
+        if scientific_term in dep_name:
+            print(f"✅ [is_departement_scientifique] TERME TROUVÉ: '{scientific_term}' dans '{dep_name}'")
+            return True
+
+    print(f"❌ [is_departement_scientifique] PAS scientifique: '{dep_name}'")
+    return False
 
 # ========== FONCTIONS MATHPIX POUR SCIENCES ==========
 
