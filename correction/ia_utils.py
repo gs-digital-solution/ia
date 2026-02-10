@@ -88,25 +88,27 @@ DEPARTEMENTS_SCIENTIFIQUES = [
 ]
 
 
-def is_departement_scientifique(departement):
+def debug_departement_logic(departement):
     """
-    Renvoie True si le département fait partie des filières scientifiques.
-    Version améliorée avec logs.
+    Fonction de débogage pour voir si le département est détecté comme scientifique
     """
-    if not departement or not departement.nom:
-        return False
+    print(f"\n🔍 DEBUG DÉPARTEMENT:")
+    print(f"   - Objet: {departement}")
+    if departement:
+        print(f"   - Nom: '{departement.nom}'")
+        print(f"   - Nom lower: '{departement.nom.lower()}'")
 
-    dep_name = departement.nom.lower().strip()
-    print(f"🔍 [is_departement_scientifique] Analyse: '{dep_name}'")
+        result = is_departement_scientifique(departement)
+        print(f"   - is_departement_scientifique: {result}")
 
-    # Vérifier chaque terme scientifique
-    for scientific_term in DEPARTEMENTS_SCIENTIFIQUES:
-        if scientific_term in dep_name:
-            print(f"✅ [is_departement_scientifique] TERME TROUVÉ: '{scientific_term}' dans '{dep_name}'")
-            return True
+        # Test manuel
+        dep_name = departement.nom.lower()
+        keywords = ['math', 'physique', 'chimie', 'biologie', 'svt', 'science']
+        for kw in keywords:
+            if kw in dep_name:
+                print(f"   ✓ Mot-clé '{kw}' trouvé dans '{dep_name}'")
 
-    print(f"❌ [is_departement_scientifique] PAS scientifique: '{dep_name}'")
-    return False
+    return result
 
 # ========== FONCTIONS MATHPIX POUR SCIENCES ==========
 
@@ -563,7 +565,7 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
     """
     Analyse scientifique avancée avec priorité Mathpix pour les sciences.
-    Version CORRIGÉE qui récupère bien les équations LaTeX.
+    Version CORRIGÉE avec logs détaillés pour le débogage.
 
     Args:
         fichier_path (str): Chemin du fichier
@@ -573,7 +575,7 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
         dict: {
             "texte_complet": str,
             "elements_visuels": list,
-            "formules_latex": list,  # ← IMPORTANT: liste des équations
+            "formules_latex": list,
             "graphs": list,
             "angles": list,
             "numbers": list,
@@ -583,13 +585,55 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
     """
     logger.info("🔍 Début analyse scientifique pour %s", fichier_path)
 
-    # DÉCISION STRATÉGIQUE: Mathpix ou OCR standard?
+    # ========== DÉCISION STRATÉGIQUE AMÉLIORÉE ==========
+    print("\n" + "=" * 60)
+    print("🧠 DÉCISION MATHPIX vs OCR")
+    print("=" * 60)
+
     use_mathpix = False
-    if departement and is_departement_scientifique(departement):
-        use_mathpix = True
-        print(f"⚗️  Décision: Mathpix prioritaire (département scientifique: {departement.nom})")
+    decision_reason = ""
+
+    # 1. Vérifier si un département est fourni
+    if departement:
+        print(f"📋 Département fourni:")
+        print(f"   - ID: {departement.id}")
+        print(f"   - Nom: {departement.nom}")
+        print(f"   - Nom normalisé: {departement.nom.lower()}")
+
+        # 2. Vérifier si c'est scientifique avec la fonction dédiée
+        est_scientifique = is_departement_scientifique(departement)
+
+        print(f"\n🔍 Vérification scientifique:")
+        print(f"   - Fonction is_departement_scientifique: {est_scientifique}")
+
+        # 3. Vérification MANUELLE pour confirmation
+        dep_nom_lower = departement.nom.lower()
+        termes_trouves = []
+
+        for terme in DEPARTEMENTS_SCIENTIFIQUES:
+            terme_lower = terme.lower()
+            if terme_lower in dep_nom_lower:
+                termes_trouves.append(terme_lower)
+
+        print(f"   - Termes scientifiques trouvés: {termes_trouves if termes_trouves else 'AUCUN'}")
+
+        # 4. Décision finale
+        if est_scientifique:
+            use_mathpix = True
+            decision_reason = f"Département scientifique: {departement.nom}"
+            print(f"\n✅ DÉCISION: Mathpix ACTIVÉ")
+            print(f"   - Raison: {decision_reason}")
+            print(f"   - Termes trouvés: {', '.join(termes_trouves)}")
+        else:
+            decision_reason = f"Département non scientifique: {departement.nom}"
+            print(f"\n✅ DÉCISION: OCR standard")
+            print(f"   - Raison: {decision_reason}")
     else:
-        print(f"⚡ Décision: OCR standard (département non-scientifique)")
+        decision_reason = "Aucun département fourni"
+        print(f"\n✅ DÉCISION: OCR standard")
+        print(f"   - Raison: {decision_reason}")
+
+    print("=" * 60 + "\n")
 
     # VARIABLES DE RETOUR
     texte_complet = ""
@@ -598,7 +642,7 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
 
     # ========== OPTION 1: MATHPIX (si scientifique) ==========
     if use_mathpix:
-        print("🔄 Tentative d'extraction avec Mathpix...")
+        print(f"🔄 Tentative d'extraction avec Mathpix...")
         texte_mathpix = extraire_texte_avec_mathpix(fichier_path, departement)
 
         if texte_mathpix and len(texte_mathpix) > 100:
@@ -606,7 +650,6 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
             source = "mathpix"
 
             # EXTRACTION DES ÉQUATIONS du texte Mathpix formaté
-            # Pattern pour les équations déjà formatées
             patterns_formates = [
                 r'\\\[(.+?)\\\]',  # Display math \[...\]
                 r'\\\((.+?)\\\)',  # Inline math \(...\)
@@ -616,9 +659,7 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
                 matches = re.findall(pattern, texte_mathpix, flags=re.DOTALL)
                 for match in matches:
                     if isinstance(match, str) and match.strip():
-                        # Garder le format original
                         formule = match.strip()
-                        # Nettoyer les espaces multiples mais garder la structure
                         formule = re.sub(r'\s+', ' ', formule)
                         formules_latex.append(formule)
 
@@ -632,7 +673,7 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
             return {
                 "texte_complet": texte_complet,
                 "elements_visuels": [],
-                "formules_latex": formules_latex,  # ← CRITIQUE: bien renseigné
+                "formules_latex": formules_latex,
                 "graphs": [],
                 "angles": [],
                 "numbers": [],
@@ -643,6 +684,93 @@ def analyser_document_scientifique(fichier_path: str, departement=None) -> dict:
             print(f"⚠️  Mathpix échoué ou résultat insuffisant, fallback OCR standard")
             # Continuer avec OCR standard
 
+    # ========== OPTION 2: OCR STANDARD (fallback) ==========
+    print("🔄 Extraction OCR standard (Tesseract/DeepSeek)...")
+
+    # 1) OCR de base (Tesseract) comme fallback
+    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
+    texte_ocr = ""
+
+    try:
+        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            img = Image.open(fichier_path)
+            clean = preprocess_image_for_ocr(img)
+            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
+            print(f"    ✓ OCR image: {len(texte_ocr)} caractères")
+
+        elif fichier_path.lower().endswith('.pdf'):
+            # D'abord PDFMiner
+            texte_ocr = extraire_texte_pdf(fichier_path)
+            print(f"    ✓ PDFMiner: {len(texte_ocr)} caractères")
+
+            # Si trop court, fallback page par page
+            if len(texte_ocr) < 100:
+                pages = convert_from_path(fichier_path, dpi=300)
+                txts = []
+                for page in pages:
+                    clean = preprocess_image_for_ocr(page)
+                    txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
+                texte_ocr = "\n".join(txts)
+                print(f"    ✓ Fallback OCR pages: {len(texte_ocr)} caractères")
+
+    except Exception as e:
+        logger.exception("❌ Erreur pendant OCR/PDF pour %s", fichier_path)
+        texte_ocr = ""
+
+    # 2) DeepSeek Vision (si configuré) pour les non-scientifiques
+    try:
+        # Appel à DeepSeek Vision (ton code existant)
+        vision_json = call_deepseek_vision(fichier_path)
+
+        # Récupérer le texte (priorité au texte DeepSeek)
+        texte_json = vision_json.get("text", "") or ""
+
+        # IMPORTANT: Récupérer les blocs LaTeX de DeepSeek
+        latex_deepseek = vision_json.get("latex_blocks", [])
+        if latex_deepseek:
+            formules_latex.extend(latex_deepseek)
+            print(f"    ✓ DeepSeek: {len(latex_deepseek)} formules LaTeX")
+
+        # Choix du texte final
+        if len(texte_json) > len(texte_ocr) and len(texte_json) > 50:
+            texte_complet = texte_json
+            print(f"    ✓ Texte DeepSeek choisi: {len(texte_complet)} caractères")
+        else:
+            texte_complet = texte_ocr
+            print(f"    ✓ Texte OCR choisi: {len(texte_complet)} caractères")
+
+    except Exception as e:
+        logger.exception("❌ Erreur DeepSeek Vision pour %s: %s", fichier_path, e)
+        # Fallback sur OCR
+        texte_complet = texte_ocr
+        print(f"    ✓ Fallback OCR final: {len(texte_complet)} caractères")
+
+    # 3) Post-traitement et validation
+    if not texte_complet or len(texte_complet.strip()) < 50:
+        print("❌ Texte trop court après extraction")
+        texte_complet = texte_ocr if texte_ocr else "Extraction échouée"
+
+    # DEBUG: Afficher un échantillon
+    print(f"\n📄 Échantillon final (300 chars):")
+    print(texte_complet[:300].replace('\n', '\\n'))
+    print("..." if len(texte_complet) > 300 else "")
+
+    print(f"\n📊 RÉSUMÉ EXTRACTION:")
+    print(f"   - Source utilisée: {source}")
+    print(f"   - Longueur texte: {len(texte_complet)} caractères")
+    print(f"   - Formules LaTeX: {len(formules_latex)}")
+    print(f"   - Raison décision: {decision_reason}")
+
+    return {
+        "texte_complet": texte_complet.strip(),
+        "elements_visuels": [],
+        "formules_latex": formules_latex,
+        "graphs": [],
+        "angles": [],
+        "numbers": [],
+        "structure_exercices": [],
+        "source": source
+    }
     # ========== OPTION 2: OCR STANDARD (fallback) ==========
     print("🔄 Extraction OCR standard (Tesseract/DeepSeek)...")
 
