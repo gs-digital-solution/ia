@@ -147,16 +147,48 @@ def get_blip_model():
 
 
 DEPARTEMENTS_SCIENTIFIQUES = [
-    'mathématiques', 'physique', 'chimie', 'biologie', 'svt', 'sciences', 'informatique'
+    'mathématiques', 'physique', 'chimie', 'biologie',
+    'svt', 'sciences', 'informatique', 'anglais'
+    # Ajouter des variantes
+    'maths', 'mathematiques', 'math', 'physique-chimie',
+    'science', 'scientifique', 'biologie-géologie'
 ]
+
+
 def is_departement_scientifique(departement):
     """
-    Renvoie True si le département fait partie des filières scientifiques définies globalement.
+    Renvoie True si le département fait partie des filières scientifiques.
+    Version robuste avec plusieurs variantes.
     """
-    if departement and departement.nom:
-        dep_name = departement.nom.lower()
-        return any(dep_name.startswith(sc) or sc in dep_name for sc in DEPARTEMENTS_SCIENTIFIQUES)
+    if not departement or not departement.nom:
+        return False
+
+    dep_name = departement.nom.strip().lower()
+
+    # Liste étendue de termes scientifiques
+    scientific_terms = [
+        'math', 'physique', 'chimie', 'biologie', 'svt',
+        'science', 'informatique', 'technologie', 'géologie',
+        'astronomie', 'écologie', 'génétique', 'électricité',
+        'mécanique', 'optique', 'thermodynamique', 'statistique',
+        'algèbre', 'géométrie', 'analyse', 'calcul', 'numérique'
+    ]
+
+    # Vérification simple
+    for term in scientific_terms:
+        if term in dep_name:
+            print(f"✅ Département '{dep_name}' reconnu comme scientifique (contient '{term}')")
+            return True
+
+    # Vérification spécifique pour les débuts de mots
+    for term in DEPARTEMENTS_SCIENTIFIQUES:
+        if dep_name.startswith(term):
+            print(f"✅ Département '{dep_name}' commence par '{term}' → scientifique")
+            return True
+
+    print(f"❌ Département '{dep_name}' non reconnu comme scientifique")
     return False
+
 
 # ── CODE D'EXTRACTION DU PROMPT LE PLUS SPECIFIQUE POSSIBLE ────────────────────
 def get_best_promptia(demande):
