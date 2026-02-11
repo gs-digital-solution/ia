@@ -44,7 +44,7 @@ from .ia_utils import (
 
 )
 from rest_framework.permissions import IsAuthenticated
-from .ia_utils import separer_exercices_avec_titres, extraire_texte_fichier
+from .ia_utils import separer_exercices, extraire_texte_fichier
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import traceback
 import tempfile, os
@@ -450,7 +450,7 @@ class DebugExtractionAPIView(APIView):
             return Response({"error": "Aucun fichier"}, status=400)
 
         from .ia_utils import extraire_texte_fichier
-        texte_extraite = extraire_texte_fichier(fichier, None)  # ✅ Ajouter None comme 2ème paramètre
+        texte_extraite = extraire_texte_fichier(fichier)
 
         return Response({
             "success": True,
@@ -595,67 +595,76 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et découper en exercices AVEC TITRES
-        texte = extraire_texte_fichier(fichier, demande)
+        # 4) Extraire le texte et découper en exercices
+        texte = extraire_texte_fichier(fichier, demande)   # ← Extraction UNE FOIS
 
-        # ✅ AJOUTER CET IMPORT LOCAL
-        from .ia_utils import separer_exercices_avec_titres
-        # Utiliser la nouvelle fonction améliorée
+        if not texte:
+            return Response(
+                {"error": "Impossible d'extraire le texte de la demande."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
+
+        # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # 5) Construire la liste JSON complète pour stockage
+        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
         exercices_complets = []
         for idx, ex in enumerate(exercices_detaillees):
-            # ex est maintenant un dict avec 'titre', 'titre_complet', 'contenu'
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
-            contenu = ex.get('contenu', '')
+            contenu_complet = ex.get('contenu', '')  # ← CONTENU COMPLET
 
             # Nettoyer le titre pour l'affichage
             titre_affichage = titre_complet
             if len(titre_affichage) > 80:
                 titre_affichage = titre_affichage[:77] + "..."
 
-            # Extraire un extrait (premières lignes)
-            lignes = contenu.strip().split('\n')
+            # Extraire un extrait (premières lignes) pour l'affichage rapide
+            lignes = contenu_complet.strip().split('\n')
             extrait_lignes = []
             for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
 
-            extrait = ' / '.join(extrait_lignes) if extrait_lignes else contenu.strip()[:150]
+            extrait = ' / '.join(extrait_lignes) if extrait_lignes else contenu_complet.strip()[:150]
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
+            # ✅ STOCKER LE CONTENU COMPLET CETTE FOIS
             exercices_complets.append({
                 "index": idx,
                 "titre": titre_affichage,
-                "titre_complet": titre_complet,  # Titre original complet
+                "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu": contenu[:500]  # Stocker un peu de contenu pour preview
+                "contenu_complet": contenu_complet,  # ← NOUVEAU : CONTENU COMPLET
+                "longueur_contenu": len(contenu_complet)
             })
 
-        # 6) Stocker les exercices dans la demande
+        # 7) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        # 7) Construire la réponse pour le frontend
+        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
+
+        # 8) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
-                "titre": ex["titre"],  # Titre formaté pour l'affichage
+                "titre": ex["titre"],
                 "extrait": ex["extrait"]
             })
 
-        # 8) Répondre
+        # 9) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
-            "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée"
+            "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
+            "info": f"{len(exercices_complets)} exercices détectés, contenu complet stocké"
         })
-
 
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
@@ -693,23 +702,26 @@ class PartialCorrectionAPIView(APIView):
             # 2) Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
-            # 3) Récupérer le texte complet depuis le fichier
-            texte_complet = extraire_texte_fichier(demande.fichier, demande)
-            if not texte_complet:
+            # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
+            fragment_trouve = False
+
+            if demande.exercices_data:
+                try:
+                    exercices_list = json.loads(demande.exercices_data)
+                    for ex in exercices_list:
+                        if ex.get('index') == idx:
+                            # Vérifier qu'on a du contenu complet
+                            if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
+                                fragment_trouve = True
+                                print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
+                                break
+                except json.JSONDecodeError:
+                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
+
+            # 4) Si pas de contenu stocké, vérifier qu'on a un fichier
+            if not fragment_trouve and not demande.fichier:
                 return Response(
-                    {"error": "Impossible d'extraire le texte de la demande."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # 4) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
-            exercices_detaillees = separer_exercices_avec_titres(texte_complet)
-
-            # Convertir en liste de textes pour compatibilité
-            exercices_textes = [ex.get('contenu', '') for ex in exercices_detaillees]
-
-            if idx < 0 or idx >= len(exercices_textes):
-                return Response(
-                    {"error": f"index hors limites (0 à {len(exercices_textes) - 1})"},
+                    {"error": "Aucun contenu disponible pour cet exercice."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -722,14 +734,20 @@ class PartialCorrectionAPIView(APIView):
                 exercice_index=idx
             )
 
-            # 6) Lancement asynchrone
+            # 6) Information de debug
+            print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
+            print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
+            print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
+
+            # 7) Lancement asynchrone
             generer_corrige_exercice_async.delay(soumission.id)
 
-            # 7) Réponse
+            # 8) Réponse
             return Response({
                 "success": True,
                 "soumission_exercice_id": soumission.id,
-                "message": "Exercice envoyé au traitement."
+                "message": "Exercice envoyé au traitement.",
+                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction"
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
@@ -740,7 +758,6 @@ class PartialCorrectionAPIView(APIView):
                 {"error": f"Erreur interne: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 
 #Lister les corrigés partiels d’une soumission
 class CorrigesListAPIView(generics.ListAPIView):
