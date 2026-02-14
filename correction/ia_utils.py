@@ -46,6 +46,7 @@ def log_extraction_method(demande, method, success=True):
             f"Méthode: {method}, Succès: {success}"
         )
 
+
 def extraire_avec_mathpix(fichier_path: str) -> dict:
     """
     Extraction haute précision avec Mathpix pour formules scientifiques
@@ -57,8 +58,36 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
         "Content-type": "application/json"
     }
 
-    with open(fichier_path, "rb") as f:
-        image_data = base64.b64encode(f.read()).decode()
+    # Vérifier que le fichier existe
+    if not os.path.exists(fichier_path):
+        logger.error(f"❌ Fichier non trouvé: {fichier_path}")
+        return {"text": "", "latex_blocks": [], "source": "error"}
+
+    # Optimiser l'image si nécessaire
+    try:
+        from PIL import Image
+
+        # Ouvrir et optimiser l'image
+        with Image.open(fichier_path) as img:
+            # Redimensionner si trop grande (Mathpix a une limite)
+            max_size = 2000
+            if max(img.size) > max_size:
+                ratio = max_size / max(img.size)
+                new_size = tuple(int(dim * ratio) for dim in img.size)
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+            # Sauvegarder en mémoire avec compression
+            import io
+            img_buffer = io.BytesIO()
+            img.save(img_buffer, format='JPEG', quality=90, optimize=True)
+            image_data = base64.b64encode(img_buffer.getvalue()).decode()
+
+        logger.debug(f"✅ Image optimisée: {len(image_data) / 1024:.1f}KB")
+
+    except Exception as e:
+        logger.warning(f"⚠️ Impossible d'optimiser l'image, utilisation du fichier original: {e}")
+        with open(fichier_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode()
 
     data = {
         "src": f"data:image/jpeg;base64,{image_data}",
@@ -70,35 +99,187 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
         "format": "text"
     }
 
+    # Tentatives avec retry
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                os.getenv("MATHPIX_API_URL", "https://api.mathpix.com/v3/text"),
+                headers=headers,
+                data=json.dumps(data),
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                texte = result.get("text", "")
+                latex_blocks = result.get("latex_styled", [])
+
+                # Vérification minimale
+                if texte and len(texte) > 10:
+                    # Formatage LaTeX pour MathJax
+                    texte = texte.replace("$", "\\(").replace("$$", "\\[")
+
+                    logger.info(f"✅ Mathpix OK: {len(texte)} chars, {len(latex_blocks)} formules")
+
+                    return {
+                        "text": texte,
+                        "latex_blocks": latex_blocks,
+                        "source": "mathpix"
+                    }
+                else:
+                    logger.warning(f"⚠️ Texte trop court: {len(texte or '')} chars")
+
+            elif response.status_code == 429:  # Rate limit
+                wait_time = 5 * (attempt + 1)
+                logger.warning(f"⏳ Rate limit, attente {wait_time}s (tentative {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"Mathpix API error {response.status_code}: {response.text[:200]}")
+
+        except requests.exceptions.Timeout:
+            logger.error(f"⏰ Timeout (tentative {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(3 * (attempt + 1))
+        except Exception as e:
+            logger.error(f"Mathpix exception: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+
+    # Échec après toutes les tentatives
+    return {"text": "", "latex_blocks": [], "source": "error"}
+
+def traiter_pdf_avec_mathpix(pdf_path: str, max_pages: int = 10) -> dict:
+    """
+    Convertit un PDF en images et traite chaque page avec Mathpix.
+
+    Args:
+        pdf_path: Chemin vers le fichier PDF
+        max_pages: Nombre maximum de pages à traiter (défaut: 10)
+
+    Returns:
+        dict: Résultat fusionné avec texte et formules LaTeX
+    """
+    logger.info(f"📄 Début traitement PDF Mathpix: {pdf_path}")
+    temp_images = []
+
     try:
-        response = requests.post(
-            os.getenv("MATHPIX_API_URL", "https://api.mathpix.com/v3/text"),
-            headers=headers,
-            data=json.dumps(data),
-            timeout=30
+        # Compter le nombre total de pages
+        from pdf2image import pdfinfo_from_path
+        info = pdfinfo_from_path(pdf_path)
+        total_pages = info.get('pages', 0)
+        pages_a_traiter = min(max_pages, total_pages)
+
+        logger.info(f"📊 PDF: {total_pages} pages totales, traitement des {pages_a_traiter} premières pages")
+
+        # Convertir le PDF en images (limité aux premières pages)
+        images = convert_from_path(
+            pdf_path,
+            dpi=300,  # Haute résolution pour les formules
+            first_page=1,
+            last_page=pages_a_traiter,
+            fmt='jpeg',
+            jpegopt={'quality': 95, 'optimize': True}
         )
 
-        if response.status_code == 200:
-            result = response.json()
-            texte = result.get("text", "")
-            latex_blocks = result.get("latex_styled", [])
+        if not images:
+            logger.error("❌ Aucune image extraite du PDF")
+            return {"text": "", "latex_blocks": [], "source": "error"}
+
+        logger.info(f"✅ {len(images)} page(s) convertie(s) en images")
+
+        # Traiter chaque page avec Mathpix
+        all_texts = []
+        all_latex = []
+
+        for i, img in enumerate(images, 1):
+            logger.info(f"🖼️  Traitement page {i}/{len(images)}")
+
+            # Sauvegarder l'image temporairement
+            temp_img_path = os.path.join(tempfile.gettempdir(), f"mathpix_page_{i}_{int(time.time())}.jpg")
+            img.save(temp_img_path, 'JPEG', quality=95, optimize=True)
+            temp_images.append(temp_img_path)
+
+            # Appeler Mathpix pour cette page
+            headers = {
+                "app_id": os.getenv("MATHPIX_APP_ID"),
+                "app_key": os.getenv("MATHPIX_APP_KEY"),
+                "Content-type": "application/json"
+            }
+
+            with open(temp_img_path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode()
+
+            data = {
+                "src": f"data:image/jpeg;base64,{image_data}",
+                "formats": ["text", "latex_styled"],
+                "ocr": ["math", "text"],
+                "skip_recrop": False,
+                "math_inline_delimiters": ["$", "$"],
+                "rm_spaces": True,
+                "format": "text"
+            }
+
+            try:
+                response = requests.post(
+                    os.getenv("MATHPIX_API_URL", "https://api.mathpix.com/v3/text"),
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=45  # Timeout plus long pour les pages complexes
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    page_text = result.get("text", "")
+                    page_latex = result.get("latex_styled", [])
+
+                    # Ajouter un marqueur de page pour la traçabilité
+                    if page_text:
+                        page_text = f"--- PAGE {i} ---\n{page_text}"
+                        all_texts.append(page_text)
+                        all_latex.extend(page_latex)
+                        logger.info(f"   ✓ Page {i}: {len(page_text)} caractères, {len(page_latex)} formules")
+                    else:
+                        logger.warning(f"   ⚠️ Page {i}: texte vide")
+                else:
+                    logger.error(f"   ❌ Page {i}: erreur HTTP {response.status_code}")
+
+            except Exception as e:
+                logger.error(f"   ❌ Page {i}: exception {str(e)[:100]}")
+                continue
+
+        # Fusionner les résultats
+        if all_texts:
+            texte_final = "\n\n".join(all_texts)
+            logger.info(f"✅ Fusion réussie: {len(texte_final)} caractères, {len(all_latex)} formules LaTeX")
 
             # Formatage LaTeX pour MathJax
-            texte = texte.replace("$", "\\(").replace("$$", "\\[")
+            texte_final = texte_final.replace("$", "\\(").replace("$$", "\\[")
 
             return {
-                "text": texte,
-                "latex_blocks": latex_blocks,
-                "source": "mathpix"
+                "text": texte_final,
+                "latex_blocks": all_latex,
+                "source": "mathpix_pdf",
+                "pages_traitees": len(images)
             }
         else:
-            logger.error(f"Mathpix API error: {response.status_code}")
+            logger.error("❌ Aucun texte extrait du PDF")
             return {"text": "", "latex_blocks": [], "source": "error"}
 
     except Exception as e:
-        logger.error(f"Mathpix exception: {e}")
+        logger.error(f"❌ Erreur traitement PDF: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"text": "", "latex_blocks": [], "source": "error"}
 
+    finally:
+        # Nettoyage des fichiers temporaires
+        for temp_img in temp_images:
+            try:
+                os.unlink(temp_img)
+                logger.debug(f"🧹 Nettoyé: {temp_img}")
+            except Exception as e:
+                logger.warning(f"⚠️ Impossible de supprimer {temp_img}: {e}")
 
 def preprocess_image_for_ocr(pil_image):
     """
@@ -321,27 +502,52 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
             logger.warning("⚠️ Configuration Mathpix manquante, fallback standard")
             use_mathpix = False
         else:
-            resultat_mathpix = extraire_avec_mathpix(fichier_path)
+            # --- NOUVEAU : Gestion intelligente selon le type de fichier ---
+            resultat_mathpix = None
 
-            if resultat_mathpix.get("text") and len(resultat_mathpix["text"]) > 100:
-                logger.info(f"✅ Mathpix réussi: {len(resultat_mathpix['text'])} caractères, "
-                            f"{len(resultat_mathpix.get('latex_blocks', []))} formules LaTeX")
+            try:
+                if fichier_path.lower().endswith('.pdf'):
+                    # C'est un PDF → Utiliser la nouvelle fonction dédiée
+                    logger.info("📄 PDF détecté, utilisation du traitement spécial Mathpix")
+                    resultat_mathpix = traiter_pdf_avec_mathpix(fichier_path, max_pages=10)
 
-                return {
-                    "texte_complet": resultat_mathpix["text"],
-                    "elements_visuels": [],
-                    "formules_latex": resultat_mathpix.get("latex_blocks", []),
-                    "graphs": [],
-                    "angles": [],
-                    "numbers": [],
-                    "structure_exercices": [],
-                    "source_extraction": "mathpix",
-                    "departement": dept_nom
-                }
-            else:
-                logger.warning("⚠️ Mathpix échec ou résultat trop court (<100 chars), fallback standard")
+                elif fichier_path.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif')):
+                    # C'est une image → Appel direct à extraire_avec_mathpix
+                    logger.info("🖼️ Image détectée, appel direct à Mathpix")
+                    resultat_mathpix = extraire_avec_mathpix(fichier_path)
+                else:
+                    # Format non supporté directement
+                    logger.warning(f"⚠️ Format non supporté pour Mathpix: {fichier_path}")
+                    use_mathpix = False
+
+                # Vérifier le résultat
+                if resultat_mathpix and resultat_mathpix.get("text") and len(resultat_mathpix["text"]) > 100:
+                    logger.info(f"✅ Mathpix réussi: {len(resultat_mathpix['text'])} caractères, "
+                                f"{len(resultat_mathpix.get('latex_blocks', []))} formules LaTeX")
+
+                    source = resultat_mathpix.get("source", "mathpix")
+
+                    return {
+                        "texte_complet": resultat_mathpix["text"],
+                        "elements_visuels": [],
+                        "formules_latex": resultat_mathpix.get("latex_blocks", []),
+                        "graphs": [],
+                        "angles": [],
+                        "numbers": [],
+                        "structure_exercices": [],
+                        "source_extraction": source,
+                        "departement": dept_nom,
+                        "pages_traitees": resultat_mathpix.get("pages_traitees", 1)
+                    }
+                else:
+                    logger.warning("⚠️ Mathpix échec ou résultat trop court (<100 chars), fallback standard")
+                    use_mathpix = False
+
+            except Exception as e:
+                logger.error(f"❌ Erreur lors du traitement Mathpix: {e}")
+                import traceback
+                traceback.print_exc()
                 use_mathpix = False
-
     # 3) FALLBACK: ANALYSE STANDARD (OCR + DeepSeek Vision)
     logger.info("🔤 Extraction standard (OCR + DeepSeek Vision)")
 
