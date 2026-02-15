@@ -77,7 +77,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                 fichier_path,
                 dpi=300,
                 first_page=1,
-                last_page=1
+                last_page=3
             )
 
             if not images:
