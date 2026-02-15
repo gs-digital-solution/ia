@@ -49,10 +49,9 @@ def log_extraction_method(demande, method, success=True):
 
 def extraire_avec_mathpix(fichier_path: str) -> dict:
     """
-    Extraction avec Mathpix – gère les images et les PDF.
-    Retourne le texte avec les formules formatées pour MathJax :
-    - $$...$$ → \[...\]
-    - $...$ → \(...\)
+    Extraction avec Mathpix – gère les images et les PDF multi-pages.
+    Pour les PDF, convertit et traite TOUTES les pages, puis concatène les résultats.
+    Retourne le texte avec les formules formatées pour MathJax.
     """
     headers = {
         "app_id": os.getenv("MATHPIX_APP_ID"),
@@ -64,97 +63,140 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
     logger.info(f"📁 Fichier reçu par Mathpix: {ext}")
 
     temp_files = []
-    image_data = None
+    all_text_parts = []
+    all_latex_blocks = []
 
     try:
-        # === 1. GESTION DES PDF (conversion en image) ===
+        # === 1. GESTION DES PDF (conversion de TOUTES les pages) ===
         if ext == '.pdf':
-            logger.info("📄 PDF détecté, conversion en image...")
+            logger.info("📄 PDF détecté, conversion de toutes les pages en images...")
             from pdf2image import convert_from_path
 
-            # Sur Linux, poppler est dans le PATH, pas besoin de spécifier le chemin
+            # Convertir TOUTES les pages du PDF
             images = convert_from_path(
                 fichier_path,
-                dpi=300,
-                first_page=1,
-                last_page=3
+                dpi=300  # Bonne résolution pour l'OCR
             )
 
-            if not images:
-                raise Exception("Aucune image extraite du PDF")
+            logger.info(f"   {len(images)} page(s) trouvée(s)")
 
-            # Sauvegarder temporairement l'image
-            temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            temp_img.close()
-            images[0].save(temp_img.name, 'PNG')
-            temp_files.append(temp_img.name)
+            # Traiter chaque page une par une
+            for page_num, image in enumerate(images, 1):
+                logger.info(f"   🔄 Traitement page {page_num}/{len(images)}...")
 
-            with open(temp_img.name, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+                # Sauvegarder temporairement la page
+                temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                temp_img.close()
+                image.save(temp_img.name, 'PNG')
+                temp_files.append(temp_img.name)
 
-            logger.info(f"✅ Image temporaire créée: {temp_img.name}")
+                # Lire l'image
+                with open(temp_img.name, "rb") as f:
+                    image_data = base64.b64encode(f.read()).decode()
 
-        # === 2. GESTION DES IMAGES ===
+                # Appel à Mathpix pour cette page
+                data = {
+                    "src": f"data:image/jpeg;base64,{image_data}",
+                    "formats": ["text", "latex_styled"],
+                    "ocr": ["math", "text"],
+                    "skip_recrop": False,
+                    "math_inline_delimiters": ["$", "$"],
+                    "rm_spaces": True,
+                    "format": "text"
+                }
+
+                try:
+                    response = requests.post(
+                        os.getenv("MATHPIX_API_URL", "https://api.mathpix.com/v3/text"),
+                        headers=headers,
+                        data=json.dumps(data),
+                        timeout=30
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        page_texte = result.get("text", "")
+                        page_latex = result.get("latex_styled", [])
+
+                        # Ajouter un séparateur de page pour la lisibilité
+                        if page_texte:
+                            all_text_parts.append(f"[Page {page_num}]\n{page_texte}")
+                        else:
+                            all_text_parts.append(f"[Page {page_num} - vide]")
+
+                        all_latex_blocks.extend(page_latex)
+
+                        logger.info(f"   ✅ Page {page_num}: {len(page_texte)} caractères")
+                    else:
+                        logger.warning(f"   ⚠️ Page {page_num}: erreur {response.status_code}")
+                        all_text_parts.append(f"[Page {page_num} - erreur]")
+
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Page {page_num}: exception {e}")
+                    all_text_parts.append(f"[Page {page_num} - exception]")
+
+                # Petite pause pour éviter de surcharger l'API
+                time.sleep(0.5)
+
+        # === 2. GESTION DES IMAGES (une seule page) ===
         else:
+            logger.info("🖼️ Image détectée, traitement direct...")
             with open(fichier_path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode()
 
-        if not image_data:
-            raise Exception("Impossible de préparer l'image pour Mathpix")
+            data = {
+                "src": f"data:image/jpeg;base64,{image_data}",
+                "formats": ["text", "latex_styled"],
+                "ocr": ["math", "text"],
+                "skip_recrop": False,
+                "math_inline_delimiters": ["$", "$"],
+                "rm_spaces": True,
+                "format": "text"
+            }
 
-        # === 3. APPEL À L'API MATHPIX ===
-        data = {
-            "src": f"data:image/jpeg;base64,{image_data}",
-            "formats": ["text", "latex_styled"],
-            "ocr": ["math", "text"],
-            "skip_recrop": False,
-            "math_inline_delimiters": ["$", "$"],  # Mathpix renvoie avec $...$
-            "rm_spaces": True,
-            "format": "text"
-        }
+            response = requests.post(
+                os.getenv("MATHPIX_API_URL", "https://api.mathpix.com/v3/text"),
+                headers=headers,
+                data=json.dumps(data),
+                timeout=30
+            )
 
-        logger.info("📡 Appel API Mathpix...")
-        response = requests.post(
-            os.getenv("MATHPIX_API_URL", "https://api.mathpix.com/v3/text"),
-            headers=headers,
-            data=json.dumps(data),
-            timeout=30
+            if response.status_code == 200:
+                result = response.json()
+                all_text_parts = [result.get("text", "")]
+                all_latex_blocks = result.get("latex_styled", [])
+                logger.info(f"✅ Image traitée: {len(all_text_parts[0])} caractères")
+            else:
+                logger.error(f"❌ Mathpix error {response.status_code}")
+                return {"text": "", "latex_blocks": [], "source": "error"}
+
+        # === 3. CONCATÉNATION ET FORMATAGE FINAL ===
+        texte_complet = "\n\n".join(all_text_parts)
+
+        # Formatage global pour MathJax
+        texte_complet = re.sub(
+            r'\$\$(.*?)\$\$',
+            lambda m: '\\[' + m.group(1).strip() + '\\]',
+            texte_complet,
+            flags=re.DOTALL
         )
 
-        if response.status_code == 200:
-            result = response.json()
-            texte = result.get("text", "")
-            latex_blocks = result.get("latex_styled", [])
+        texte_complet = re.sub(
+            r'(?<!\$)\$(?!\$)(.*?)(?<!\$)\$(?!\$)',
+            lambda m: '\\(' + m.group(1).strip() + '\\)',
+            texte_complet,
+            flags=re.DOTALL
+        )
 
-            logger.info(f"✅ Mathpix OK: {len(texte)} caractères, {len(latex_blocks)} blocs LaTeX")
+        logger.info(
+            f"✅ Extraction terminée: {len(texte_complet)} caractères au total, {len(all_latex_blocks)} blocs LaTeX")
 
-            # === 4. FORMATAGE DIRECT POUR MATHJAX ===
-            # Remplacer d'abord $$...$$ par \[...\]
-            texte = re.sub(
-                r'\$\$(.*?)\$\$',
-                lambda m: '\\[' + m.group(1).strip() + '\\]',
-                texte,
-                flags=re.DOTALL
-            )
-
-            # Remplacer ensuite $...$ par \(...\)
-            texte = re.sub(
-                r'(?<!\$)\$(?!\$)(.*?)(?<!\$)\$(?!\$)',
-                lambda m: '\\(' + m.group(1).strip() + '\\)',
-                texte,
-                flags=re.DOTALL
-            )
-
-            logger.debug(f"📝 Texte formaté (début): {texte[:200]}")
-
-            return {
-                "text": texte,
-                "latex_blocks": latex_blocks,
-                "source": "mathpix"
-            }
-        else:
-            logger.error(f"❌ Mathpix API error {response.status_code}: {response.text[:200]}")
-            return {"text": "", "latex_blocks": [], "source": "error"}
+        return {
+            "text": texte_complet,
+            "latex_blocks": all_latex_blocks,
+            "source": "mathpix",
+            "pages_traitees": len(images) if ext == '.pdf' else 1
+        }
 
     except Exception as e:
         logger.error(f"❌ Mathpix exception: {e}")
@@ -163,7 +205,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
         return {"text": "", "latex_blocks": [], "source": "error"}
 
     finally:
-        # === 5. NETTOYAGE DES FICHIERS TEMPORAIRES ===
+        # === 4. NETTOYAGE ===
         for temp_file in temp_files:
             try:
                 if os.path.exists(temp_file):
@@ -171,7 +213,6 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                     logger.debug(f"🧹 Fichier temporaire supprimé: {temp_file}")
             except Exception as e:
                 logger.warning(f"⚠️ Impossible de supprimer {temp_file}: {e}")
-
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
