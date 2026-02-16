@@ -529,17 +529,20 @@ class AppConfigAPIView(APIView):
 
 
 #VUE POUR LISTE D'EXERCICES A CORRIGER
-
-# correction/api_views.py - SplitExercisesAPIView COMPLÈTEMENT MODIFIÉ
-
 class SplitExercisesAPIView(APIView):
+    """
+    POST /api/split/
+    - Crée une DemandeCorrection
+    - Extrait le texte ET les schémas
+    - Stocke les exercices avec leurs titres complets + schémas dans exercices_data
+    """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
 
     def post(self, request):
         user = request.user
 
-        # 1) Récupérer les IDs passés (inchangé)
+        # 1) Récupérer les IDs passés
         pays_id = request.data.get('pays')
         sous_id = request.data.get('sous_systeme')
         depart_id = request.data.get('departement')
@@ -548,19 +551,31 @@ class SplitExercisesAPIView(APIView):
         type_exo_id = request.data.get('type_exercice')
         lecons_ids = request.data.get('lecons_ids')
 
-        # 2) Récupérer le fichier (inchangé)
+        # 2) Récupérer le fichier d'énoncé et vérifier sa présence
         fichier = request.FILES.get('fichier')
         if not fichier:
-            return Response({"error": "Le fichier d'énoncé est requis."}, status=400)
+            return Response(
+                {"error": "Le fichier d'énoncé est requis."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if fichier.size > 1048576:
-            return Response({"error": "Le fichier ne doit pas dépasser 1 Mo."}, status=400)
+        # 2b) VÉRIFICATION TAILLE FICHIER (1 Mo max)
+        if fichier.size > 1048576:  # 1 Mo en octets
+            return Response(
+                {"error": "Le fichier ne doit pas dépasser 1 Mo."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
+        # 2c) VÉRIFICATION FORMAT (PDF ou images)
         ext = os.path.splitext(fichier.name)[1].lower()
-        if ext not in ['.pdf', '.png', '.jpg', '.jpeg']:
-            return Response({"error": f"Format {ext} non supporté."}, status=400)
+        allowed_ext = ['.pdf', '.png', '.jpg', '.jpeg']
+        if ext not in allowed_ext:
+            return Response(
+                {"error": f"Format {ext} non supporté. Utilisez PDF, PNG, JPG ou JPEG."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 3) Créer la demande (inchangé)
+        # 3) Créer la demande
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
@@ -572,6 +587,7 @@ class SplitExercisesAPIView(APIView):
             fichier=fichier
         )
 
+        # 3b) Lier les leçons si présentes
         if lecons_ids:
             try:
                 ids = json.loads(lecons_ids) if isinstance(lecons_ids, str) else lecons_ids
@@ -579,63 +595,52 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # ===== SAUVEGARDE LOCALE POUR ANALYSE =====
+        # ========== NOUVEAU: SAUVEGARDE LOCALE POUR ANALYSES ==========
         temp_dir = tempfile.gettempdir()
         local_path = os.path.join(temp_dir, os.path.basename(fichier.name))
         with open(local_path, "wb") as f:
             for chunk in fichier.chunks():
                 f.write(chunk)
-        # ===== FIN SAUVEGARDE =====
 
-        # ===== 1) ANALYSER LES SCHÉMAS EN PREMIER (AVEC DEEPSEEK-VL) =====
-        print(f"🔍 Analyse des schémas avec DeepSeek-VL...")
-        from .vision_utils import analyser_schemas_document_vl
-        schemas_data = analyser_schemas_document_vl(local_path)
-
-        nb_schemas = schemas_data.get('nombre_total', 0)
-        print(f"✅ {nb_schemas} schéma(s) détecté(s)")
-
-        if nb_schemas > 0:
-            for i, schema in enumerate(schemas_data.get('schemas_detaille', [])[:3]):
-                print(f"   • Schéma {i + 1}: {schema.get('type_schema', 'inconnu')} - {schema.get('legende', '')[:80]}")
-        # ===== FIN ANALYSE SCHÉMAS =====
-
-        # ===== 2) EXTRAIRE LE TEXTE (avec Mathpix si scientifique) =====
-        # Note: extraire_texte_fichier utilise le fichier original, pas local_path
+        # 4) Extraire le texte (EXISTANT)
         texte = extraire_texte_fichier(fichier, demande)
-
         if not texte:
             # Nettoyer et retourner erreur
             try:
                 os.unlink(local_path)
             except:
                 pass
-            return Response({"error": "Impossible d'extraire le texte."}, status=400)
+            return Response(
+                {"error": "Impossible d'extraire le texte de la demande."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
-        # ===== FIN EXTRACTION TEXTE =====
 
-        # Nettoyer le fichier temporaire
+        # ========== NOUVEAU: Extraire les schémas ==========
+        schemas_document = []
+        try:
+            # Utiliser la fonction d'extraction des schémas (dans ia_utils)
+            from .ia_utils import extraire_schemas_du_document
+            schemas_document = extraire_schemas_du_document(local_path, demande)
+
+            print(f"✅ [SplitExercises] {len(schemas_document)} page(s) avec schémas détectés")
+
+        except Exception as e:
+            print(f"⚠️ [SplitExercises] Erreur extraction schémas: {e}")
+            # On continue sans les schémas
+            schemas_document = []
+
+        # Nettoyage du fichier temporaire
         try:
             os.unlink(local_path)
         except:
             pass
 
-        # 6) SÉPARER LE TEXTE EN EXERCICES
+        # 5) Séparation du texte en exercices
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # 7) ASSOCIER LES SCHÉMAS AUX EXERCICES
-        schemas_par_exercice = [[] for _ in range(len(exercices_detaillees))]
-
-        if schemas_data.get("schemas_detaille"):
-            # Répartition simple : round-robin (à améliorer selon la position)
-            for i, schema in enumerate(schemas_data["schemas_detaille"]):
-                idx_exo = i % len(exercices_detaillees)
-                schemas_par_exercice[idx_exo].append(schema)
-
-            print(f"📊 {len(schemas_data['schemas_detaille'])} schémas répartis sur {len(exercices_detaillees)} exercices")
-
-        # 8) CONSTRUIRE LA LISTE JSON COMPLÈTE AVEC SCHÉMAS INTÉGRÉS
+        # 6) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
         exercices_complets = []
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
@@ -646,7 +651,7 @@ class SplitExercisesAPIView(APIView):
             if len(titre_affichage) > 80:
                 titre_affichage = titre_affichage[:77] + "..."
 
-            # Extraire un extrait
+            # Extraire un extrait pour l'affichage rapide
             lignes = contenu_complet.strip().split('\n')
             extrait_lignes = []
             for line in lignes[:3]:
@@ -657,44 +662,63 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # ✅ STOCKER LE CONTENU COMPLET ET LES SCHÉMAS ASSOCIÉS
-            exercice_data = {
+            # ========== NOUVEAU: Associer les schémas à cet exercice ==========
+            schemas_exercice = []
+            if schemas_document:
+                # Logique simple: on suppose qu'un exercice correspond à une page
+                # Si le document a des schémas pour la page (idx+1), on les prend
+                for page_data in schemas_document:
+                    if page_data.get('page') == idx + 1:
+                        schemas_exercice = page_data.get('schemas', [])
+                        break
+
+                # Si on n'a pas trouvé par page, on prend le premier schéma disponible
+                # (cas d'une image unique)
+                if not schemas_exercice and len(schemas_document) == 1:
+                    schemas_exercice = schemas_document[0].get('schemas', [])
+
+            # Stocker TOUT dans exercices_complets
+            exercices_complets.append({
                 "index": idx,
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu_complet": contenu_complet,
+                "contenu_complet": contenu_complet,  # ← Texte de l'exercice
                 "longueur_contenu": len(contenu_complet),
-                "schemas": schemas_par_exercice[idx] if idx < len(schemas_par_exercice) else []
-            }
-            exercices_complets.append(exercice_data)
+                "schemas": schemas_exercice,  # ← NOUVEAU: descriptions des schémas pour cet exercice
+                "nombre_schemas": len(schemas_exercice)
+            })
 
-        # 9) STOCKER DANS LA DEMANDE (UN SEUL CHAMP JSON)
+        # 7) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés")
-        for ex in exercices_complets:
-            if ex['schemas']:
-                print(f"   • Exercice {ex['index'] + 1}: {len(ex['schemas'])} schéma(s)")
+        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec schémas")
 
-        # 10) CONSTRUIRE LA RÉPONSE POUR LE FRONTEND (extraits seulement)
+        # Compter le nombre total de schémas pour logging
+        total_schemas = sum(ex.get('nombre_schemas', 0) for ex in exercices_complets)
+        if total_schemas > 0:
+            print(f"✅ [SplitExercises] {total_schemas} schéma(s) détecté(s) au total")
+
+        # 8) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
                 "titre": ex["titre"],
                 "extrait": ex["extrait"],
-                "nombre_schemas": len(ex["schemas"])
+                "a_schema": ex["nombre_schemas"] > 0  # Indicateur pour le frontend si besoin
             })
 
+        # 9) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, {schemas_data['nombre_total']} schémas analysés"
+            "info": f"{len(exercices_complets)} exercices détectés, {total_schemas} schéma(s) identifié(s)"
         })
+
 
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
