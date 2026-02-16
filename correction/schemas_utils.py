@@ -4,34 +4,65 @@ import pytesseract
 from PIL import Image
 import logging
 import re
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
 
 logger = logging.getLogger(__name__)
 
-# Variables globales pour BLIP (lazy loading)
-_blip_model = None
-_blip_processor = None
-def get_blip_model():
-    """
-    Charge le modèle BLIP au premier appel (lazy load).
-    """
-    global _blip_model, _blip_processor
-    if _blip_model is None:
-        try:
-            import torch
-            from transformers import BlipProcessor, BlipForConditionalGeneration
+# ===== CONFIGURATION BLIP (inspirée de ton ancien code) =====
+# Détection du device (CUDA si dispo, sinon CPU)
+try:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"🖼️ BLIP device: {device}")
+except:
+    device = torch.device("cpu")
+    logger.info("🖼️ BLIP device: CPU (torch non disponible?)")
 
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Variables globales pour BLIP (chargement unique)
+_blip_processor = None
+_blip_model = None
+
+
+def init_blip():
+    """Initialise BLIP une seule fois au premier appel"""
+    global _blip_processor, _blip_model
+    if _blip_processor is None or _blip_model is None:
+        try:
+            logger.info("🔄 Chargement de BLIP...")
             _blip_processor = BlipProcessor.from_pretrained(
                 "Salesforce/blip-image-captioning-base"
             )
             _blip_model = BlipForConditionalGeneration.from_pretrained(
                 "Salesforce/blip-image-captioning-base"
             ).to(device).eval()
-            logger.info("🖼️ BLIP chargé sur %s", device)
+            logger.info("✅ BLIP chargé avec succès")
         except Exception as e:
             logger.error(f"❌ Erreur chargement BLIP: {e}")
-            return None, None
+            _blip_processor = None
+            _blip_model = None
     return _blip_processor, _blip_model
+
+
+def get_blip_caption(image_pil):
+    """
+    Génère une légende pour une image avec BLIP.
+    Retourne une chaîne vide en cas d'échec.
+    """
+    processor, model = init_blip()
+    if processor is None or model is None:
+        return ""
+
+    try:
+        inputs = processor(image_pil, return_tensors="pt").to(device)
+        out = model.generate(**inputs)
+        caption = processor.decode(out[0], skip_special_tokens=True)
+        return caption
+    except Exception as e:
+        logger.warning(f"⚠️ Erreur génération légende BLIP: {e}")
+        return ""
+
+
+# ===== FONCTIONS EXISTANTES (inchangées) =====
 
 def detecter_formes_opencv(image_cv):
     """
@@ -59,7 +90,7 @@ def detecter_formes_opencv(image_cv):
         if lines is not None:
             resultats["lignes"] = len(lines)
 
-            # Calculer l'angle moyen des lignes (pour plan incliné)
+            # Calculer l'angle moyen des lignes
             angles = []
             for line in lines:
                 x1, y1, x2, y2 = line[0]
@@ -67,7 +98,6 @@ def detecter_formes_opencv(image_cv):
                 angles.append(abs(angle) % 180)
 
             if angles:
-                # Prendre l'angle le plus fréquent (mode approximatif)
                 angles_arr = np.array(angles)
                 hist, bins = np.histogram(angles_arr, bins=18, range=(0, 180))
                 resultats["angle_principal"] = int(bins[np.argmax(hist)] + 5)
@@ -93,11 +123,10 @@ def detecter_formes_opencv(image_cv):
         if resultats["rectangles"] > 0:
             resultats["description_formes"].append(f"{resultats['rectangles']} formes rectangulaires")
 
-        # 4) Détection basique des flèches (lignes avec triangle)
-        # Version simplifiée - on compte les lignes courtes qui pourraient être des flèches
+        # 4) Détection basique des flèches
         if lines is not None:
             fleches_potentielles = sum(1 for line in lines if abs(line[0][2] - line[0][0]) < 50)
-            resultats["fleches"] = min(fleches_potentielles // 2, 5)  # Approximation
+            resultats["fleches"] = min(fleches_potentielles // 2, 5)
 
     except Exception as e:
         logger.warning(f"⚠️ Erreur détection formes: {e}")
@@ -110,14 +139,11 @@ def extraire_texte_dans_schema(image_pil):
     Extrait le texte présent DANS le schéma (légendes, valeurs, etc.)
     """
     try:
-        # Configuration Tesseract pour reconnaître texte + chiffres
         custom_config = r'--oem 3 --psm 6 -l fra+eng+digits'
         texte = pytesseract.image_to_string(image_pil, config=custom_config)
 
-        # Nettoyer et structurer
         lignes = [l.strip() for l in texte.split('\n') if l.strip()]
 
-        # Extraire les nombres (masses, angles, etc.)
         nombres = []
         for ligne in lignes:
             nombres_ligne = re.findall(r'\d+[.,]?\d*', ligne)
@@ -126,7 +152,7 @@ def extraire_texte_dans_schema(image_pil):
         return {
             "texte_complet": texte.strip(),
             "lignes": lignes,
-            "nombres_extraits": list(set(nombres))  # Éliminer les doublons
+            "nombres_extraits": list(set(nombres))
         }
     except Exception as e:
         logger.warning(f"⚠️ Erreur Tesseract sur schéma: {e}")
@@ -135,7 +161,7 @@ def extraire_texte_dans_schema(image_pil):
 
 def analyser_schema_unique(image_pil, page_num, position_dans_flux=None):
     """
-    Analyse complète d'un schéma avec tous les outils gratuits.
+    Analyse complète d'un schéma avec BLIP + OpenCV + Tesseract.
     """
     resultats = {
         "page": page_num,
@@ -153,11 +179,9 @@ def analyser_schema_unique(image_pil, page_num, position_dans_flux=None):
         image_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
 
         # 2) Légende avec BLIP
-        #processor, model = get_blip_model()
-        #if processor and model:
-            #inputs = processor(image_pil, return_tensors="pt")
-        # out = model.generate(**inputs)
-            #resultats["legende"] = processor.decode(out[0], skip_special_tokens=True)
+        resultats["legende"] = get_blip_caption(image_pil)
+        if resultats["legende"]:
+            logger.debug(f"   BLIP: {resultats['legende'][:100]}")
 
         # 3) Détection des formes avec OpenCV
         resultats["formes"] = detecter_formes_opencv(image_cv)
