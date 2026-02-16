@@ -153,11 +153,11 @@ def analyser_schema_unique(image_pil, page_num, position_dans_flux=None):
         image_cv = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
 
         # 2) Légende avec BLIP
-        processor, model = get_blip_model()
-        if processor and model:
-            inputs = processor(image_pil, return_tensors="pt")
-            out = model.generate(**inputs)
-            resultats["legende"] = processor.decode(out[0], skip_special_tokens=True)
+        #processor, model = get_blip_model()
+        #if processor and model:
+            #inputs = processor(image_pil, return_tensors="pt")
+        # out = model.generate(**inputs)
+            #resultats["legende"] = processor.decode(out[0], skip_special_tokens=True)
 
         # 3) Détection des formes avec OpenCV
         resultats["formes"] = detecter_formes_opencv(image_cv)
