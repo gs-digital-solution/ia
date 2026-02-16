@@ -579,7 +579,7 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # ===== NOUVELLE PARTIE : SAUVEGARDE LOCALE POUR ANALYSE =====
+        # ===== SAUVEGARDE LOCALE POUR ANALYSE =====
         temp_dir = tempfile.gettempdir()
         local_path = os.path.join(temp_dir, os.path.basename(fichier.name))
         with open(local_path, "wb") as f:
@@ -587,7 +587,21 @@ class SplitExercisesAPIView(APIView):
                 f.write(chunk)
         # ===== FIN SAUVEGARDE =====
 
-        # 4) EXTRAIRE LE TEXTE (avec Mathpix si scientifique)
+        # ===== 1) ANALYSER LES SCHÉMAS EN PREMIER (AVEC DEEPSEEK-VL) =====
+        print(f"🔍 Analyse des schémas avec DeepSeek-VL...")
+        from .vision_utils import analyser_schemas_document_vl
+        schemas_data = analyser_schemas_document_vl(local_path)
+
+        nb_schemas = schemas_data.get('nombre_total', 0)
+        print(f"✅ {nb_schemas} schéma(s) détecté(s)")
+
+        if nb_schemas > 0:
+            for i, schema in enumerate(schemas_data.get('schemas_detaille', [])[:3]):
+                print(f"   • Schéma {i + 1}: {schema.get('type_schema', 'inconnu')} - {schema.get('legende', '')[:80]}")
+        # ===== FIN ANALYSE SCHÉMAS =====
+
+        # ===== 2) EXTRAIRE LE TEXTE (avec Mathpix si scientifique) =====
+        # Note: extraire_texte_fichier utilise le fichier original, pas local_path
         texte = extraire_texte_fichier(fichier, demande)
 
         if not texte:
@@ -599,18 +613,7 @@ class SplitExercisesAPIView(APIView):
             return Response({"error": "Impossible d'extraire le texte."}, status=400)
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
-
-        # 5) ANALYSER LES SCHÉMAS avec Deepseek-VL
-        print(f"🔍 Analyse des schémas avec DeepSeek-VL...")
-        from .vision_utils import analyser_schemas_document_vl
-        schemas_data = analyser_schemas_document_vl(local_path)
-
-        nb_schemas = schemas_data.get('nombre_total', 0)
-        print(f"✅ {nb_schemas} schéma(s) détecté(s)")
-
-        if nb_schemas > 0:
-            for i, schema in enumerate(schemas_data.get('schemas_detaille', [])[:3]):
-                print(f"   • Schéma {i + 1}: {schema.get('type_schema', 'inconnu')} - {schema.get('legende', '')[:80]}")
+        # ===== FIN EXTRACTION TEXTE =====
 
         # Nettoyer le fichier temporaire
         try:
@@ -622,17 +625,15 @@ class SplitExercisesAPIView(APIView):
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
         # 7) ASSOCIER LES SCHÉMAS AUX EXERCICES
-        # Répartition simple : round-robin (à améliorer selon la position)
         schemas_par_exercice = [[] for _ in range(len(exercices_detaillees))]
 
         if schemas_data.get("schemas_detaille"):
+            # Répartition simple : round-robin (à améliorer selon la position)
             for i, schema in enumerate(schemas_data["schemas_detaille"]):
-                # Répartition circulaire
                 idx_exo = i % len(exercices_detaillees)
                 schemas_par_exercice[idx_exo].append(schema)
 
-            print(
-                f"📊 {len(schemas_data['schemas_detaille'])} schémas répartis sur {len(exercices_detaillees)} exercices")
+            print(f"📊 {len(schemas_data['schemas_detaille'])} schémas répartis sur {len(exercices_detaillees)} exercices")
 
         # 8) CONSTRUIRE LA LISTE JSON COMPLÈTE AVEC SCHÉMAS INTÉGRÉS
         exercices_complets = []
@@ -664,7 +665,7 @@ class SplitExercisesAPIView(APIView):
                 "extrait": extrait,
                 "contenu_complet": contenu_complet,
                 "longueur_contenu": len(contenu_complet),
-                "schemas": schemas_par_exercice[idx] if idx < len(schemas_par_exercice) else []  # ← NOUVEAU
+                "schemas": schemas_par_exercice[idx] if idx < len(schemas_par_exercice) else []
             }
             exercices_complets.append(exercice_data)
 
@@ -684,7 +685,7 @@ class SplitExercisesAPIView(APIView):
                 "index": ex["index"],
                 "titre": ex["titre"],
                 "extrait": ex["extrait"],
-                "nombre_schemas": len(ex["schemas"])  # ← Optionnel pour affichage
+                "nombre_schemas": len(ex["schemas"])
             })
 
         return Response({
