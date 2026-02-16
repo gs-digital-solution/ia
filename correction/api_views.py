@@ -600,9 +600,17 @@ class SplitExercisesAPIView(APIView):
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
 
-        # 5) ANALYSER LES SCHÉMAS avec les outils gratuits
-        from .ia_utils import analyser_schemas_document
-        schemas_data = analyser_schemas_document(local_path)
+        # 5) ANALYSER LES SCHÉMAS avec Deepseek-VL
+        print(f"🔍 Analyse des schémas avec DeepSeek-VL...")
+        from .vision_utils import analyser_schemas_document_vl
+        schemas_data = analyser_schemas_document_vl(local_path)
+
+        nb_schemas = schemas_data.get('nombre_total', 0)
+        print(f"✅ {nb_schemas} schéma(s) détecté(s)")
+
+        if nb_schemas > 0:
+            for i, schema in enumerate(schemas_data.get('schemas_detaille', [])[:3]):
+                print(f"   • Schéma {i + 1}: {schema.get('type_schema', 'inconnu')} - {schema.get('legende', '')[:80]}")
 
         # Nettoyer le fichier temporaire
         try:

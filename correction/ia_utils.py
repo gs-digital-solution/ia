@@ -37,66 +37,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def analyser_schemas_document(fichier_path: str) -> dict:
-    """
-    Analyse tous les schémas d'un document avec les outils gratuits.
-    Retourne une liste de schémas avec leur page et position.
-    """
-    from pdf2image import convert_from_path
-    from PIL import Image
-    from .schemas_utils import analyser_schema_unique
-    import os
-    import tempfile
-
-    resultats = {
-        "schemas_detaille": [],
-        "nombre_total": 0
-    }
-
-    try:
-        ext = os.path.splitext(fichier_path)[1].lower()
-        images = []
-
-        # Convertir le document en images
-        if ext == '.pdf':
-            images = convert_from_path(fichier_path, dpi=200)
-            logger.info(f"📄 PDF converti en {len(images)} pages")
-        else:
-            # C'est déjà une image
-            images = [Image.open(fichier_path)]
-
-        # Analyser chaque page
-        for page_num, image in enumerate(images, 1):
-            try:
-                # Analyser la page pour détecter des schémas
-                # Version simplifiée : on considère que la page entière peut contenir un schéma
-                # Dans une version plus avancée, on pourrait découper la page en régions
-
-                schema_data = analyser_schema_unique(
-                    image_pil=image,
-                    page_num=page_num,
-                    position_dans_flux=f"page_{page_num}"
-                )
-
-                # Si on a détecté quelque chose d'intéressant
-                if (schema_data["legende"] or
-                        schema_data["formes"].get("lignes", 0) > 2 or
-                        schema_data["texte"]):
-                    resultats["schemas_detaille"].append(schema_data)
-                    logger.info(f"✅ Schéma détecté page {page_num}: {schema_data['type_schema']}")
-
-            except Exception as e:
-                logger.warning(f"⚠️ Erreur analyse page {page_num}: {e}")
-                continue
-
-        resultats["nombre_total"] = len(resultats["schemas_detaille"])
-        logger.info(f"🎯 Total: {resultats['nombre_total']} schémas détectés")
-
-    except Exception as e:
-        logger.error(f"❌ Erreur analyse document: {e}")
-
-    return resultats
-
 mathpix_logger = logging.getLogger('mathpix')
 def log_extraction_method(demande, method, success=True):
     """Journaliser la méthode d'extraction utilisée"""
@@ -471,10 +411,7 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
     """
-    Analyse scientifique avancée avec choix du moteur selon département.
-    Pour les départements scientifiques : Mathpix (formules LaTeX précises)
-    Sinon : OCR standard
-    MAINTENANT AVEC ANALYSE DES SCHÉMAS DANS TOUS LES CAS !
+    Analyse scientifique avec DeepSeek-VL pour les schémas.
     """
     logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
 
@@ -486,88 +423,49 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
         "graphs": [],
         "angles": [],
         "numbers": [],
-        "schemas_detaille": [],  # ← NOUVEAU
+        "schemas_detaille": [],
         "source_extraction": "standard",
         "departement": "inconnu"
     }
 
-    # 1) DÉTECTION DU DÉPARTEMENT POUR CHOIX DE LA MÉTHODE D'EXTRACTION TEXTE
+    # 1) DÉTECTION DU DÉPARTEMENT
     use_mathpix = False
-    dept_nom = "inconnu"
-
     if demande and demande.departement:
-        dept_nom = demande.departement.nom
         use_mathpix = is_departement_scientifique(demande.departement)
-        logger.info(f"📊 Département '{dept_nom}' → Mathpix = {use_mathpix}")
 
-    # 2) ANALYSE DES SCHÉMAS (TOUJOURS FAITE, INDÉPENDAMMENT)
-    logger.info("🖼️ Analyse des schémas avec outils gratuits...")
-    try:
-        schemas_data = analyser_schemas_document(fichier_path)
-        resultats["schemas_detaille"] = schemas_data.get("schemas_detaille", [])
+    # 2) ANALYSE DES SCHÉMAS AVEC DEEPSEEK-VL (TOUJOURS FAITE)
+    from .vision_utils import analyser_schemas_document_vl
+    logger.info("🖼️ Analyse des schémas avec DeepSeek-VL...")
 
-        # Pour compatibilité avec l'existant
-        for schema in resultats["schemas_detaille"]:
-            if schema["description_textuelle"]:
-                resultats["elements_visuels"].append(schema["description_textuelle"])
-            if schema["nombres"]:
-                resultats["numbers"].extend(schema["nombres"])
+    schemas_data = analyser_schemas_document_vl(fichier_path)
+    resultats["schemas_detaille"] = schemas_data.get("schemas_detaille", [])
 
-    except Exception as e:
-        logger.error(f"❌ Erreur analyse schémas: {e}")
+    # Remplir elements_visuels pour compatibilité
+    for schema in resultats["schemas_detaille"]:
+        if schema.get("description"):
+            resultats["elements_visuels"].append(schema["description"])
+        if schema.get("donnees", {}).get("angles"):
+            resultats["angles"].extend(schema["donnees"]["angles"])
+        if schema.get("donnees", {}).get("masses"):
+            resultats["numbers"].extend([m["valeur"] for m in schema["donnees"]["masses"]])
 
-    # 3) EXTRACTION DU TEXTE AVEC MATHPIX (si scientifique)
-    if use_mathpix:
-        logger.info("🧮 Extraction avec Mathpix (département scientifique)")
-
-        if not os.getenv("MATHPIX_APP_ID") or not os.getenv("MATHPIX_APP_KEY"):
-            logger.warning("⚠️ Configuration Mathpix manquante, fallback standard")
-            use_mathpix = False
-        else:
-            resultat_mathpix = extraire_avec_mathpix(fichier_path)
-
-            if resultat_mathpix.get("text") and len(resultat_mathpix["text"]) > 100:
-                resultats["texte_complet"] = resultat_mathpix["text"]
-                resultats["formules_latex"] = resultat_mathpix.get("latex_blocks", [])
-                resultats["source_extraction"] = "mathpix"
-                logger.info(f"✅ Mathpix réussi: {len(resultats['texte_complet'])} caractères")
-            else:
-                logger.warning("⚠️ Mathpix échec, fallback standard")
-                use_mathpix = False
-
-    # 4) EXTRACTION STANDARD (si pas Mathpix ou échec)
-    if not use_mathpix or not resultats["texte_complet"]:
+    # 3) EXTRACTION TEXTE (Mathpix ou OCR)
+    if use_mathpix and os.getenv("MATHPIX_APP_ID"):
+        logger.info("🧮 Extraction avec Mathpix")
+        mathpix_result = extraire_avec_mathpix(fichier_path)
+        if mathpix_result.get("text"):
+            resultats["texte_complet"] = mathpix_result["text"]
+            resultats["formules_latex"] = mathpix_result.get("latex_blocks", [])
+            resultats["source_extraction"] = "mathpix"
+    else:
         logger.info("🔤 Extraction standard (OCR)")
-
-        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img = Image.open(fichier_path)
-            clean = preprocess_image_for_ocr(img)
-            resultats["texte_complet"] = pytesseract.image_to_string(
-                clean, config=r'--oem 3 --psm 6 -l fra+eng+digits'
-            )
-        elif fichier_path.lower().endswith('.pdf'):
-            resultats["texte_complet"] = extraire_texte_pdf(fichier_path)
-
-            if len(resultats["texte_complet"]) < 50:
-                # Fallback OCR page par page
-                pages = convert_from_path(fichier_path, dpi=300)
-                txts = []
-                for page in pages:
-                    clean = preprocess_image_for_ocr(page)
-                    txts.append(pytesseract.image_to_string(
-                        clean, config=r'--oem 3 --psm 6 -l fra+eng+digits'
-                    ))
-                resultats["texte_complet"] = "\n".join(txts)
-
+        resultats["texte_complet"] = extraire_texte_robuste(fichier_path)
         resultats["source_extraction"] = "ocr"
-        logger.info(f"✅ OCR: {len(resultats['texte_complet'])} caractères")
 
-    # 5) ENRICHIR LES ÉLÉMENTS VISUELS AVEC LES FORMULES LATEX
-    if resultats["formules_latex"]:
-        for i, formule in enumerate(resultats["formules_latex"][:5]):
-            resultats["elements_visuels"].append(f"Formule {i + 1}: {formule}")
-
+    logger.info(
+        f"✅ Analyse terminée: {len(resultats['texte_complet'])} chars, {len(resultats['schemas_detaille'])} schémas")
     return resultats
+
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
     Extraction simple : OCR direct → Analyse IA
