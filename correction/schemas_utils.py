@@ -44,22 +44,8 @@ def init_blip():
 
 
 def get_blip_caption(image_pil):
-    """
-    Génère une légende pour une image avec BLIP.
-    Retourne une chaîne vide en cas d'échec.
-    """
-    processor, model = init_blip()
-    if processor is None or model is None:
-        return ""
-
-    try:
-        inputs = processor(image_pil, return_tensors="pt").to(device)
-        out = model.generate(**inputs)
-        caption = processor.decode(out[0], skip_special_tokens=True)
-        return caption
-    except Exception as e:
-        logger.warning(f"⚠️ Erreur génération légende BLIP: {e}")
-        return ""
+    """Version simplifiée sans BLIP pour test"""
+    return ""  # Retourne vide, pas de crash
 
 
 # ===== FONCTIONS EXISTANTES (inchangées) =====
