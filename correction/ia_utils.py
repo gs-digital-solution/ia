@@ -2026,12 +2026,12 @@ def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
     return result
 
 
-# ========== ANALYSE DES SCHÉMAS AVEC DEEPSEEK-VL ==========
+# ========== ANALYSE DES SCHÉMAS AVEC DEEPSEEK-CHAT ==========
 # À AJOUTER vers la fin de ia_utils.py, avant les @shared_task
 
 def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> dict:
     """
-    Analyse un schéma/image avec deepseek-vl et retourne une description structurée.
+    Analyse un schéma/image avec deepseek-chat (capacités vision) et retourne une description structurée.
 
     Args:
         image_path: Chemin vers l'image (fichier temporaire)
@@ -2043,11 +2043,11 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             'angles': list,      # Angles détectés [{"valeur": 30, "unite": "°", "description": "..."}]
             'dimensions': list,  # Dimensions [{"valeur": 5, "unite": "cm", "description": "..."}]
             'textes': list,      # Textes/légendes lus
-            'objets': list,      # Types d'objets détectés
+            'objets': list,      # Types d'objets géométriques détectés
             'interpretation': str # Interprétation scientifique
         }
     """
-    logger.info(f"🖼️ Analyse schéma avec deepseek-vl: {image_path}")
+    logger.info(f"🖼️ Analyse schéma avec deepseek-chat: {image_path}")
 
     # Vérifier que la clé API est configurée
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -2078,7 +2078,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             img_b64 = base64.b64encode(buffer.getvalue()).decode()
             logger.info(f"✅ Image redimensionnée: {len(img_b64) * 3 / 4 / 1024:.1f}Ko")
 
-        # Construction du prompt selon le contexte
+        # Construction du prompt avec la balise [image]
         if not question:
             question = """
             Analyse ce schéma/croquis en détail et retourne UNIQUEMENT un JSON structuré avec :
@@ -2098,16 +2098,16 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             - Utilise des guillemets doubles, pas simples
             """
 
-        # Appel à l'API deepseek-vl
+        # IMPORTANT: Format correct pour deepseek-chat - utilisation de la balise [image] dans le texte
+        prompt_texte = f"[image]{img_b64}[/image]\n\n{question}"
+
+        # Appel à l'API deepseek-chat
         payload = {
-            "model": "deepseek-vl",
+            "model": "deepseek-chat",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": question},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                    ]
+                    "content": prompt_texte  # ← CHANGEMENT: plus de tableau, un simple string avec balise [image]
                 }
             ],
             "temperature": 0.1,  # Bas pour précision
@@ -2120,9 +2120,9 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             "Content-Type": "application/json"
         }
 
-        logger.info(f"📡 Envoi à deepseek-vl (taille image: {len(img_b64) / 1024:.1f}Ko)")
+        logger.info(f"📡 Envoi à deepseek-chat (taille image: {len(img_b64) / 1024:.1f}Ko)")
         response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            "https://api.deepseek.com/v1/chat/completions",  # Même URL
             headers=headers,
             json=payload,
             timeout=60
@@ -2170,7 +2170,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
                     "error": "json_parse_error"
                 }
         else:
-            logger.error(f"❌ Erreur API deepseek-vl: {response.status_code} - {response.text[:200]}")
+            logger.error(f"❌ Erreur API deepseek-chat: {response.status_code} - {response.text[:200]}")
             return {
                 "description": "",
                 "angles": [],
@@ -2207,7 +2207,7 @@ def extraire_schemas_du_document(fichier_path: str, demande=None) -> list:
 
     Returns:
         list: Liste des schémas détectés avec leur page et données
-              [{"page": 1, "schema_data": {...}}, ...]
+              [{"page": 1, "schemas": [...], "nombre": n}, ...]
     """
     logger.info(f"📑 Extraction des schémas du document: {fichier_path}")
 
@@ -2314,7 +2314,6 @@ def extraire_schemas_du_document(fichier_path: str, demande=None) -> list:
                     os.unlink(temp_file)
             except:
                 pass
-
 
 # ============== TÂCHE ASYNCHRONE ==============
 
