@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import CustomUser, Pays, SousSysteme
+from abonnement.models import UserAbonnement, SubscriptionType
 
 class UserRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -9,26 +10,54 @@ class UserRegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'first_name',         # Prénom
-            #'gmail',               Email utilisateur
-            'whatsapp_number',    # Numéro WhatsApp
-            'pays',               # FK objet (id)
-            'sous_systeme',       # FK objet (id)
-            'secret_question',    # Question secrète (contenu)
-            'secret_answer',      # Réponse
-            'password',           # Mot de passe
-            # ON NE DEMANDE PAS code_promo ni role à la création !
+            'first_name',
+            'whatsapp_number',
+            'pays',
+            'sous_systeme',
+            'secret_question',
+            'secret_answer',
+            'password',
         ]
 
     def create(self, validated_data):
         password = validated_data.pop('password')
         user = CustomUser(**validated_data)
         user.set_password(password)
-        user.username = user.whatsapp_number  # Peut-être adapter selon ta logique
-        # Code promo généré plus tard (par signal post_save ou dans la vue)
+        user.username = user.whatsapp_number
         user.save()
-        return user
 
+        # ===== CRÉATION DE L'ABONNEMENT GRATUIT ICI =====
+        try:
+            print(f"🟡 [Serializer] Création abonnement pour {user.whatsapp_number}")
+
+            # Récupérer ou créer un type d'abonnement
+            sub_type, created = SubscriptionType.objects.get_or_create(
+                code='normal',
+                defaults={
+                    'nom': 'Abonnement standard',
+                    'description': 'Abonnement offert à l\'inscription',
+                    'prix_base': 0,
+                    'nombre_exercices_total': 1,
+                    'duree_jours': 30,
+                    'actif': True
+                }
+            )
+
+            # Créer l'abonnement
+            abonnement = UserAbonnement.objects.create(
+                utilisateur=user,
+                abonnement=sub_type,
+                exercice_restants=1,
+            )
+            print(f"✅ [Serializer] Abonnement créé avec {abonnement.exercice_restants} crédit(s)")
+
+        except Exception as e:
+            print(f"❌ [Serializer] Erreur création abonnement: {e}")
+            import traceback
+            traceback.print_exc()
+        # ===== FIN =====
+
+        return user
 
 from .models import DemandeCorrection, SoumissionIA, CorrigePartiel
 

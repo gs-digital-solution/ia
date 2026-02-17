@@ -61,42 +61,23 @@ from .models import ContactWhatsApp
 
 
 class UserRegisterAPIView(APIView):
+    # permission_classes = [AllowAny]
+
     def post(self, request):
+        print(f"🔵 [APIView] Données reçues: {request.data}")
+
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
+            user = serializer.save()  # ← L'abonnement est créé DANS le serializer
+            print(f"✅ [APIView] Utilisateur créé: {user.whatsapp_number}")
 
-            # ===== VERSION FORTIFIÉE =====
-            try:
-                from abonnement.models import UserAbonnement, SubscriptionType
+            return Response(
+                {"success": True, "message": "Inscription réussie."},
+                status=status.HTTP_201_CREATED
+            )
 
-                # 1. Récupérer OU CRÉER un type d'abonnement par défaut
-                sub_type, created = SubscriptionType.objects.get_or_create(
-                    code='normal',
-                    defaults={
-                        'nom': 'Abonnement standard',
-                        'prix_base': 0,
-                        'nombre_exercices_total': 1,
-                        'duree_jours': 30,
-                        'actif': True
-                    }
-                )
-
-                # 2. Créer l'abonnement avec 1 crédit
-                UserAbonnement.objects.create(
-                    utilisateur=user,
-                    abonnement=sub_type,
-                    exercice_restants=1,
-                )
-                print(f"✅ Abonnement créé pour {user.whatsapp_number}")
-
-            except Exception as e:
-                print(f"⚠️ Erreur: {e}")
-                # On ne bloque pas l'inscription
-            # ===== FIN =====
-
-            return Response({"success": True, "message": "Inscription réussie."}, status=201)
-        return Response(serializer.errors, status=400)
+        print(f"❌ [APIView] Erreurs: {serializer.errors}")
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # *API de connexion — code complet et expliqué*
