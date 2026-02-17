@@ -8,7 +8,25 @@ logger = logging.getLogger(__name__)
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
-    # ... votre code ...
+    password = serializers.CharField(write_only=True)
+    pays = serializers.PrimaryKeyRelatedField(queryset=Pays.objects.all(), required=True)
+    sous_systeme = serializers.PrimaryKeyRelatedField(queryset=SousSysteme.objects.all(), required=True)
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'first_name',
+            'whatsapp_number',
+            'pays',
+            'sous_systeme',
+            'secret_question',
+            'secret_answer',
+            'password',
+        ]
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'whatsapp_number': {'validators': []},  # Optionnel : évite les validateurs par défaut
+        }
 
     def create(self, validated_data):
         logger.debug("=" * 50)
