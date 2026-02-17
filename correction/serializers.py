@@ -32,7 +32,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             'password': {'write_only': True},
-            'whatsapp_number': {'validators': []},  # Optionnel : évite les validateurs par défaut
+            'whatsapp_number': {'validators': []},
         }
 
     def create(self, validated_data):
@@ -49,27 +49,32 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         logger.debug(f"Utilisateur créé: {user.id} - {user.whatsapp_number}")
 
         try:
-            from abonnement.models import UserAbonnement, SubscriptionType
+            from abonnement.models import UserAbonnement, SubscriptionType, GlobalSubscriptionConfig
+
+            # Récupérer la configuration globale
+            config = GlobalSubscriptionConfig.objects.first()
+            if not config:
+                config = GlobalSubscriptionConfig.objects.create()
+                logger.debug(f"✅ Config globale créée avec {config.nb_gratuit_par_utilisateur} crédit(s)")
 
             logger.debug("Recherche du type d'abonnement...")
             sub_type = SubscriptionType.objects.filter(code='gratuit_promo', actif=True).first()
             logger.debug(f"Type trouvé: {sub_type}")
 
             if sub_type:
-                # === CORRECTION: Gestion explicite des dates ===
                 maintenant = timezone.now()
 
                 abonnement = UserAbonnement.objects.create(
                     utilisateur=user,
                     abonnement=sub_type,
-                    exercice_restants=1,
-                    date_debut=maintenant,  # Forcer la date de début
-                    date_fin=maintenant + timedelta(days=sub_type.duree_jours)  # Forcer la date de fin
+                    exercice_restants=config.nb_gratuit_par_utilisateur,  # ← Depuis la config
+                    date_debut=maintenant,
+                    date_fin=maintenant + timedelta(days=sub_type.duree_jours)
                 )
                 logger.debug(f"✅ Abonnement créé: ID={abonnement.id}")
                 logger.debug(f"   Date début: {abonnement.date_debut}")
                 logger.debug(f"   Date fin: {abonnement.date_fin}")
-                logger.debug(f"   Crédits: {abonnement.exercice_restants}")
+                logger.debug(f"   Crédits: {abonnement.exercice_restants} (depuis config)")
             else:
                 logger.error("❌ Aucun type d'abonnement trouvé!")
 
