@@ -23,44 +23,66 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        print("\n" + "=" * 50)
+        print("ÉTAPE 1: Début de la création utilisateur")
+        print(f"Données reçues: {validated_data}")
+
         password = validated_data.pop('password')
         user = CustomUser(**validated_data)
         user.set_password(password)
         user.username = user.whatsapp_number
         user.save()
 
-        # ===== CRÉATION DE L'ABONNEMENT AVEC LE TYPE GRATUIT EXISTANT =====
-        try:
-            print(f"🟡 [Inscription] Création abonnement pour {user.whatsapp_number}")
+        print(f"ÉTAPE 2: Utilisateur créé avec ID: {user.id}")
 
-            # Récupérer le type GRATUIT qui existe déjà dans votre base
-            # D'après votre print, c'est celui avec code='gratuit_promo'
+        # ===== BLOC DE CRÉATION ABONNEMENT ULTRA-DÉBOGUÉ =====
+        print("\nÉTAPE 3: Tentative de création abonnement")
+
+        try:
+            # Import à l'intérieur pour être sûr
+            print("   - Import des modèles d'abonnement...")
+            from abonnement.models import UserAbonnement, SubscriptionType
+
+            print("   - Recherche du type d'abonnement 'gratuit_promo'...")
             sub_type = SubscriptionType.objects.filter(code='gratuit_promo', actif=True).first()
 
-            if not sub_type:
-                # Si pas trouvé, prendre le premier type disponible
+            if sub_type:
+                print(f"   ✓ Type trouvé: {sub_type.id} - {sub_type.nom}")
+            else:
+                print("   ✗ Type 'gratuit_promo' non trouvé, recherche d'un autre type...")
                 sub_type = SubscriptionType.objects.filter(actif=True).first()
-                print(f"⚠️ Type gratuit non trouvé, utilisation de: {sub_type}")
+                if sub_type:
+                    print(f"   ✓ Type de secours trouvé: {sub_type.id} - {sub_type.nom}")
+                else:
+                    print("   ✗ AUCUN type d'abonnement trouvé dans la base!")
 
             if sub_type:
-                # Créer l'abonnement
+                print("   - Création de l'objet UserAbonnement...")
                 abonnement = UserAbonnement.objects.create(
                     utilisateur=user,
                     abonnement=sub_type,
-                    exercice_restants=1,  # 1 crédit gratuit
+                    exercice_restants=1,
                 )
-                print(f"✅ [Inscription] Abonnement créé: ID={abonnement.id}, crédits={abonnement.exercice_restants}")
-                print(f"✅ [Inscription] Type utilisé: {sub_type.nom}")
+                print(f"   ✓ Abonnement créé avec ID: {abonnement.id}")
+                print(f"   ✓ Crédits: {abonnement.exercice_restants}")
+                print(f"   ✓ Statut: {abonnement.statut}")
             else:
-                print("❌ [Inscription] AUCUN type d'abonnement trouvé!")
+                print("   ✗ Impossible de créer l'abonnement: pas de type disponible")
 
         except Exception as e:
-            print(f"❌ [Inscription] Erreur: {str(e)}")
+            print(f"\n❌ ERREUR dans la création de l'abonnement:")
+            print(f"   Type d'erreur: {type(e).__name__}")
+            print(f"   Message: {str(e)}")
             import traceback
+            print("   Traceback complet:")
             traceback.print_exc()
-        # ===== FIN =====
+
+        print("=" * 50 + "\n")
+        # ===== FIN DU BLOC =====
 
         return user
+
+
 from .models import DemandeCorrection, SoumissionIA, CorrigePartiel
 
 class CorrigePartielSerializer(serializers.ModelSerializer):
