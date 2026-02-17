@@ -3,7 +3,14 @@ from .models import CustomUser, Pays, SousSysteme
 from abonnement.models import UserAbonnement, SubscriptionType
 from django.db import transaction
 from abonnement.models import UserAbonnement, SubscriptionType
+
+
 import logging
+from rest_framework import serializers
+from .models import CustomUser, Pays, SousSysteme
+from django.utils import timezone
+from datetime import timedelta
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,12 +56,20 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             logger.debug(f"Type trouvé: {sub_type}")
 
             if sub_type:
+                # === CORRECTION: Gestion explicite des dates ===
+                maintenant = timezone.now()
+
                 abonnement = UserAbonnement.objects.create(
                     utilisateur=user,
                     abonnement=sub_type,
                     exercice_restants=1,
+                    date_debut=maintenant,  # Forcer la date de début
+                    date_fin=maintenant + timedelta(days=sub_type.duree_jours)  # Forcer la date de fin
                 )
                 logger.debug(f"✅ Abonnement créé: ID={abonnement.id}")
+                logger.debug(f"   Date début: {abonnement.date_debut}")
+                logger.debug(f"   Date fin: {abonnement.date_fin}")
+                logger.debug(f"   Crédits: {abonnement.exercice_restants}")
             else:
                 logger.error("❌ Aucun type d'abonnement trouvé!")
 
@@ -65,7 +80,6 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         logger.debug("=" * 50)
 
         return user
-
 from .models import DemandeCorrection, SoumissionIA, CorrigePartiel
 
 class CorrigePartielSerializer(serializers.ModelSerializer):
