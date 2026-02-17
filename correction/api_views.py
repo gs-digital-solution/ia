@@ -61,57 +61,43 @@ from .models import ContactWhatsApp
 
 
 class UserRegisterAPIView(APIView):
-    # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
-
     def post(self, request):
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
 
-            # ===== AJOUT SIMPLE : Créer l'abonnement gratuit =====
+            # ===== VERSION FORTIFIÉE =====
             try:
-                from abonnement.models import UserAbonnement, SubscriptionType, GlobalSubscriptionConfig
-                from datetime import timedelta
-                from django.utils import timezone
+                from abonnement.models import UserAbonnement, SubscriptionType
 
-                # Récupérer la config globale (nb de gratuités)
-                config = GlobalSubscriptionConfig.objects.first()
-                if not config:
-                    config = GlobalSubscriptionConfig.objects.create()
+                # 1. Récupérer OU CRÉER un type d'abonnement par défaut
+                sub_type, created = SubscriptionType.objects.get_or_create(
+                    code='normal',
+                    defaults={
+                        'nom': 'Abonnement standard',
+                        'prix_base': 0,
+                        'nombre_exercices_total': 1,
+                        'duree_jours': 30,
+                        'actif': True
+                    }
+                )
 
-                # Récupérer le type d'abonnement gratuit
-                sub_type = SubscriptionType.objects.filter(
-                    code='gratuit_promo',
-                    actif=True
-                ).first()
-
-                # Si pas de type gratuit, prendre le premier type disponible
-                if not sub_type:
-                    sub_type = SubscriptionType.objects.filter(actif=True).first()
-
-                if sub_type:
-                    # Créer l'abonnement
-                    UserAbonnement.objects.create(
-                        utilisateur=user,
-                        abonnement=sub_type,
-                        exercice_restants=config.nb_gratuit_par_utilisateur,
-                        # La date de fin sera calculée automatiquement par le modèle
-                    )
-                    print(
-                        f"✅ [Inscription] Abonnement gratuit créé pour {user.whatsapp_number} avec {config.nb_gratuit_par_utilisateur} crédit(s)")
-                else:
-                    print("⚠️ [Inscription] Aucun type d'abonnement trouvé")
+                # 2. Créer l'abonnement avec 1 crédit
+                UserAbonnement.objects.create(
+                    utilisateur=user,
+                    abonnement=sub_type,
+                    exercice_restants=1,
+                )
+                print(f"✅ Abonnement créé pour {user.whatsapp_number}")
 
             except Exception as e:
-                # On log l'erreur mais on ne bloque pas l'inscription
-                print(f"⚠️ [Inscription] Erreur création abonnement gratuit: {e}")
-            # ===== FIN DE L'AJOUT =====
+                print(f"⚠️ Erreur: {e}")
+                # On ne bloque pas l'inscription
+            # ===== FIN =====
 
-            return Response(
-                {"success": True, "message": "Inscription réussie."},
-                status=status.HTTP_201_CREATED
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": True, "message": "Inscription réussie."}, status=201)
+        return Response(serializer.errors, status=400)
+
 
 # *API de connexion — code complet et expliqué*
 class UserLoginAPIView(APIView):
