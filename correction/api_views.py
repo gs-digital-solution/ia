@@ -67,6 +67,46 @@ class UserRegisterAPIView(APIView):
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
+
+            # ===== AJOUT SIMPLE : Créer l'abonnement gratuit =====
+            try:
+                from abonnement.models import UserAbonnement, SubscriptionType, GlobalSubscriptionConfig
+                from datetime import timedelta
+                from django.utils import timezone
+
+                # Récupérer la config globale (nb de gratuités)
+                config = GlobalSubscriptionConfig.objects.first()
+                if not config:
+                    config = GlobalSubscriptionConfig.objects.create()
+
+                # Récupérer le type d'abonnement gratuit
+                sub_type = SubscriptionType.objects.filter(
+                    code='gratuit_promo',
+                    actif=True
+                ).first()
+
+                # Si pas de type gratuit, prendre le premier type disponible
+                if not sub_type:
+                    sub_type = SubscriptionType.objects.filter(actif=True).first()
+
+                if sub_type:
+                    # Créer l'abonnement
+                    UserAbonnement.objects.create(
+                        utilisateur=user,
+                        abonnement=sub_type,
+                        exercice_restants=config.nb_gratuit_par_utilisateur,
+                        # La date de fin sera calculée automatiquement par le modèle
+                    )
+                    print(
+                        f"✅ [Inscription] Abonnement gratuit créé pour {user.whatsapp_number} avec {config.nb_gratuit_par_utilisateur} crédit(s)")
+                else:
+                    print("⚠️ [Inscription] Aucun type d'abonnement trouvé")
+
+            except Exception as e:
+                # On log l'erreur mais on ne bloque pas l'inscription
+                print(f"⚠️ [Inscription] Erreur création abonnement gratuit: {e}")
+            # ===== FIN DE L'AJOUT =====
+
             return Response(
                 {"success": True, "message": "Inscription réussie."},
                 status=status.HTTP_201_CREATED
