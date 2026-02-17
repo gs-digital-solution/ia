@@ -269,31 +269,48 @@ MATHJAX_PATH = os.path.join(BASE_DIR, 'node_modules', 'mathjax')
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {asctime} {message}',
+            'style': '{',
+        },
+    },
     'handlers': {
         'file': {
-            'level': 'DEBUG',       # passez à INFO ici
+            'level': 'DEBUG',           # Changé de INFO à DEBUG
             'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'django-error.log'),
+            'filename': os.path.join(BASE_DIR, 'django-debug.log'),  # Nouveau fichier
+            'formatter': 'verbose',
         },
         'console': {
             'class': 'logging.StreamHandler',
-            'level': 'INFO',       # et ici
+            'level': 'DEBUG',            # Changé de INFO à DEBUG
+            'formatter': 'simple',
         },
     },
     'loggers': {
         'django': {
             'handlers': ['file', 'console'],
-            'level': 'ERROR',      # Django reste en ERROR
+            'level': 'INFO',              # Changé de ERROR à INFO
             'propagate': True,
         },
         'celery': {
-            'handlers': ['console'],
-            'level': 'INFO',       # logs Celery au niveau INFO
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',              # Changé de INFO à DEBUG
             'propagate': False,
         },
         'correction': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',       # tous les modules sous correction.*
+            'level': 'DEBUG',               # Changé de INFO à DEBUG
+            'propagate': False,
+        },
+        'abonnement': {                      # AJOUTÉ
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
             'propagate': False,
         },
     },

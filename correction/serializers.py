@@ -2,30 +2,18 @@ from rest_framework import serializers
 from .models import CustomUser, Pays, SousSysteme
 from abonnement.models import UserAbonnement, SubscriptionType
 from django.db import transaction
+from abonnement.models import UserAbonnement, SubscriptionType
+import logging
+logger = logging.getLogger(__name__)
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
-    pays = serializers.PrimaryKeyRelatedField(queryset=Pays.objects.all(), required=True)
-    sous_systeme = serializers.PrimaryKeyRelatedField(queryset=SousSysteme.objects.all(), required=True)
+    # ... votre code ...
 
-    class Meta:
-        model = CustomUser
-        fields = [
-            'first_name',
-            'whatsapp_number',
-            'pays',
-            'sous_systeme',
-            'secret_question',
-            'secret_answer',
-            'password',
-        ]
-
-    @transaction.atomic
     def create(self, validated_data):
-        print("\n" + "=" * 50)
-        print("ÉTAPE 1: Début de la création utilisateur")
-        print(f"Données reçues: {validated_data}")
+        logger.debug("=" * 50)
+        logger.debug("DÉBUT CRÉATION UTILISATEUR")
+        logger.debug(f"Données reçues: {validated_data}")
 
         password = validated_data.pop('password')
         user = CustomUser(**validated_data)
@@ -33,55 +21,32 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         user.username = user.whatsapp_number
         user.save()
 
-        print(f"ÉTAPE 2: Utilisateur créé avec ID: {user.id}")
-
-        # ===== BLOC DE CRÉATION ABONNEMENT ULTRA-DÉBOGUÉ =====
-        print("\nÉTAPE 3: Tentative de création abonnement")
+        logger.debug(f"Utilisateur créé: {user.id} - {user.whatsapp_number}")
 
         try:
-            # Import à l'intérieur pour être sûr
-            print("   - Import des modèles d'abonnement...")
             from abonnement.models import UserAbonnement, SubscriptionType
 
-            print("   - Recherche du type d'abonnement 'gratuit_promo'...")
+            logger.debug("Recherche du type d'abonnement...")
             sub_type = SubscriptionType.objects.filter(code='gratuit_promo', actif=True).first()
+            logger.debug(f"Type trouvé: {sub_type}")
 
             if sub_type:
-                print(f"   ✓ Type trouvé: {sub_type.id} - {sub_type.nom}")
-            else:
-                print("   ✗ Type 'gratuit_promo' non trouvé, recherche d'un autre type...")
-                sub_type = SubscriptionType.objects.filter(actif=True).first()
-                if sub_type:
-                    print(f"   ✓ Type de secours trouvé: {sub_type.id} - {sub_type.nom}")
-                else:
-                    print("   ✗ AUCUN type d'abonnement trouvé dans la base!")
-
-            if sub_type:
-                print("   - Création de l'objet UserAbonnement...")
                 abonnement = UserAbonnement.objects.create(
                     utilisateur=user,
                     abonnement=sub_type,
                     exercice_restants=1,
                 )
-                print(f"   ✓ Abonnement créé avec ID: {abonnement.id}")
-                print(f"   ✓ Crédits: {abonnement.exercice_restants}")
-                print(f"   ✓ Statut: {abonnement.statut}")
+                logger.debug(f"✅ Abonnement créé: ID={abonnement.id}")
             else:
-                print("   ✗ Impossible de créer l'abonnement: pas de type disponible")
+                logger.error("❌ Aucun type d'abonnement trouvé!")
 
         except Exception as e:
-            print(f"\n❌ ERREUR dans la création de l'abonnement:")
-            print(f"   Type d'erreur: {type(e).__name__}")
-            print(f"   Message: {str(e)}")
-            import traceback
-            print("   Traceback complet:")
-            traceback.print_exc()
+            logger.error(f"❌ Erreur création abonnement: {e}", exc_info=True)
 
-        print("=" * 50 + "\n")
-        # ===== FIN DU BLOC =====
+        logger.debug("FIN CRÉATION UTILISATEUR")
+        logger.debug("=" * 50)
 
         return user
-
 
 from .models import DemandeCorrection, SoumissionIA, CorrigePartiel
 
