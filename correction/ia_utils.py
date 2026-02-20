@@ -1152,7 +1152,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             "model": "deepseek-chat",
             "messages": [msg_system, msg_user],
             "temperature": 0.1,
-            "max_tokens": 8192,
+            "max_tokens": 9000,
             "top_p": 0.9,
             "frequency_penalty": 0.1,
             "stream": False
