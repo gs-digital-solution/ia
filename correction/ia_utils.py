@@ -213,6 +213,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                     logger.debug(f"🧹 Fichier temporaire supprimé: {temp_file}")
             except Exception as e:
                 logger.warning(f"⚠️ Impossible de supprimer {temp_file}: {e}")
+
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -1151,7 +1152,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             "model": "deepseek-chat",
             "messages": [msg_system, msg_user],
             "temperature": 0.1,
-            "max_tokens": 6000,
+            "max_tokens": 8000,
             "top_p": 0.9,
             "frequency_penalty": 0.1,
             "stream": False
