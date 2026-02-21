@@ -988,10 +988,19 @@ def build_promptia_messages(promptia, contexte):
            {"role": "user",   "content": user_content}
 
 
-def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None, demande=None):
+def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None, demande=None,
+                                 exercice_index=None):
     """
     Génère le corrigé pour un seul exercice.
     Version améliorée avec intégration des descriptions de schémas.
+
+    Args:
+        texte_exercice: texte de l'exercice à corriger
+        contexte: contexte général (matière, classe, etc.)
+        matiere: objet Matiere (optionnel)
+        donnees_vision: données vision globales (optionnel, déprécié)
+        demande: objet DemandeCorrection (optionnel)
+        exercice_index: index de l'exercice dans exercices_data (optionnel mais recommandé)
     """
     import time
     from datetime import datetime
@@ -1008,6 +1017,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         print(f"   - Matière: {demande.matiere.nom if demande.matiere else 'Non spécifiée'}")
         print(f"   - Classe: {demande.classe.nom if demande.classe else 'Non spécifiée'}")
         print(f"   - Département: {demande.departement.nom if demande.departement else 'Non spécifiée'}")
+        print(f"   - Index exercice: {exercice_index if exercice_index is not None else 'Non spécifié'}")
 
     print(f"📊 Métriques:")
     print(f"   - Longueur exercice: {len(texte_exercice)} caractères")
@@ -1031,18 +1041,34 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
         vision_elements_count = 0
 
-        # ========== NOUVEAU: RÉCUPÉRATION DES SCHÉMAS DEPUIS LA DEMANDE ==========
+        # ========== CORRECTION: RÉCUPÉRATION DES SCHÉMAS DEPUIS LA DEMANDE ==========
         schemas_exercice = []
         if demande and demande.exercices_data:
             try:
                 exercices_list = json.loads(demande.exercices_data)
-                # Récupérer l'index depuis la soumission si disponible
-                idx_courant = getattr(demande, 'exercice_index_courant', 0)
 
+                # Déterminer l'index à utiliser
+                idx_courant = exercice_index
+
+                # Si aucun index fourni, essayer de le récupérer depuis un attribut temporaire
+                if idx_courant is None:
+                    idx_courant = getattr(demande, '_exercice_index_temporaire', 0)
+                    print(f"⚠️ Utilisation index temporaire: {idx_courant}")
+
+                # Chercher l'exercice correspondant
                 for ex in exercices_list:
-                    if ex.get('index') == idx_courant:
+                    # L'index peut être stocké sous différentes clés
+                    ex_index = ex.get('index') or ex.get('numero')
+                    if ex_index == idx_courant:
                         schemas_exercice = ex.get('schemas', [])
+                        print(f"✅ Schémas trouvés pour l'exercice {idx_courant}: {len(schemas_exercice)} schéma(s)")
                         break
+
+                if not schemas_exercice:
+                    print(f"ℹ️ Aucun schéma trouvé pour l'exercice {idx_courant}")
+
+            except json.JSONDecodeError as e:
+                print(f"⚠️ Erreur décodage JSON exercices_data: {e}")
             except Exception as e:
                 print(f"⚠️ Erreur lecture schémas: {e}")
 
@@ -1050,6 +1076,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         if schemas_exercice:
             user_blocks.append("")
             user_blocks.append("----- SCHÉMAS / CROQUIS DÉTECTÉS DANS L'EXERCICE -----")
+            user_blocks.append("IMPORTANT: N'utilise que les schémas qui correspondent au contexte de l'exercice.")
 
             for idx, schema in enumerate(schemas_exercice, 1):
                 if not isinstance(schema, dict):
@@ -1060,6 +1087,10 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 # Description générale
                 if schema.get('description'):
                     user_blocks.append(f"Description: {schema['description']}")
+
+                # Type de schéma
+                if schema.get('type'):
+                    user_blocks.append(f"Type: {schema['type']}")
 
                 # Angles détectés
                 if schema.get('angles') and len(schema['angles']) > 0:
@@ -1073,6 +1104,8 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                                 angles_text.append(f"{val}{unite} ({desc})")
                             else:
                                 angles_text.append(f"{val}{unite}")
+                        elif isinstance(angle, (int, float)):
+                            angles_text.append(f"{angle}°")
                     if angles_text:
                         user_blocks.append(f"Angles: {', '.join(angles_text)}")
 
@@ -1088,6 +1121,8 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                                 dims_text.append(f"{val}{unite} ({desc})")
                             else:
                                 dims_text.append(f"{val}{unite}")
+                        elif isinstance(dim, (int, float)):
+                            dims_text.append(f"{dim}")
                     if dims_text:
                         user_blocks.append(f"Dimensions: {', '.join(dims_text)}")
 
@@ -1095,7 +1130,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 if schema.get('textes') and len(schema['textes']) > 0:
                     textes = schema['textes']
                     if isinstance(textes, list):
-                        user_blocks.append(f"Textes/Annotations: {' - '.join(textes[:5])}")
+                        user_blocks.append(f"Textes/Annotations: {' - '.join(str(t) for t in textes[:5])}")
                         if len(textes) > 5:
                             user_blocks.append(f"  ... et {len(textes) - 5} autres annotations")
 
@@ -1103,7 +1138,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 if schema.get('objets') and len(schema['objets']) > 0:
                     objets = schema['objets']
                     if isinstance(objets, list):
-                        user_blocks.append(f"Éléments géométriques: {', '.join(objets[:8])}")
+                        user_blocks.append(f"Éléments géométriques: {', '.join(str(o) for o in objets[:8])}")
                         if len(objets) > 8:
                             user_blocks.append(f"  ... et {len(objets) - 8} autres éléments")
 
@@ -1113,11 +1148,12 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
                 vision_elements_count += 1
 
-        # Anciennes données vision (formules, etc.)
+        # Anciennes données vision (formules, etc.) - à conserver pour compatibilité
         if donnees_vision:
             if donnees_vision.get("elements_visuels"):
                 elements = donnees_vision["elements_visuels"]
-                user_blocks.append(f"----- SCHÉMAS IDENTIFIÉS ({len(elements)}) -----")
+                user_blocks.append(f"----- ÉLÉMENTS VISUELS GLOBAUX ({len(elements)}) -----")
+                user_blocks.append("(Ces éléments peuvent ne pas correspondre à l'exercice courant)")
                 for element in elements[:5]:
                     desc = element.get("description", "")
                     user_blocks.append(f"- {desc}")
@@ -1136,8 +1172,8 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         print(f"\n📦 Message IA construit:")
         print(f"   - Longueur système: {len(msg_system['content'])} caractères")
         print(f"   - Longueur utilisateur: {len(msg_user['content'])} caractères")
-        print(f"   - Éléments visuels (schémas inclus): {vision_elements_count}")
-        print(f"   - Schémas de l'exercice: {len(schemas_exercice)}")
+        print(f"   - Éléments visuels inclus: {vision_elements_count}")
+        print(f"   - Schémas spécifiques à l'exercice: {len(schemas_exercice)}")
 
         # 4) APPEL API (identique à avant)
         api_url = "https://api.deepseek.com/v1/chat/completions"
@@ -1151,10 +1187,10 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         data = {
             "model": "deepseek-chat",
             "messages": [msg_system, msg_user],
-            "temperature": 0.0,
+            "temperature": 0.1,
             "max_tokens": 8000,
-            "top_p": 0.3,
-            "frequency_penalty": 0.3,
+            "top_p": 0.9,
+            "frequency_penalty": 0.1,
             "stream": False
         }
 
@@ -1194,10 +1230,13 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                         time.sleep(2 * (tentative + 1))
                 else:
                     last_error = f"HTTP {response.status_code}"
+                    print(f"   ❌ Erreur HTTP: {response.status_code}")
+                    print(f"   Réponse: {response.text[:200]}")
                     time.sleep(5 * (tentative + 1))
 
             except Exception as e:
                 last_error = str(e)
+                print(f"   ❌ Exception: {e}")
                 time.sleep(5 * (tentative + 1))
 
         if not output:
@@ -1222,13 +1261,15 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                         img_tag = f'<img src="file://{abs_path}" alt="Graphique {idx}" style="max-width:100%;margin:10px 0;" />'
                         output_structured = output_structured[:start] + img_tag + output_structured[end:]
                         graph_list.append(graph_dict)
-                except:
+                except Exception as e:
+                    print(f"⚠️ Erreur génération graphique {idx}: {e}")
                     continue
 
         total_time = time.time() - start_time
         print(f"\n✅ SUCCÈS - Temps: {total_time:.1f}s")
         print(f"   Corrigé: {len(output_structured)} caractères")
         print(f"   Schémas intégrés: {len(schemas_exercice)}")
+        print(f"   Graphiques générés: {len(graph_list)}")
 
         return output_structured.strip(), graph_list
 
@@ -1490,9 +1531,10 @@ def extraire_texte_pdf(fichier_path):
 def extraire_texte_fichier(fichier_field, demande=None):
     """
     Extraction robuste avec support Mathpix conditionnel
+    Retourne un dict: {"texte": "...", "schemas_par_page": [...]}
     """
     if not fichier_field:
-        return ""
+        return {"texte": "", "schemas_par_page": []}
 
     # Sauvegarde locale
     temp_dir = tempfile.gettempdir()
@@ -1501,22 +1543,35 @@ def extraire_texte_fichier(fichier_field, demande=None):
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    # Appel à l'analyse scientifique AVEC paramètre demande
+    # Appel à l'analyse scientifique
     try:
         analyse = analyser_document_scientifique(local_path, demande)
         texte = analyse.get("texte_complet", "")
 
-        logger.info(f"📄 Extraction terminée: {len(texte)} caractères "
-                    f"(source: {analyse.get('source_extraction', 'inconnu')})")
+        # Si c'est un département scientifique ET que Mathpix a été utilisé,
+        # on a potentiellement des schémas détectés via l'analyse séparée
+        schemas_par_page = []
 
-        # Stocker la méthode d'extraction dans la demande si disponible
-        if demande and hasattr(demande, 'methode_extraction'):
-            demande.methode_extraction = analyse.get('source_extraction', 'standard')
-            demande.save()
+        # 1. D'abord, essayer d'extraire les schémas avec DeepSeek (pour tous les cas)
+        if demande and demande.fichier:
+            schemas_par_page = extraire_schemas_du_document(local_path, demande)
+
+        # 2. Sinon, utiliser les éléments visuels de l'analyse standard
+        if not schemas_par_page and analyse.get("elements_visuels"):
+            # Convertir le format ancien vers le format page
+            schemas_par_page = [{
+                "page": 1,
+                "schemas": analyse.get("elements_visuels", []),
+                "nombre": len(analyse.get("elements_visuels", []))
+            }]
+
+        logger.info(f"📄 Extraction terminée: {len(texte)} caractères, "
+                    f"{sum(p['nombre'] for p in schemas_par_page)} schémas")
 
     except Exception as e:
         logger.error(f"❌ Analyse échouée: {e}")
         texte = ""
+        schemas_par_page = []
 
     # Nettoyage
     try:
@@ -1524,7 +1579,10 @@ def extraire_texte_fichier(fichier_field, demande=None):
     except:
         pass
 
-    return texte.strip()
+    return {
+        "texte": texte.strip(),
+        "schemas_par_page": schemas_par_page
+    }
 
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
@@ -1919,7 +1977,7 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
 
 
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
-                                    demande=None, donnees_vision=None):
+                                    demande=None, donnees_vision=None, exercice_index=None):
     """
     Version SIMPLIFIÉE pour les exercices uniques.
     Appelle directement generer_corrige_par_exercice sans logique de décision.
@@ -1949,7 +2007,8 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
         contexte=contexte,
         matiere=matiere,
         donnees_vision=donnees_vision,
-        demande=demande
+        demande=demande,
+        exercice_index=exercice_index
     )
 
 #les fonctions utilitaires , utilisables ou non, donc optionnelles
@@ -2622,7 +2681,8 @@ def generer_corrige_exercice_async(self, soumission_id):
                 texte_enonce=fragment,
                 contexte=contexte,
                 matiere=mat,
-                demande=dem
+                demande=dem,
+                exercice_index = idx
             )
 
             ia_time = time.time() - ia_start

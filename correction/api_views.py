@@ -602,15 +602,21 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # ========== NOUVEAU: SAUVEGARDE LOCALE POUR ANALYSES ==========
+        # ========== SAUVEGARDE LOCALE POUR ANALYSES ==========
         temp_dir = tempfile.gettempdir()
         local_path = os.path.join(temp_dir, os.path.basename(fichier.name))
         with open(local_path, "wb") as f:
             for chunk in fichier.chunks():
                 f.write(chunk)
 
-        # 4) Extraire le texte (EXISTANT)
-        texte = extraire_texte_fichier(fichier, demande)
+        # ========== NOUVEAU: extraire_texte_fichier retourne maintenant un dict ==========
+        from .ia_utils import extraire_texte_fichier, separer_exercices_avec_titres
+
+        # 4) Extraire le texte ET les schémas (version modifiée)
+        extraction_result = extraire_texte_fichier(fichier, demande)
+        texte = extraction_result.get("texte", "")
+        schemas_document = extraction_result.get("schemas_par_page", [])
+
         if not texte:
             # Nettoyer et retourner erreur
             try:
@@ -623,20 +629,7 @@ class SplitExercisesAPIView(APIView):
             )
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
-
-        # ========== NOUVEAU: Extraire les schémas ==========
-        schemas_document = []
-        try:
-            # Utiliser la fonction d'extraction des schémas (dans ia_utils)
-            from .ia_utils import extraire_schemas_du_document
-            schemas_document = extraire_schemas_du_document(local_path, demande)
-
-            print(f"✅ [SplitExercises] {len(schemas_document)} page(s) avec schémas détectés")
-
-        except Exception as e:
-            print(f"⚠️ [SplitExercises] Erreur extraction schémas: {e}")
-            # On continue sans les schémas
-            schemas_document = []
+        print(f"✅ [SplitExercises] {len(schemas_document)} page(s) avec schémas détectés")
 
         # Nettoyage du fichier temporaire
         try:
@@ -646,6 +639,14 @@ class SplitExercisesAPIView(APIView):
 
         # 5) Séparation du texte en exercices
         exercices_detaillees = separer_exercices_avec_titres(texte)
+
+        # ========== AMÉLIORATION: Association précise des schémas aux exercices ==========
+        # Créer un dictionnaire page -> liste de schémas
+        schemas_par_page_dict = {}
+        for page_data in schemas_document:
+            page_num = page_data.get('page')
+            if page_num:
+                schemas_par_page_dict[page_num] = page_data.get('schemas', [])
 
         # 6) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
         exercices_complets = []
@@ -669,20 +670,27 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # ========== NOUVEAU: Associer les schémas à cet exercice ==========
-            schemas_exercice = []
-            if schemas_document:
-                # Logique simple: on suppose qu'un exercice correspond à une page
-                # Si le document a des schémas pour la page (idx+1), on les prend
-                for page_data in schemas_document:
-                    if page_data.get('page') == idx + 1:
-                        schemas_exercice = page_data.get('schemas', [])
-                        break
+            # ========== AMÉLIORATION: Extraire les numéros de page depuis le contenu ==========
+            pages_exercice = set()
+            import re
+            for match in re.finditer(r'\[Page (\d+)\]', contenu_complet):
+                pages_exercice.add(int(match.group(1)))
 
-                # Si on n'a pas trouvé par page, on prend le premier schéma disponible
-                # (cas d'une image unique)
-                if not schemas_exercice and len(schemas_document) == 1:
-                    schemas_exercice = schemas_document[0].get('schemas', [])
+            # ========== AMÉLIORATION: Récupérer les schémas des pages de l'exercice ==========
+            schemas_exercice = []
+            if pages_exercice:
+                # Si on a des marqueurs de page, on prend les schémas de ces pages
+                for page_num in pages_exercice:
+                    if page_num in schemas_par_page_dict:
+                        schemas_exercice.extend(schemas_par_page_dict[page_num])
+            else:
+                # Fallback: si une seule page dans tout le document, prendre tous ses schémas
+                if len(schemas_par_page_dict) == 1:
+                    first_page = next(iter(schemas_par_page_dict.values()))
+                    schemas_exercice = first_page
+                # Si plusieurs pages mais pas de marqueurs, on prend la page correspondant à l'index
+                elif (idx + 1) in schemas_par_page_dict:
+                    schemas_exercice = schemas_par_page_dict[idx + 1]
 
             # Stocker TOUT dans exercices_complets
             exercices_complets.append({
@@ -690,9 +698,9 @@ class SplitExercisesAPIView(APIView):
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu_complet": contenu_complet,  # ← Texte de l'exercice
+                "contenu_complet": contenu_complet,
                 "longueur_contenu": len(contenu_complet),
-                "schemas": schemas_exercice,  # ← NOUVEAU: descriptions des schémas pour cet exercice
+                "schemas": schemas_exercice,
                 "nombre_schemas": len(schemas_exercice)
             })
 
@@ -706,6 +714,10 @@ class SplitExercisesAPIView(APIView):
         total_schemas = sum(ex.get('nombre_schemas', 0) for ex in exercices_complets)
         if total_schemas > 0:
             print(f"✅ [SplitExercises] {total_schemas} schéma(s) détecté(s) au total")
+            # Afficher les pages qui ont des schémas
+            pages_avec_schemas = [p for p, s in schemas_par_page_dict.items() if s]
+            if pages_avec_schemas:
+                print(f"   Pages avec schémas: {pages_avec_schemas}")
 
         # 8) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
@@ -714,7 +726,7 @@ class SplitExercisesAPIView(APIView):
                 "index": ex["index"],
                 "titre": ex["titre"],
                 "extrait": ex["extrait"],
-                "a_schema": ex["nombre_schemas"] > 0  # Indicateur pour le frontend si besoin
+                "a_schema": ex["nombre_schemas"] > 0
             })
 
         # 9) Répondre
@@ -735,7 +747,7 @@ class PartialCorrectionAPIView(APIView):
     def post(self, request):
         try:
             user = request.user
-            # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
+            # ===== VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
             if not user_abonnement_actif(user):
                 return Response(
                     {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
@@ -765,6 +777,7 @@ class PartialCorrectionAPIView(APIView):
 
             # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
             fragment_trouve = False
+            schemas_trouves = False
 
             if demande.exercices_data:
                 try:
@@ -775,6 +788,12 @@ class PartialCorrectionAPIView(APIView):
                             if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
                                 fragment_trouve = True
                                 print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
+
+                                # Vérifier si des schémas sont associés
+                                if ex.get('schemas') and len(ex.get('schemas', [])) > 0:
+                                    schemas_trouves = True
+                                    print(
+                                        f"✅ [PartialCorrection] {len(ex['schemas'])} schéma(s) associé(s) à cet exercice")
                                 break
                 except json.JSONDecodeError:
                     print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
@@ -792,15 +811,16 @@ class PartialCorrectionAPIView(APIView):
                 demande=demande,
                 statut='en_attente',
                 progression=0,
-                exercice_index=idx
+                exercice_index=idx  # ← CRUCIAL: stocker l'index pour la tâche asynchrone
             )
 
             # 6) Information de debug
             print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
             print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
+            print(f"   - Schémas pré-stockés: {'OUI' if schemas_trouves else 'NON'}")
             print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
 
-            # 7) Lancement asynchrone
+            # 7) Lancement asynchrone avec l'index bien passé
             generer_corrige_exercice_async.delay(soumission.id)
 
             # 8) Réponse
@@ -808,7 +828,8 @@ class PartialCorrectionAPIView(APIView):
                 "success": True,
                 "soumission_exercice_id": soumission.id,
                 "message": "Exercice envoyé au traitement.",
-                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction"
+                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction",
+                "schemas_disponibles": schemas_trouves
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
