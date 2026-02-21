@@ -2089,90 +2089,87 @@ def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
 # ========== ANALYSE DES SCHÉMAS AVEC DEEPSEEK-CHAT ==========
 # À AJOUTER vers la fin de ia_utils.py, avant les @shared_task
 
-def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> dict:
+def analyser_schema_avec_deepseek_vl(image_path: str, contexte_exercice: str = None) -> dict:
     """
-    Analyse un schéma/image avec deepseek-chat (capacités vision) et retourne une description structurée.
+    Analyse un schéma avec contexte de l'exercice pour éviter les hallucinations.
 
     Args:
-        image_path: Chemin vers l'image (fichier temporaire)
-        question: Question spécifique à poser (None pour description générale)
+        image_path: Chemin vers l'image
+        contexte_exercice: Extrait du texte de l'exercice pour contextualiser l'analyse
 
     Returns:
-        dict: {
-            'description': str,  # Description générale du schéma
-            'angles': list,      # Angles détectés [{"valeur": 30, "unite": "°", "description": "..."}]
-            'dimensions': list,  # Dimensions [{"valeur": 5, "unite": "cm", "description": "..."}]
-            'textes': list,      # Textes/légendes lus
-            'objets': list,      # Types d'objets géométriques détectés
-            'interpretation': str # Interprétation scientifique
-        }
+        dict: Description structurée du schéma spécifique à l'exercice
     """
-    logger.info(f"🖼️ Analyse schéma avec deepseek-chat: {image_path}")
+    logger.info(f"🖼️ Analyse schéma avec contexte: {image_path}")
 
-    # Vérifier que la clé API est configurée
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        logger.error("❌ DEEPSEEK_API_KEY non configurée")
         return {"description": "", "error": "api_key_missing"}
 
     try:
-        # Encodage de l'image en base64
+        # Encoder l'image
         with open(image_path, "rb") as f:
             img_b64 = base64.b64encode(f.read()).decode()
 
-        # Vérifier la taille (limite ~5Mo)
-        img_size = len(img_b64) * 3 / 4  # Approximation taille réelle en octets
-        if img_size > 5 * 1024 * 1024:  # 5Mo
-            logger.warning(f"⚠️ Image trop grande ({img_size / 1024 / 1024:.1f}Mo), redimensionnement automatique")
-            # Redimensionner l'image si trop grande
-            from PIL import Image
-            import io
+        # Construction du prompt GUIDÉ par le contexte de l'exercice
+        if contexte_exercice:
+            # Extraire les infos clés du contexte
+            contexte_extrait = contexte_exercice[:500]  # Limiter la taille
 
-            # Ouvrir et redimensionner
-            img = Image.open(image_path)
-            img.thumbnail((1200, 1200))  # Max 1200px de côté
+            question = f"""
+            Contexte de l'exercice :
+            {contexte_extrait}
 
-            # Ré-encoder en base64
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG", quality=85, optimize=True)
-            img_b64 = base64.b64encode(buffer.getvalue()).decode()
-            logger.info(f"✅ Image redimensionnée: {len(img_b64) * 3 / 4 / 1024:.1f}Ko")
+            Analyse ce schéma en te basant STRICTEMENT sur le contexte ci-dessus.
+            Ne décris que ce qui est VISIBLE sur l'image et en lien avec l'exercice.
 
-        # Construction du prompt avec la balise [image]
-        if not question:
+            Retourne UNIQUEMENT ce JSON :
+            {{
+                "type_schema": "plan_incliné|circuit|graphique|autre",
+                "description": "description précise du schéma en lien avec l'exercice",
+                "elements_physiques": [
+                    {{
+                        "type": "boule|plan|ressort|poulie|appareil",
+                        "position": "haut|bas|gauche|droite",
+                        "caracteristiques": ["rayon", "masse", etc.]
+                    }}
+                ],
+                "grandeurs_physiques": [
+                    {{
+                        "nom": "vitesse|angle|distance|force",
+                        "valeur": nombre ou "inconnue",
+                        "unite": "m/s|°|cm|N",
+                        "position_dans_schema": "description de où elle apparaît"
+                    }}
+                ],
+                "relations": [
+                    "description des relations entre éléments"
+                ],
+                "interpretation_physique": "loi/principe illustré par ce schéma"
+            }}
+
+            RÈGLES IMPÉRATIVES :
+            - N'invente RIEN qui ne soit pas visible sur l'image
+            - Utilise les grandeurs exactes mentionnées dans le contexte (ex: α=30°, OB=70cm)
+            - Si une valeur n'est pas claire, mets "≈" devant
+            - Sois extrêmement précis sur ce que tu vois
+            """
+        else:
+            # Fallback si pas de contexte
             question = """
-            Analyse ce schéma/croquis en détail et retourne UNIQUEMENT un JSON structuré avec :
-            {
-                "description": "description détaillée du schéma (ce qu'il représente, les éléments principaux)",
-                "angles": [{"valeur": 30, "unite": "°", "description": "angle entre quels éléments"}],
-                "dimensions": [{"valeur": 5, "unite": "cm", "description": "quelle dimension/mesure"}],
-                "textes": ["texte1", "texte2"],  # Tous les textes/légendes/annotations lus
-                "objets": ["cercle", "triangle", "ligne", "fleche", ...],  # Types d'objets géométriques
-                "interpretation": "interprétation scientifique/mathématique du schéma (loi, théorème, concept)"
-            }
-
-            RÈGLES IMPORTANTES:
-            - Sois extrêmement précis sur les angles et dimensions si visibles
-            - Si une valeur exacte n'est pas claire, mets "≈" devant (ex: "≈45°")
-            - Ne retourne que du JSON valide, pas de texte avant/après
-            - Utilise des guillemets doubles, pas simples
+            Analyse ce schéma scientifique et décris précisément ce que tu vois.
+            Retourne un JSON avec type, description, éléments visibles et grandeurs physiques.
             """
 
-        # IMPORTANT: Format correct pour deepseek-chat - utilisation de la balise [image] dans le texte
+        # Appel API (même structure que précédemment)
         prompt_texte = f"[image]{img_b64}[/image]\n\n{question}"
 
-        # Appel à l'API deepseek-chat
         payload = {
-            "model": "deepseek-reasonner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt_texte  # ← CHANGEMENT: plus de tableau, un simple string avec balise [image]
-                }
-            ],
-            "temperature": 0.1,  # Bas pour précision
-            "max_tokens": 6000,
-            "response_format": {"type": "json_object"}  # Forcer JSON
+            "model": "deepseek-reasoner",
+            "messages": [{"role": "user", "content": prompt_texte}],
+            "temperature": 0.1,
+            "max_tokens": 4000,
+            "response_format": {"type": "json_object"}
         }
 
         headers = {
@@ -2180,9 +2177,8 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             "Content-Type": "application/json"
         }
 
-        logger.info(f"📡 Envoi à deepseek-chat (taille image: {len(img_b64) / 1024:.1f}Ko)")
         response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",  # Même URL
+            "https://api.deepseek.com/v1/chat/completions",
             headers=headers,
             json=payload,
             timeout=60
@@ -2192,186 +2188,84 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             result = response.json()
             content = result["choices"][0]["message"]["content"]
 
-            # Nettoyer la réponse (enlever les ```json si présents)
+            # Nettoyer et parser
             content = re.sub(r'```json\s*', '', content)
             content = re.sub(r'\s*```', '', content)
-            content = content.strip()
 
-            # Tenter de parser le JSON
-            try:
-                data = json.loads(content)
+            data = json.loads(content)
 
-                # Logging des résultats
-                logger.info(f"✅ Analyse schéma réussie")
-                logger.info(f"   - Description: {len(data.get('description', ''))} caractères")
-                logger.info(f"   - Angles: {len(data.get('angles', []))}")
-                logger.info(f"   - Dimensions: {len(data.get('dimensions', []))}")
-                logger.info(f"   - Textes: {len(data.get('textes', []))}")
-                logger.info(f"   - Objets: {len(data.get('objets', []))}")
+            # Logging
+            logger.info(f"✅ Analyse réussie - Type: {data.get('type_schema', 'inconnu')}")
+            if data.get('grandeurs_physiques'):
+                logger.info(f"   Grandeurs: {len(data['grandeurs_physiques'])} détectées")
 
-                return data
+            return data
 
-            except json.JSONDecodeError as e:
-                logger.error(f"❌ Erreur parsing JSON: {e}")
-                logger.error(f"Contenu reçu: {content[:500]}")
-
-                # Fallback: extraire avec regex si possible
-                description_match = re.search(r'"description"\s*:\s*"([^"]+)"', content)
-                description = description_match.group(1) if description_match else "Erreur d'analyse"
-
-                return {
-                    "description": description,
-                    "angles": [],
-                    "dimensions": [],
-                    "textes": [],
-                    "objets": [],
-                    "interpretation": "",
-                    "raw_response": content[:1000],
-                    "error": "json_parse_error"
-                }
         else:
-            logger.error(f"❌ Erreur API deepseek-chat: {response.status_code} - {response.text[:200]}")
-            return {
-                "description": "",
-                "angles": [],
-                "dimensions": [],
-                "textes": [],
-                "objets": [],
-                "interpretation": "",
-                "error": f"api_error_{response.status_code}"
-            }
+            logger.error(f"❌ Erreur API: {response.status_code}")
+            return {"description": "", "type_schema": "inconnu", "error": "api_error"}
 
     except Exception as e:
-        logger.error(f"❌ Exception analyser_schema: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "description": "",
-            "angles": [],
-            "dimensions": [],
-            "textes": [],
-            "objets": [],
-            "interpretation": "",
-            "error": str(e)
-        }
+        logger.error(f"❌ Exception: {e}")
+        return {"description": "", "type_schema": "inconnu", "error": str(e)}
 
 
-def extraire_schemas_du_document(fichier_path: str, demande=None) -> list:
+def extraire_schemas_du_document(fichier_path: str, demande=None, exercice_contexte: str = None) -> list:
     """
-    Extrait et analyse tous les schémas d'un document.
-    Pour les PDF multi-pages, convertit chaque page en image et l'analyse.
-
-    Args:
-        fichier_path: Chemin vers le fichier (PDF ou image)
-        demande: Objet DemandeCorrection optionnel
-
-    Returns:
-        list: Liste des schémas détectés avec leur page et données
-              [{"page": 1, "schemas": [...], "nombre": n}, ...]
+    Extrait et analyse tous les schémas avec contexte de l'exercice.
     """
-    logger.info(f"📑 Extraction des schémas du document: {fichier_path}")
+    logger.info(f"📑 Extraction des schémas avec contexte")
 
     schemas_detectes = []
     ext = os.path.splitext(fichier_path)[1].lower()
-    temp_files = []  # Pour nettoyage
+    temp_files = []
 
     try:
-        # === CAS 1: Fichier PDF ===
         if ext == '.pdf':
             from pdf2image import convert_from_path
+            # Augmenter la résolution pour meilleure détection
+            images = convert_from_path(fichier_path, dpi=300)  # 300 dpi au lieu de 150
+            logger.info(f"   {len(images)} page(s) converties à 300 DPI")
 
-            logger.info("📄 Conversion PDF en images...")
-            # Convertir avec résolution modérée pour économiser
-            images = convert_from_path(fichier_path, dpi=150)  # 150 dpi suffisant pour l'analyse
-
-            logger.info(f"   {len(images)} page(s) converties")
+            # Si on a le contexte, on peut prioriser les pages qui contiennent des mots-clés
+            mots_cles_schemas = ['schéma', 'figure', 'diagram', 'graph', 'plan', 'incliné',
+                                 'circuit', 'montage', 'dispositif', 'appareil']
 
             for page_num, image in enumerate(images, 1):
-                logger.info(f"   🔍 Analyse page {page_num}/{len(images)}...")
+                # Vérifier rapidement si cette page pourrait contenir un schéma
+                # (basé sur le texte OCR rapide ou la présence d'images)
+                logger.info(f"   🔍 Analyse page {page_num}...")
 
-                # Sauvegarder temporairement
                 temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
                 temp_img.close()
-                image.save(temp_img.name, 'PNG', quality=85, optimize=True)
+                image.save(temp_img.name, 'PNG', quality=95)  # Meilleure qualité
                 temp_files.append(temp_img.name)
 
-                # Question spécifique pour détecter les schémas
-                question = """
-                Analyse cette page et réponds UNIQUEMENT par JSON:
+                # Analyser avec contexte
+                schema_data = analyser_schema_avec_deepseek_vl(
+                    temp_img.name,
+                    contexte_exercice=exercice_contexte
+                )
 
-                {
-                    "a_des_schemas": true/false,
-                    "schemas": [
-                        {
-                            "description": "description du schéma",
-                            "angles": [...],
-                            "dimensions": [...],
-                            "textes": [...],
-                            "objets": [...],
-                            "interpretation": "..."
-                        }
-                    ],
-                    "nombre_schemas": 0
-                }
+                if schema_data.get('type_schema') != 'inconnu' and schema_data.get('description'):
+                    schemas_detectes.append({
+                        "page": page_num,
+                        "schema": schema_data,
+                        "type": schema_data.get('type_schema', 'autre')
+                    })
+                    logger.info(f"   ✅ Schéma détecté page {page_num} - Type: {schema_data.get('type_schema')}")
 
-                Ne retourne que le JSON, rien d'autre.
-                """
+                time.sleep(0.5)  # Pause entre les appels
 
-                schema_data = analyser_schema_avec_deepseek_vl(temp_img.name, question)
-
-                # Vérifier si des schémas ont été détectés
-                a_des_schemas = False
-                if isinstance(schema_data, dict):
-                    # Différents formats possibles selon la réponse
-                    if schema_data.get('a_des_schemas') is True:
-                        a_des_schemas = True
-                        schemas_page = schema_data.get('schemas', [])
-                    elif schema_data.get('description') and len(schema_data.get('description', '')) > 20:
-                        a_des_schemas = True
-                        schemas_page = [schema_data]  # Un seul schéma
-                    else:
-                        schemas_page = []
-
-                    if a_des_schemas:
-                        schemas_detectes.append({
-                            "page": page_num,
-                            "schemas": schemas_page,
-                            "nombre": len(schemas_page)
-                        })
-                        logger.info(f"   ✅ {len(schemas_page)} schéma(s) détecté(s) page {page_num}")
-
-                # Petite pause pour éviter de surcharger l'API
-                time.sleep(0.5)
-
-        # === CAS 2: Image simple ===
-        elif ext in ['.png', '.jpg', '.jpeg']:
-            logger.info("🖼️ Analyse image unique")
-
-            schema_data = analyser_schema_avec_deepseek_vl(fichier_path)
-
-            if schema_data.get('description'):
-                schemas_detectes.append({
-                    "page": 1,
-                    "schemas": [schema_data],
-                    "nombre": 1
-                })
-                logger.info(f"✅ Schéma détecté dans l'image")
-
-        logger.info(f"📊 Bilan: {len(schemas_detectes)} page(s) avec schémas")
         return schemas_detectes
 
     except Exception as e:
-        logger.error(f"❌ Erreur extraction schémas: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Erreur: {e}")
         return []
-
     finally:
-        # Nettoyage des fichiers temporaires
-        for temp_file in temp_files:
+        for f in temp_files:
             try:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
+                os.unlink(f)
             except:
                 pass
 
