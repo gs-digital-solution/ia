@@ -2143,8 +2143,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
             question = f"""
             Analyse CE SCHÉMA PRÉCIS qui représente une expérience de physique.
 
-            Contexte de l'exercice (à utiliser pour comprendre le schéma) :
-            {contexte_exercice[:500] if contexte_exercice else "Plan incliné avec boule qui roule"}
+
 
             Retourne UNIQUEMENT un JSON structuré avec :
             {{
