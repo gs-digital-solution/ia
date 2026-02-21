@@ -2163,7 +2163,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
 
         # Appel à l'API deepseek-chat
         payload = {
-            "model": "deepseek-chat",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
+            "model": "deepseek-reasonner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
             "messages": [
                 {
                     "role": "user",
@@ -2171,7 +2171,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
                 }
             ],
             "temperature": 0.1,  # Bas pour précision
-            "max_tokens": 2000,
+            "max_tokens": 6000,
             "response_format": {"type": "json_object"}  # Forcer JSON
         }
 
