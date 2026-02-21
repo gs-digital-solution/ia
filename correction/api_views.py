@@ -61,24 +61,17 @@ from .models import ContactWhatsApp
 
 
 class UserRegisterAPIView(APIView):
-    # permission_classes = [AllowAny]
+    # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
 
     def post(self, request):
-        print(f"🔵 [APIView] Données reçues: {request.data}")
-
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()  # ← L'abonnement est créé DANS le serializer
-            print(f"✅ [APIView] Utilisateur créé: {user.whatsapp_number}")
-
+            user = serializer.save()
             return Response(
                 {"success": True, "message": "Inscription réussie."},
                 status=status.HTTP_201_CREATED
             )
-
-        print(f"❌ [APIView] Erreurs: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 # *API de connexion — code complet et expliqué*
 class UserLoginAPIView(APIView):
@@ -540,8 +533,8 @@ class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
     - Crée une DemandeCorrection
-    - Extrait le texte ET les schémas avec contexte
-    - Stocke les exercices avec leurs titres complets + schémas dans exercices_data
+    - Stocke les exercices avec leurs titres complets dans exercices_data
+    - Retourne { demande_id: ..., exercices: [...] } avec vrais titres
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
@@ -582,7 +575,7 @@ class SplitExercisesAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3) Créer la demande
+        # 3) Créer la demande (nom_fichier sera auto-rempli via save())
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
@@ -602,32 +595,10 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # ========== SAUVEGARDE LOCALE POUR ANALYSES ==========
-        temp_dir = tempfile.gettempdir()
-        local_path = os.path.join(temp_dir, os.path.basename(fichier.name))
-        with open(local_path, "wb") as f:
-            for chunk in fichier.chunks():
-                f.write(chunk)
-
-        # ========== IMPORT DES FONCTIONS UTILES ==========
-        from .ia_utils import (
-            extraire_texte_fichier,
-            separer_exercices_avec_titres,
-            analyser_schema_avec_deepseek_vl,
-            valider_schema_pour_exercice
-        )
-        import re
-
-        # 4) Extraire le texte (sans les schémas d'abord pour avoir le contexte)
-        extraction_result = extraire_texte_fichier(fichier, demande)
-        texte = extraction_result.get("texte", "")
+        # 4) Extraire le texte et découper en exercices
+        texte = extraire_texte_fichier(fichier)  # ← Extraction UNE FOIS
 
         if not texte:
-            # Nettoyer et retourner erreur
-            try:
-                os.unlink(local_path)
-            except:
-                pass
             return Response(
                 {"error": "Impossible d'extraire le texte de la demande."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -635,192 +606,66 @@ class SplitExercisesAPIView(APIView):
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
 
-        # 5) Séparation du texte en exercices
+        # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
         exercices_detaillees = separer_exercices_avec_titres(texte)
-        print(f"✅ [SplitExercises] {len(exercices_detaillees)} exercices détectés")
 
-        # ========== NOUVELLE ÉTAPE: Extraire les schémas AVEC le contexte des exercices ==========
-        schemas_document = []
-
-        # Déterminer si le document a des pages avec schémas
-        from .ia_utils import extraire_schemas_du_document
-
-        # Pour chaque exercice, on va analyser les pages correspondantes
-        # Mais d'abord, on a besoin de savoir quelles pages contiennent des schémas
-        try:
-            # Version améliorée: extraire les schémas avec contexte
-            # On passe le texte complet comme contexte global
-            contexte_global = texte[:2000]  # 2000 premiers caractères pour contexte
-
-            schemas_document = extraire_schemas_du_document(
-                local_path,
-                demande=demande,
-                exercice_contexte=contexte_global
-            )
-
-            print(f"✅ [SplitExercises] {len(schemas_document)} schéma(s) détecté(s)")
-
-        except Exception as e:
-            print(f"⚠️ [SplitExercises] Erreur extraction schémas: {e}")
-            schemas_document = []
-
-        # Nettoyage du fichier temporaire
-        try:
-            os.unlink(local_path)
-        except:
-            pass
-
-        # ========== AMÉLIORATION: Association intelligente des schémas aux exercices ==========
-
-        # 6) Créer une structure plus riche pour les schémas
-        schemas_par_page = {}
-        for schema_data in schemas_document:
-            page_num = schema_data.get('page', 1)
-            if page_num not in schemas_par_page:
-                schemas_par_page[page_num] = []
-            schemas_par_page[page_num].append(schema_data.get('schema', {}))
-
-        # 7) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
+        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
         exercices_complets = []
-
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
-            contenu_complet = ex.get('contenu', '')
+            contenu_complet = ex.get('contenu', '')  # ← CONTENU COMPLET
 
             # Nettoyer le titre pour l'affichage
             titre_affichage = titre_complet
             if len(titre_affichage) > 80:
                 titre_affichage = titre_affichage[:77] + "..."
 
-            # Extraire un extrait pour l'affichage rapide
+            # Extraire un extrait (premières lignes) pour l'affichage rapide
             lignes = contenu_complet.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:
+            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
+
             extrait = ' / '.join(extrait_lignes) if extrait_lignes else contenu_complet.strip()[:150]
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # ========== NOUVELLE LOGIQUE D'ASSOCIATION DES SCHÉMAS ==========
-
-            # Méthode 1: Chercher des marqueurs de page dans le contenu
-            pages_exercice = set()
-            for match in re.finditer(r'\[Page (\d+)\]', contenu_complet):
-                pages_exercice.add(int(match.group(1)))
-
-            # Méthode 2: Chercher des mots-clés indiquant la présence d'un schéma
-            mots_cles_schema = ['schéma', 'figure', 'diagramme', 'graphique', 'ci-contre',
-                                'ci-dessous', 'représente', 'illustre', 'montre', 'voici']
-            a_mot_cle_schema = any(mot in contenu_complet.lower() for mot in mots_cles_schema)
-
-            # Méthode 3: Analyser le début de l'exercice pour des références implicites
-            debut_exercice = contenu_complet[:200].lower()
-            references_implicites = ['figure', 'fig', 'schema', 'dessin', 'representation']
-            a_reference_implicite = any(ref in debut_exercice for ref in references_implicites)
-
-            # ========== ASSOCIATION PRIORISÉE ==========
-            schemas_exercice = []
-
-            # Priorité 1: Pages explicitement mentionnées
-            if pages_exercice:
-                for page_num in pages_exercice:
-                    if page_num in schemas_par_page:
-                        schemas_exercice.extend(schemas_par_page[page_num])
-                print(f"   📍 Exercice {idx + 1}: {len(schemas_exercice)} schéma(s) via marqueurs page")
-
-            # Priorité 2: Si un seul schéma dans tout le document et l'exercice mentionne un schéma
-            elif len(schemas_par_page) == 1 and (a_mot_cle_schema or a_reference_implicite):
-                first_page = next(iter(schemas_par_page.values()))
-                schemas_exercice = first_page
-                print(f"   📍 Exercice {idx + 1}: {len(schemas_exercice)} schéma(s) via mention + document mono-page")
-
-            # Priorité 3: Association par index (si nombre d'exercices = nombre de pages avec schémas)
-            elif len(exercices_detaillees) == len(schemas_par_page):
-                page_candidate = idx + 1
-                if page_candidate in schemas_par_page:
-                    schemas_exercice = schemas_par_page[page_candidate]
-                    print(f"   📍 Exercice {idx + 1}: schéma page {page_candidate} par correspondance 1:1")
-
-            # Priorité 4: Distribution équitable si plusieurs schémas mais pas de correspondance claire
-            elif len(schemas_par_page) > 0:
-                # Répartir les schémas de façon cyclique
-                pages_list = sorted(schemas_par_page.keys())
-                page_index = idx % len(pages_list)
-                page_candidate = pages_list[page_index]
-                schemas_exercice = schemas_par_page[page_candidate]
-                print(f"   📍 Exercice {idx + 1}: schéma page {page_candidate} par distribution cyclique")
-
-            # ========== VALIDATION DES SCHÉMAS ASSOCIÉS ==========
-            schemas_valides = []
-            for schema in schemas_exercice:
-                est_valide, raison = valider_schema_pour_exercice(schema, contenu_complet)
-                if est_valide:
-                    schemas_valides.append(schema)
-                else:
-                    print(f"   ⚠️ Schéma rejeté pour exercice {idx + 1}: {raison}")
-
-            # Si aucun schéma valide mais qu'on a des schémas, on garde le premier par défaut
-            if not schemas_valides and schemas_exercice:
-                print(f"   ⚠️ Aucun schéma valide, conservation du premier par défaut")
-                schemas_valides = [schemas_exercice[0]]
-
-            # Stocker TOUT dans exercices_complets
+            # ✅ STOCKER LE CONTENU COMPLET CETTE FOIS
             exercices_complets.append({
                 "index": idx,
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu_complet": contenu_complet,
-                "longueur_contenu": len(contenu_complet),
-                "schemas": schemas_valides,
-                "nombre_schemas": len(schemas_valides),
-                "a_indices_schema": a_mot_cle_schema or a_reference_implicite,
-                "pages_mentionnees": list(pages_exercice) if pages_exercice else []
+                "contenu_complet": contenu_complet,  # ← NOUVEAU : CONTENU COMPLET
+                "longueur_contenu": len(contenu_complet)
             })
 
-        # 8) Stocker les exercices COMPLETS dans la demande
+        # 7) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        # Statistiques pour logging
-        total_schemas = sum(ex.get('nombre_schemas', 0) for ex in exercices_complets)
-        exercices_avec_schemas = sum(1 for ex in exercices_complets if ex['nombre_schemas'] > 0)
+        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
 
-        print(f"✅ [SplitExercises] Résultat final:")
-        print(f"   - {len(exercices_complets)} exercices au total")
-        print(f"   - {exercices_avec_schemas} exercices avec schémas")
-        print(f"   - {total_schemas} schémas associés au total")
-
-        if schemas_par_page:
-            print(f"   - Pages avec schémas: {list(schemas_par_page.keys())}")
-
-        # 9) Construire la réponse pour le frontend (extraits seulement)
+        # 8) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
                 "titre": ex["titre"],
-                "extrait": ex["extrait"],
-                "a_schema": ex["nombre_schemas"] > 0,
-                "nombre_schemas": ex["nombre_schemas"]
+                "extrait": ex["extrait"]
             })
 
-        # 10) Répondre
+        # 9) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, {exercices_avec_schemas} avec schémas",
-            "statistiques": {
-                "total_exercices": len(exercices_complets),
-                "exercices_avec_schemas": exercices_avec_schemas,
-                "total_schemas": total_schemas,
-                "pages_schemas": list(schemas_par_page.keys()) if schemas_par_page else []
-            }
+            "info": f"{len(exercices_complets)} exercices détectés, contenu complet stocké"
         })
+
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -829,7 +674,7 @@ class PartialCorrectionAPIView(APIView):
     def post(self, request):
         try:
             user = request.user
-            # ===== VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
+            # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
             if not user_abonnement_actif(user):
                 return Response(
                     {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
@@ -859,7 +704,6 @@ class PartialCorrectionAPIView(APIView):
 
             # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
             fragment_trouve = False
-            schemas_trouves = False
 
             if demande.exercices_data:
                 try:
@@ -870,12 +714,6 @@ class PartialCorrectionAPIView(APIView):
                             if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
                                 fragment_trouve = True
                                 print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
-
-                                # Vérifier si des schémas sont associés
-                                if ex.get('schemas') and len(ex.get('schemas', [])) > 0:
-                                    schemas_trouves = True
-                                    print(
-                                        f"✅ [PartialCorrection] {len(ex['schemas'])} schéma(s) associé(s) à cet exercice")
                                 break
                 except json.JSONDecodeError:
                     print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
@@ -893,16 +731,15 @@ class PartialCorrectionAPIView(APIView):
                 demande=demande,
                 statut='en_attente',
                 progression=0,
-                exercice_index=idx  # ← CRUCIAL: stocker l'index pour la tâche asynchrone
+                exercice_index=idx
             )
 
             # 6) Information de debug
             print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
             print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
-            print(f"   - Schémas pré-stockés: {'OUI' if schemas_trouves else 'NON'}")
             print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
 
-            # 7) Lancement asynchrone avec l'index bien passé
+            # 7) Lancement asynchrone
             generer_corrige_exercice_async.delay(soumission.id)
 
             # 8) Réponse
@@ -910,8 +747,7 @@ class PartialCorrectionAPIView(APIView):
                 "success": True,
                 "soumission_exercice_id": soumission.id,
                 "message": "Exercice envoyé au traitement.",
-                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction",
-                "schemas_disponibles": schemas_trouves
+                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction"
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
