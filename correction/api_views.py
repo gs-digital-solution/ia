@@ -800,28 +800,40 @@ class PartialCorrectionAPIView(APIView):
             # 2) Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
-            # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
+            # 3) RÉCUPÉRATION DU CONTENU ET DES SCHÉMAS DEPUIS EXERCICES_DATA
             fragment_trouve = False
             schemas_trouves = False
+            contenu_exercice = ""
+            schemas_exercice = []
+            titre_exercice = f"Exercice {idx + 1}"
 
             if demande.exercices_data:
                 try:
                     exercices_list = json.loads(demande.exercices_data)
                     for ex in exercices_list:
                         if ex.get('index') == idx:
-                            # Vérifier qu'on a du contenu complet
-                            if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
+                            # Récupérer le contenu complet
+                            contenu_exercice = ex.get('contenu_complet', '')
+                            if contenu_exercice and len(contenu_exercice) > 50:
                                 fragment_trouve = True
                                 print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
+                                print(f"   Longueur contenu: {len(contenu_exercice)} caractères")
 
-                                # Vérifier si des schémas sont associés
-                                if ex.get('schemas') and len(ex.get('schemas', [])) > 0:
-                                    schemas_trouves = True
-                                    print(
-                                        f"✅ [PartialCorrection] {len(ex['schemas'])} schéma(s) associé(s) à cet exercice")
-                                break
-                except json.JSONDecodeError:
-                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
+                            # Récupérer les schémas
+                            schemas_exercice = ex.get('schemas', [])
+                            if schemas_exercice and len(schemas_exercice) > 0:
+                                schemas_trouves = True
+                                print(
+                                    f"✅ [PartialCorrection] {len(schemas_exercice)} schéma(s) associé(s) à cet exercice")
+
+                                # Afficher les types de schémas pour debug
+                                types = [s.get('type_schema', 'inconnu') for s in schemas_exercice if
+                                         isinstance(s, dict)]
+                                if types:
+                                    print(f"   Types: {list(set(types))}")
+                            break
+                except json.JSONDecodeError as e:
+                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data: {e}")
 
             # 4) Si pas de contenu stocké, vérifier qu'on a un fichier
             if not fragment_trouve and not demande.fichier:
@@ -830,7 +842,14 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 5) Création de la soumission
+            # 5) Si on a du contenu, le stocker temporairement sur la demande pour la tâche asynchrone
+            if fragment_trouve:
+                # Stocker le contenu dans un attribut temporaire (sera utilisé par la tâche)
+                demande._contenu_exercice_temp = contenu_exercice
+                demande._schemas_exercice_temp = schemas_exercice
+                demande._titre_exercice_temp = titre_exercice
+
+            # 6) Création de la soumission
             soumission = SoumissionIA.objects.create(
                 user=user,
                 demande=demande,
@@ -839,26 +858,31 @@ class PartialCorrectionAPIView(APIView):
                 exercice_index=idx  # ← CRUCIAL: stocker l'index pour la tâche asynchrone
             )
 
-            # 6) Information de debug
+            # 7) Information de debug
             print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
             print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
+            print(f"   - Longueur contenu: {len(contenu_exercice) if fragment_trouve else 'N/A'}")
             print(f"   - Schémas pré-stockés: {'OUI' if schemas_trouves else 'NON'}")
+            print(f"   - Nombre schémas: {len(schemas_exercice)}")
             print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
 
-            # 7) Lancement asynchrone avec l'index bien passé
+            # 8) Lancement asynchrone avec l'index bien passé
+            from .ia_utils import generer_corrige_exercice_async
             generer_corrige_exercice_async.delay(soumission.id)
 
-            # 8) Réponse
+            # 9) Réponse
             return Response({
                 "success": True,
                 "soumission_exercice_id": soumission.id,
                 "message": "Exercice envoyé au traitement.",
                 "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction",
-                "schemas_disponibles": schemas_trouves
+                "schemas_disponibles": schemas_trouves,
+                "nombre_schemas": len(schemas_exercice)
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
             # Affiche la stack complète dans les logs
+            import traceback
             traceback.print_exc()
             # Renvoie un message minimal au front
             return Response(
