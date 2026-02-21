@@ -2141,14 +2141,16 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
         # Construction du prompt avec la balise [image]
         if not question:
             question = """
-            Analyse ce schéma/croquis en détail et retourne UNIQUEMENT un JSON structuré avec :
+            Analyse ce schéma/croquis en détail en tant qu'un expert en sciences physiques, mathématiques, chimie 
+            et retourne UNIQUEMENT un JSON structuré avec :
             {
-                "description": "description détaillée du schéma (ce qu'il représente, les éléments principaux)",
+                "description": "description détaillée du schéma (ce qu'il représente, les éléments principaux. exemple: un plan incliné,
+                un pendule, la courbe d'une fonction...etc)",
                 "angles": [{"valeur": 30, "unite": "°", "description": "angle entre quels éléments"}],
                 "dimensions": [{"valeur": 5, "unite": "cm", "description": "quelle dimension/mesure"}],
                 "textes": ["texte1", "texte2"],  # Tous les textes/légendes/annotations lus
                 "objets": ["cercle", "triangle", "ligne", "fleche", ...],  # Types d'objets géométriques
-                "interpretation": "interprétation scientifique/mathématique du schéma (loi, théorème, concept)"
+                "interpretation": "interprétation scientifique du schéma (physique, math...)"
             }
 
             RÈGLES IMPORTANTES:
@@ -2163,7 +2165,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
 
         # Appel à l'API deepseek-chat
         payload = {
-            "model": "deepseek-chat",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
+            "model": "deepseek-reasonner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
             "messages": [
                 {
                     "role": "user",
@@ -2282,7 +2284,7 @@ def extraire_schemas_du_document(fichier_path: str, demande=None) -> list:
 
             logger.info("📄 Conversion PDF en images...")
             # Convertir avec résolution modérée pour économiser
-            images = convert_from_path(fichier_path, dpi=150)  # 150 dpi suffisant pour l'analyse
+            images = convert_from_path(fichier_path, dpi=300)  # 150 dpi suffisant pour l'analyse
 
             logger.info(f"   {len(images)} page(s) converties")
 
