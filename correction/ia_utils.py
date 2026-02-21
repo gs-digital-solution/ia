@@ -1548,42 +1548,33 @@ def extraire_texte_fichier(fichier_field, demande=None):
         analyse = analyser_document_scientifique(local_path, demande)
         texte = analyse.get("texte_complet", "")
 
-        # Si c'est un département scientifique ET que Mathpix a été utilisé,
-        # on a potentiellement des schémas détectés via l'analyse séparée
+        # EXTRAIRE LES SCHÉMAS AVANT DE SUPPRIMER LE FICHIER
         schemas_par_page = []
-
-        # 1. D'abord, essayer d'extraire les schémas avec DeepSeek (pour tous les cas)
-        if demande and demande.fichier:
+        try:
+            from .ia_utils import extraire_schemas_du_document
             schemas_par_page = extraire_schemas_du_document(local_path, demande)
-
-        # 2. Sinon, utiliser les éléments visuels de l'analyse standard
-        if not schemas_par_page and analyse.get("elements_visuels"):
-            # Convertir le format ancien vers le format page
-            schemas_par_page = [{
-                "page": 1,
-                "schemas": analyse.get("elements_visuels", []),
-                "nombre": len(analyse.get("elements_visuels", []))
-            }]
-
-        logger.info(f"📄 Extraction terminée: {len(texte)} caractères, "
-                    f"{sum(p['nombre'] for p in schemas_par_page)} schémas")
+            logger.info(f"📄 Extraction terminée: {len(texte)} caractères, "
+                        f"{sum(p['nombre'] for p in schemas_par_page)} schémas")
+        except Exception as e:
+            logger.error(f"❌ Erreur extraction schémas: {e}")
+            schemas_par_page = []
 
     except Exception as e:
         logger.error(f"❌ Analyse échouée: {e}")
         texte = ""
         schemas_par_page = []
 
-    # Nettoyage
+    # Nettoyage APRÈS avoir extrait les schémas
     try:
         os.unlink(local_path)
-    except:
-        pass
+        logger.info(f"🧹 Fichier temporaire supprimé: {local_path}")
+    except Exception as e:
+        logger.warning(f"⚠️ Impossible de supprimer {local_path}: {e}")
 
     return {
         "texte": texte.strip(),
         "schemas_par_page": schemas_par_page
     }
-
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
     """
