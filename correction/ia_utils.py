@@ -2282,7 +2282,7 @@ def extraire_schemas_du_document(fichier_path: str, demande=None) -> list:
 
             logger.info("📄 Conversion PDF en images...")
             # Convertir avec résolution modérée pour économiser
-            images = convert_from_path(fichier_path, dpi=300)  # 150 dpi suffisant pour l'analyse
+            images = convert_from_path(fichier_path, dpi=150)  # 150 dpi suffisant pour l'analyse
 
             logger.info(f"   {len(images)} page(s) converties")
 
