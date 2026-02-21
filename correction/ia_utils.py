@@ -2163,7 +2163,7 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
 
         # Appel à l'API deepseek-chat
         payload = {
-            "model": "deepseek-reasonner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
+            "model": "deepseek-reasoner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
             "messages": [
                 {
                     "role": "user",
