@@ -2140,32 +2140,29 @@ def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> d
 
         # Construction du prompt avec la balise [image]
         if not question:
-            question = """
-            Analyse ce schéma/croquis en détail en tant qu'un expert en sciences physiques, mathématiques, chimie 
-            et retourne UNIQUEMENT un JSON structuré avec :
-            {
-                "description": "description détaillée du schéma (ce qu'il représente, les éléments principaux. exemple: un plan incliné,
-                un pendule, la courbe d'une fonction...etc)",
-                "angles": [{"valeur": 30, "unite": "°", "description": "angle entre quels éléments"}],
-                "dimensions": [{"valeur": 5, "unite": "cm", "description": "quelle dimension/mesure"}],
-                "textes": ["texte1", "texte2"],  # Tous les textes/légendes/annotations lus
-                "objets": ["cercle", "triangle", "ligne", "fleche", ...],  # Types d'objets géométriques
-                "interpretation": "interprétation scientifique du schéma (physique, math...)"
-            }
+            question = f"""
+            Analyse CE SCHÉMA PRÉCIS qui représente une expérience de physique.
 
-            RÈGLES IMPORTANTES:
-            - Sois extrêmement précis sur les angles et dimensions si visibles
-            - Si une valeur exacte n'est pas claire, mets "≈" devant (ex: "≈45°")
-            - Ne retourne que du JSON valide, pas de texte avant/après
-            - Utilise des guillemets doubles, pas simples
+            Contexte de l'exercice (à utiliser pour comprendre le schéma) :
+            {contexte_exercice[:500] if contexte_exercice else "Plan incliné avec boule qui roule"}
+
+            Retourne UNIQUEMENT un JSON structuré avec :
+            {{
+                "description": "description détaillée de CE schéma (plan incliné, boule, points O, A, B, appareil de mesure...), en lien avec l'expérience décrite",
+                "type": "plan_incliné",
+                "angles": [{"valeur": 30, "unite": "°", "description": "angle du plan incliné par rapport à l'horizontale"}],
+                "dimensions": [{"valeur": 70.0, "unite": "cm", "description": "distance OB le long du plan incliné"}],
+                "textes": ["O", "A", "B", "2,21 m/s", "S", "h", "α=30°"],
+                "objets": ["plan incliné", "boule sphérique", "point O (départ)", "point B (arrivée)", "appareil de mesure", "butée"],
+                "interpretation": "Ce schéma représente l'expérience de la boule qui roule sans glisser sur un plan incliné d'angle α=30°. La distance parcourue est OB=70cm. La vitesse mesurée en B est affichée (2,21 m/s). Cette expérience permet de déterminer expérimentalement la valeur de g."
+            }}
             """
-
         # IMPORTANT: Format correct pour deepseek-chat - utilisation de la balise [image] dans le texte
         prompt_texte = f"[image]{img_b64}[/image]\n\n{question}"
 
         # Appel à l'API deepseek-chat
         payload = {
-            "model": "deepseek-reasonner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
+            "model": "deepseek-reasoner",  # ← CHANGEMENT: deepseek-vl → deepseek-chat
             "messages": [
                 {
                     "role": "user",
