@@ -2269,6 +2269,53 @@ def extraire_schemas_du_document(fichier_path: str, demande=None, exercice_conte
             except:
                 pass
 
+
+def valider_schema_pour_exercice(schema_data, exercice_contenu):
+    """
+    Vérifie si un schéma correspond bien à l'exercice.
+    Retourne (bool, raison)
+    """
+    if not schema_data or not exercice_contenu:
+        return False, "données manquantes"
+
+    # Extraire les mots-clés de l'exercice (mots de 4 lettres ou plus)
+    import re
+    mots_exercice = set(re.findall(r'\b\w{4,}\b', exercice_contenu.lower()))
+
+    # Mots-clés spécifiques aux types de schémas
+    type_schema = schema_data.get('type_schema', '')
+    description = schema_data.get('description', '').lower()
+
+    # Vérification de cohérence basique
+    # Si le schéma a une description, vérifier qu'elle partage des mots avec l'exercice
+    if description:
+        mots_description = set(re.findall(r'\b\w{4,}\b', description))
+        mots_communs = mots_exercice.intersection(mots_description)
+
+        if len(mots_communs) >= 2:  # Au moins 2 mots communs
+            return True, f"mots communs: {mots_communs}"
+
+    # Vérification par type de schéma
+    if 'plan incliné' in type_schema.lower():
+        mots_attendus = ['plan', 'incliné', 'boule', 'sphère', 'roule', 'vitesse', 'angle', 'OB', 'α']
+        if any(mot in exercice_contenu.lower() for mot in mots_attendus):
+            return True, "plan incliné cohérent avec exercice"
+        else:
+            return False, "plan incliné mais exercice ne mentionne pas ces termes"
+
+    elif 'triangle' in type_schema.lower() and 'cercle' in type_schema.lower():
+        # Vérifier si l'exercice parle vraiment de géométrie pure
+        mots_geometrie = ['triangle', 'cercle', 'inscrit', 'géométrie', 'trigonométrie', 'angle droit']
+        if any(mot in exercice_contenu.lower() for mot in mots_geometrie):
+            return True, "schéma géométrique pertinent"
+        else:
+            return False, "schéma géométrique hors contexte"
+
+    # Par défaut, on accepte si le schéma a une description non vide
+    if description and len(description) > 20:
+        return True, "description valide"
+
+    return True, "accepté par défaut"  # Fallback
 # ============== TÂCHE ASYNCHRONE ==============
 
 @shared_task(name='correction.ia_utils.generer_corrige_ia_et_graphique_async')
