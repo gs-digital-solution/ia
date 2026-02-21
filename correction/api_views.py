@@ -609,13 +609,12 @@ class SplitExercisesAPIView(APIView):
             for chunk in fichier.chunks():
                 f.write(chunk)
 
-        # ========== NOUVEAU: extraire_texte_fichier retourne maintenant un dict ==========
-        from .ia_utils import extraire_texte_fichier, separer_exercices_avec_titres
+        # ========== IMPORT DES FONCTIONS NÉCESSAIRES ==========
+        from .ia_utils import extraire_texte_fichier, separer_exercices_avec_titres, extraire_schemas_du_document
 
-        # 4) Extraire le texte ET les schémas (version modifiée)
+        # 4) Extraire le texte
         extraction_result = extraire_texte_fichier(fichier, demande)
         texte = extraction_result.get("texte", "")
-        schemas_document = extraction_result.get("schemas_par_page", [])
 
         if not texte:
             # Nettoyer et retourner erreur
@@ -629,6 +628,9 @@ class SplitExercisesAPIView(APIView):
             )
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
+
+        # 5) Extraire les schémas avec la fonction améliorée
+        schemas_document = extraire_schemas_du_document(local_path, demande)
         print(f"✅ [SplitExercises] {len(schemas_document)} page(s) avec schémas détectés")
 
         # Nettoyage du fichier temporaire
@@ -637,10 +639,10 @@ class SplitExercisesAPIView(APIView):
         except:
             pass
 
-        # 5) Séparation du texte en exercices
+        # 6) Séparation du texte en exercices
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # ========== AMÉLIORATION: Association précise des schémas aux exercices ==========
+        # ========== ASSOCIATION PRÉCISE DES SCHÉMAS AUX EXERCICES ==========
         # Créer un dictionnaire page -> liste de schémas
         schemas_par_page_dict = {}
         for page_data in schemas_document:
@@ -648,7 +650,7 @@ class SplitExercisesAPIView(APIView):
             if page_num:
                 schemas_par_page_dict[page_num] = page_data.get('schemas', [])
 
-        # 6) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
+        # 7) Construire la liste JSON complète pour stockage AVEC SCHÉMAS enrichis
         exercices_complets = []
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
@@ -670,27 +672,32 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # ========== AMÉLIORATION: Extraire les numéros de page depuis le contenu ==========
+            # Extraire les numéros de page depuis le contenu
             pages_exercice = set()
             import re
             for match in re.finditer(r'\[Page (\d+)\]', contenu_complet):
                 pages_exercice.add(int(match.group(1)))
 
-            # ========== AMÉLIORATION: Récupérer les schémas des pages de l'exercice ==========
+            # Si pas de marqueurs, estimer par la longueur du texte
+            if not pages_exercice and len(schemas_par_page_dict) <= 3:
+                # Heuristique simple: un exercice = une page si peu de pages
+                pages_exercice.add(idx + 1)  # 1-indexed
+
+            # Récupérer les schémas des pages de l'exercice
             schemas_exercice = []
-            if pages_exercice:
-                # Si on a des marqueurs de page, on prend les schémas de ces pages
-                for page_num in pages_exercice:
-                    if page_num in schemas_par_page_dict:
-                        schemas_exercice.extend(schemas_par_page_dict[page_num])
-            else:
-                # Fallback: si une seule page dans tout le document, prendre tous ses schémas
-                if len(schemas_par_page_dict) == 1:
-                    first_page = next(iter(schemas_par_page_dict.values()))
-                    schemas_exercice = first_page
-                # Si plusieurs pages mais pas de marqueurs, on prend la page correspondant à l'index
-                elif (idx + 1) in schemas_par_page_dict:
-                    schemas_exercice = schemas_par_page_dict[idx + 1]
+            for page_num in pages_exercice:
+                if page_num in schemas_par_page_dict:
+                    for schema in schemas_par_page_dict[page_num]:
+                        # Ajouter le numéro de page au schéma pour traçabilité
+                        schema_copy = schema.copy() if isinstance(schema, dict) else {"description": str(schema)}
+                        schema_copy['page_source'] = page_num
+                        schemas_exercice.append(schema_copy)
+
+            # Compter les différents types de schémas pour logging
+            types_schemas = []
+            for s in schemas_exercice:
+                if isinstance(s, dict) and s.get('type_schema'):
+                    types_schemas.append(s.get('type_schema'))
 
             # Stocker TOUT dans exercices_complets
             exercices_complets.append({
@@ -701,10 +708,11 @@ class SplitExercisesAPIView(APIView):
                 "contenu_complet": contenu_complet,
                 "longueur_contenu": len(contenu_complet),
                 "schemas": schemas_exercice,
-                "nombre_schemas": len(schemas_exercice)
+                "nombre_schemas": len(schemas_exercice),
+                "types_schemas": list(set(types_schemas)) if types_schemas else []
             })
 
-        # 7) Stocker les exercices COMPLETS dans la demande
+        # 8) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
@@ -719,26 +727,43 @@ class SplitExercisesAPIView(APIView):
             if pages_avec_schemas:
                 print(f"   Pages avec schémas: {pages_avec_schemas}")
 
-        # 8) Construire la réponse pour le frontend (extraits seulement)
+            # Afficher les types de schémas détectés
+            tous_types = []
+            for ex in exercices_complets:
+                tous_types.extend(ex.get('types_schemas', []))
+            if tous_types:
+                print(f"   Types de schémas: {list(set(tous_types))}")
+
+        # 9) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
+            # Ajouter des infos sur les types de schémas pour le frontend
+            types_info = ""
+            if ex.get('types_schemas'):
+                types_info = f" ({', '.join(ex['types_schemas'][:2])})"
+
             exercices_reponse.append({
                 "index": ex["index"],
                 "titre": ex["titre"],
                 "extrait": ex["extrait"],
-                "a_schema": ex["nombre_schemas"] > 0
+                "a_schema": ex["nombre_schemas"] > 0,
+                "types_schemas": ex.get("types_schemas", [])[:3]  # Limiter à 3 types max
             })
 
-        # 9) Répondre
+        # 10) Répondre avec des informations enrichies
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, {total_schemas} schéma(s) identifié(s)"
+            "info": f"{len(exercices_complets)} exercices détectés, {total_schemas} schéma(s) identifié(s)",
+            "statistiques": {
+                "total_exercices": len(exercices_complets),
+                "total_schemas": total_schemas,
+                "pages_avec_schemas": len(schemas_par_page_dict),
+                "exercices_avec_schemas": sum(1 for ex in exercices_complets if ex["nombre_schemas"] > 0)
+            } if total_schemas > 0 else None
         })
-
-
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
