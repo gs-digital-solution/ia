@@ -540,7 +540,7 @@ class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
     - Crée une DemandeCorrection
-    - Extrait le texte ET les schémas
+    - Extrait le texte ET les schémas avec contexte
     - Stocke les exercices avec leurs titres complets + schémas dans exercices_data
     """
     permission_classes = [IsAuthenticated]
@@ -609,13 +609,18 @@ class SplitExercisesAPIView(APIView):
             for chunk in fichier.chunks():
                 f.write(chunk)
 
-        # ========== NOUVEAU: extraire_texte_fichier retourne maintenant un dict ==========
-        from .ia_utils import extraire_texte_fichier, separer_exercices_avec_titres
+        # ========== IMPORT DES FONCTIONS UTILES ==========
+        from .ia_utils import (
+            extraire_texte_fichier,
+            separer_exercices_avec_titres,
+            analyser_schema_avec_deepseek_vl,
+            valider_schema_pour_exercice
+        )
+        import re
 
-        # 4) Extraire le texte ET les schémas (version modifiée)
+        # 4) Extraire le texte (sans les schémas d'abord pour avoir le contexte)
         extraction_result = extraire_texte_fichier(fichier, demande)
         texte = extraction_result.get("texte", "")
-        schemas_document = extraction_result.get("schemas_par_page", [])
 
         if not texte:
             # Nettoyer et retourner erreur
@@ -629,7 +634,35 @@ class SplitExercisesAPIView(APIView):
             )
 
         print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
-        print(f"✅ [SplitExercises] {len(schemas_document)} page(s) avec schémas détectés")
+
+        # 5) Séparation du texte en exercices
+        exercices_detaillees = separer_exercices_avec_titres(texte)
+        print(f"✅ [SplitExercises] {len(exercices_detaillees)} exercices détectés")
+
+        # ========== NOUVELLE ÉTAPE: Extraire les schémas AVEC le contexte des exercices ==========
+        schemas_document = []
+
+        # Déterminer si le document a des pages avec schémas
+        from .ia_utils import extraire_schemas_du_document
+
+        # Pour chaque exercice, on va analyser les pages correspondantes
+        # Mais d'abord, on a besoin de savoir quelles pages contiennent des schémas
+        try:
+            # Version améliorée: extraire les schémas avec contexte
+            # On passe le texte complet comme contexte global
+            contexte_global = texte[:2000]  # 2000 premiers caractères pour contexte
+
+            schemas_document = extraire_schemas_du_document(
+                local_path,
+                demande=demande,
+                exercice_contexte=contexte_global
+            )
+
+            print(f"✅ [SplitExercises] {len(schemas_document)} schéma(s) détecté(s)")
+
+        except Exception as e:
+            print(f"⚠️ [SplitExercises] Erreur extraction schémas: {e}")
+            schemas_document = []
 
         # Nettoyage du fichier temporaire
         try:
@@ -637,19 +670,19 @@ class SplitExercisesAPIView(APIView):
         except:
             pass
 
-        # 5) Séparation du texte en exercices
-        exercices_detaillees = separer_exercices_avec_titres(texte)
+        # ========== AMÉLIORATION: Association intelligente des schémas aux exercices ==========
 
-        # ========== AMÉLIORATION: Association précise des schémas aux exercices ==========
-        # Créer un dictionnaire page -> liste de schémas
-        schemas_par_page_dict = {}
-        for page_data in schemas_document:
-            page_num = page_data.get('page')
-            if page_num:
-                schemas_par_page_dict[page_num] = page_data.get('schemas', [])
+        # 6) Créer une structure plus riche pour les schémas
+        schemas_par_page = {}
+        for schema_data in schemas_document:
+            page_num = schema_data.get('page', 1)
+            if page_num not in schemas_par_page:
+                schemas_par_page[page_num] = []
+            schemas_par_page[page_num].append(schema_data.get('schema', {}))
 
-        # 6) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
+        # 7) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
         exercices_complets = []
+
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
             contenu_complet = ex.get('contenu', '')
@@ -670,27 +703,68 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # ========== AMÉLIORATION: Extraire les numéros de page depuis le contenu ==========
+            # ========== NOUVELLE LOGIQUE D'ASSOCIATION DES SCHÉMAS ==========
+
+            # Méthode 1: Chercher des marqueurs de page dans le contenu
             pages_exercice = set()
-            import re
             for match in re.finditer(r'\[Page (\d+)\]', contenu_complet):
                 pages_exercice.add(int(match.group(1)))
 
-            # ========== AMÉLIORATION: Récupérer les schémas des pages de l'exercice ==========
+            # Méthode 2: Chercher des mots-clés indiquant la présence d'un schéma
+            mots_cles_schema = ['schéma', 'figure', 'diagramme', 'graphique', 'ci-contre',
+                                'ci-dessous', 'représente', 'illustre', 'montre', 'voici']
+            a_mot_cle_schema = any(mot in contenu_complet.lower() for mot in mots_cles_schema)
+
+            # Méthode 3: Analyser le début de l'exercice pour des références implicites
+            debut_exercice = contenu_complet[:200].lower()
+            references_implicites = ['figure', 'fig', 'schema', 'dessin', 'representation']
+            a_reference_implicite = any(ref in debut_exercice for ref in references_implicites)
+
+            # ========== ASSOCIATION PRIORISÉE ==========
             schemas_exercice = []
+
+            # Priorité 1: Pages explicitement mentionnées
             if pages_exercice:
-                # Si on a des marqueurs de page, on prend les schémas de ces pages
                 for page_num in pages_exercice:
-                    if page_num in schemas_par_page_dict:
-                        schemas_exercice.extend(schemas_par_page_dict[page_num])
-            else:
-                # Fallback: si une seule page dans tout le document, prendre tous ses schémas
-                if len(schemas_par_page_dict) == 1:
-                    first_page = next(iter(schemas_par_page_dict.values()))
-                    schemas_exercice = first_page
-                # Si plusieurs pages mais pas de marqueurs, on prend la page correspondant à l'index
-                elif (idx + 1) in schemas_par_page_dict:
-                    schemas_exercice = schemas_par_page_dict[idx + 1]
+                    if page_num in schemas_par_page:
+                        schemas_exercice.extend(schemas_par_page[page_num])
+                print(f"   📍 Exercice {idx + 1}: {len(schemas_exercice)} schéma(s) via marqueurs page")
+
+            # Priorité 2: Si un seul schéma dans tout le document et l'exercice mentionne un schéma
+            elif len(schemas_par_page) == 1 and (a_mot_cle_schema or a_reference_implicite):
+                first_page = next(iter(schemas_par_page.values()))
+                schemas_exercice = first_page
+                print(f"   📍 Exercice {idx + 1}: {len(schemas_exercice)} schéma(s) via mention + document mono-page")
+
+            # Priorité 3: Association par index (si nombre d'exercices = nombre de pages avec schémas)
+            elif len(exercices_detaillees) == len(schemas_par_page):
+                page_candidate = idx + 1
+                if page_candidate in schemas_par_page:
+                    schemas_exercice = schemas_par_page[page_candidate]
+                    print(f"   📍 Exercice {idx + 1}: schéma page {page_candidate} par correspondance 1:1")
+
+            # Priorité 4: Distribution équitable si plusieurs schémas mais pas de correspondance claire
+            elif len(schemas_par_page) > 0:
+                # Répartir les schémas de façon cyclique
+                pages_list = sorted(schemas_par_page.keys())
+                page_index = idx % len(pages_list)
+                page_candidate = pages_list[page_index]
+                schemas_exercice = schemas_par_page[page_candidate]
+                print(f"   📍 Exercice {idx + 1}: schéma page {page_candidate} par distribution cyclique")
+
+            # ========== VALIDATION DES SCHÉMAS ASSOCIÉS ==========
+            schemas_valides = []
+            for schema in schemas_exercice:
+                est_valide, raison = valider_schema_pour_exercice(schema, contenu_complet)
+                if est_valide:
+                    schemas_valides.append(schema)
+                else:
+                    print(f"   ⚠️ Schéma rejeté pour exercice {idx + 1}: {raison}")
+
+            # Si aucun schéma valide mais qu'on a des schémas, on garde le premier par défaut
+            if not schemas_valides and schemas_exercice:
+                print(f"   ⚠️ Aucun schéma valide, conservation du premier par défaut")
+                schemas_valides = [schemas_exercice[0]]
 
             # Stocker TOUT dans exercices_complets
             exercices_complets.append({
@@ -700,45 +774,53 @@ class SplitExercisesAPIView(APIView):
                 "extrait": extrait,
                 "contenu_complet": contenu_complet,
                 "longueur_contenu": len(contenu_complet),
-                "schemas": schemas_exercice,
-                "nombre_schemas": len(schemas_exercice)
+                "schemas": schemas_valides,
+                "nombre_schemas": len(schemas_valides),
+                "a_indices_schema": a_mot_cle_schema or a_reference_implicite,
+                "pages_mentionnees": list(pages_exercice) if pages_exercice else []
             })
 
-        # 7) Stocker les exercices COMPLETS dans la demande
+        # 8) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec schémas")
-
-        # Compter le nombre total de schémas pour logging
+        # Statistiques pour logging
         total_schemas = sum(ex.get('nombre_schemas', 0) for ex in exercices_complets)
-        if total_schemas > 0:
-            print(f"✅ [SplitExercises] {total_schemas} schéma(s) détecté(s) au total")
-            # Afficher les pages qui ont des schémas
-            pages_avec_schemas = [p for p, s in schemas_par_page_dict.items() if s]
-            if pages_avec_schemas:
-                print(f"   Pages avec schémas: {pages_avec_schemas}")
+        exercices_avec_schemas = sum(1 for ex in exercices_complets if ex['nombre_schemas'] > 0)
 
-        # 8) Construire la réponse pour le frontend (extraits seulement)
+        print(f"✅ [SplitExercises] Résultat final:")
+        print(f"   - {len(exercices_complets)} exercices au total")
+        print(f"   - {exercices_avec_schemas} exercices avec schémas")
+        print(f"   - {total_schemas} schémas associés au total")
+
+        if schemas_par_page:
+            print(f"   - Pages avec schémas: {list(schemas_par_page.keys())}")
+
+        # 9) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
                 "index": ex["index"],
                 "titre": ex["titre"],
                 "extrait": ex["extrait"],
-                "a_schema": ex["nombre_schemas"] > 0
+                "a_schema": ex["nombre_schemas"] > 0,
+                "nombre_schemas": ex["nombre_schemas"]
             })
 
-        # 9) Répondre
+        # 10) Répondre
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, {total_schemas} schéma(s) identifié(s)"
+            "info": f"{len(exercices_complets)} exercices détectés, {exercices_avec_schemas} avec schémas",
+            "statistiques": {
+                "total_exercices": len(exercices_complets),
+                "exercices_avec_schemas": exercices_avec_schemas,
+                "total_schemas": total_schemas,
+                "pages_schemas": list(schemas_par_page.keys()) if schemas_par_page else []
+            }
         })
-
-
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
     permission_classes = [IsAuthenticated]
