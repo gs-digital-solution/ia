@@ -1551,7 +1551,7 @@ def extraire_texte_fichier(fichier_field, demande=None):
         # EXTRAIRE LES SCHÉMAS AVANT DE SUPPRIMER LE FICHIER
         schemas_par_page = []
         try:
-            from .ia_utils import extraire_schemas_du_document
+            # PAS BESOIN D'IMPORT - c'est la même fonction dans le même fichier !
             schemas_par_page = extraire_schemas_du_document(local_path, demande)
             logger.info(f"📄 Extraction terminée: {len(texte)} caractères, "
                         f"{sum(p['nombre'] for p in schemas_par_page)} schémas")
@@ -1575,6 +1575,7 @@ def extraire_texte_fichier(fichier_field, demande=None):
         "texte": texte.strip(),
         "schemas_par_page": schemas_par_page
     }
+
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
     """
