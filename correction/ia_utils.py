@@ -491,7 +491,7 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
             "https://api.deepseek.com/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30  # Timeout de 30 secondes
+            timeout=100  # Timeout de 30 secondes
         )
 
         logger.info(f"📡 Réponse reçue: status {response.status_code}")
