@@ -476,7 +476,7 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
         }
 
         payload = {
-            "model": "deepseek-vl",
+            "model": "deepseek-chat",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message_content}
