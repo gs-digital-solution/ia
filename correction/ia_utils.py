@@ -436,43 +436,44 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
     system_prompt = """
-    Tu es un expert en analyse de documents scolaires.
+    Tu es un expert en reconnaissance de textes et schémas dans des documents scolaires.
 
-    ANALYSE GÉNÉRIQUE:
-    1. Ce document est un SUJET D'EXAMEN scolaire.
-    2. Il peut être de physique, mathématiques, chimie, etc.
-    3. Il contient UN OU PLUSIEURS exercices.
+    INSTRUCTIONS ABSOLUES:
+    1. Ce document est un SUJET D'EXAMEN. Il contient du texte et des schémas.
+    2. Tu dois EXTRAIRE le texte EXACTEMENT comme il apparaît, sans modification, sans réécriture.
+    3. Tu dois IDENTIFIER la structure du document (exercices, parties).
+    4. Tu dois DÉCRIRE les schémas en détail.
 
-    INSTRUCTIONS:
-    - Extrais le texte EXACTEMENT comme il apparaît
-    - Identifie les TITRES d'exercices (EXERCICE 1, PARTIE A, etc.)
-    - Pour CHAQUE SCHÉMA présent :
-      * Décris son type (circuit électrique, figure géométrique, graphique, expérience, etc.)
-      * Décris les éléments visibles
-      * Décris les relations entre éléments
-    - Extrais toutes les FORMULES mathématiques en LaTeX
+    RÈGLE D'OR: Ne réécris PAS l'énoncé. Recopie-le mot pour mot, avec les mêmes phrases, les mêmes mots.
 
-    RENVOIE CE JSON:
+    EXEMPLE:
+    Si le texte dit "Dans la cour de récréation, l'élève Mbonto se vante", tu dois écrire exactement cela.
+    Tu ne dois PAS écrire "Un élève se vante dans la cour".
+
+    POUR LES SCHÉMAS:
+    - Décris leur type (circuit, figure, graphique)
+    - Décris les éléments visibles
+    - Décris les relations entre éléments
+
+    RENVOIE UNIQUEMENT CE JSON:
     {
       "exercices": [
         {
           "titre": "titre exact de l'exercice",
-          "texte": "texte complet et exact",
+          "texte": "texte exact recopié sans modification",
           "schemas": [
             {
-              "type": "type de schéma détecté",
+              "type_schema": "type de schéma",
               "description": "description détaillée",
-              "elements": [{"nom": "élément1", "propriétés": "..."}]
+              "elements": ["élément1", "élément2"],
+              "relations": "relations entre éléments"
             }
           ],
           "formules": ["$formule1$", "$formule2$"]
         }
       ]
     }
-
-    RÈGLE D'OR: Ne réécris PAS l'énoncé. Recopie-le mot pour mot.
     """
-
     try:
         # Lecture et encodage de l'image
         logger.info("📖 Lecture du fichier...")
