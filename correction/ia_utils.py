@@ -410,11 +410,12 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 
 # ============== NOUVELLE FONCTION: DeepSeek Vision Améliorée avec extraction structurée ==============
-def call_deepseek_vision_ameliore(path_fichier: str, demande=None, re=None) -> dict:
+def call_deepseek_vision_ameliore(path_fichier: str, demande=None, ) -> dict:
     """
     Appel DeepSeek amélioré avec timeout long (120s) et redimensionnement automatique des images.
     Version optimisée pour gérer les images volumineuses et les timeouts.
     """
+    import re
     logger.info(f"🔄 Appel DeepSeek Vision Amélioré pour {path_fichier}")
 
     # Vérification clé API
