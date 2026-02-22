@@ -694,129 +694,70 @@ def analyser_schema_avec_blip(image_path: str) -> dict:
 
 def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
     """
-    Analyse scientifique avancée - Version DeepSeek First
-    Pour les départements scientifiques : DeepSeek Vision (texte + schémas)
-    Fallback : Mathpix (si DeepSeek échoue) ou OCR standard
+    Analyse scientifique : Mathpix pour le texte + BLIP pour les schémas
     """
     logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
 
-    # 1) DÉTECTION DU DÉPARTEMENT POUR CHOIX DE LA MÉTHODE
-    use_deepseek = False
-    dept_nom = "inconnu"
+    # 1) MATHPIX POUR LE TEXTE (TOUJOURS)
+    logger.info("🧮 Extraction du texte avec Mathpix")
+    resultat_mathpix = extraire_avec_mathpix(fichier_path)
 
-    if demande and demande.departement:
-        dept_nom = demande.departement.nom
-        use_deepseek = is_departement_scientifique(demande.departement)
-        logger.info(f"📊 Département '{dept_nom}' → DeepSeek = {use_deepseek}")
+    texte_complet = resultat_mathpix.get("text", "")
+    logger.info(f"✅ Mathpix: {len(texte_complet)} caractères")
 
-    # 2) PRIORITÉ: DEEPSEEK POUR DÉPARTEMENTS SCIENTIFIQUES
-    if use_deepseek:
-        logger.info("🧠 Extraction avec DeepSeek Vision (département scientifique)")
+    # 2) BLIP POUR LES SCHÉMAS (si département scientifique)
+    elements_visuels = []
 
-        try:
-            resultat_deepseek = call_deepseek_vision_ameliore(fichier_path, demande)
+    if demande and is_departement_scientifique(demande.departement):
+        logger.info("🖼️ Analyse des schémas avec BLIP")
 
-            # Vérifier que le résultat est utilisable
-            if resultat_deepseek and "exercices" in resultat_deepseek and len(
-                    resultat_deepseek.get("exercices", [])) > 0:
+        # Pour les PDF, on convertit chaque page en image
+        ext = os.path.splitext(fichier_path)[1].lower()
 
-                # Reconstruire texte_complet à partir des exercices
-                exercices = resultat_deepseek.get("exercices", [])
-                texte_complet = "\n\n".join([ex.get("texte", "") for ex in exercices])
+        if ext == '.pdf':
+            from pdf2image import convert_from_path
+            images = convert_from_path(fichier_path, dpi=150)
 
-                logger.info(f"✅ DeepSeek réussi: {len(texte_complet)} caractères, "
-                            f"{len(exercices)} exercices")
+            for page_num, image in enumerate(images, 1):
+                # Sauvegarder temporairement
+                temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                temp_img.close()
+                image.save(temp_img.name, 'PNG')
 
-                return {
-                    "texte_complet": texte_complet,
-                    "elements_visuels": resultat_deepseek.get("elements_visuels", []),
-                    "formules_latex": [],  # À extraire des exercices si besoin
-                    "graphs": [],
-                    "angles": [],
-                    "numbers": [],
-                    "structure_exercices": exercices,
-                    "source_extraction": "deepseek",
-                    "departement": dept_nom,
-                    "exercices_struct": exercices
-                }
-            else:
-                logger.warning("⚠️ DeepSeek échec ou pas d'exercices détectés, fallback Mathpix")
-                use_deepseek = False
+                # Analyser avec BLIP
+                schema_data = analyser_schema_avec_blip(temp_img.name)
 
-        except Exception as e:
-            logger.error(f"❌ DeepSeek exception: {e}")
-            import traceback
-            traceback.print_exc()
-            use_deepseek = False
+                if schema_data.get('description'):
+                    elements_visuels.append({
+                        "page": page_num,
+                        "type": schema_data.get('type_schema', 'schéma'),
+                        "description": schema_data['description'],
+                        "source": "blip"
+                    })
 
-    # 3) FALLBACK 1: MATHPIX (si DeepSeek a échoué mais que Mathpix est configuré)
-    if not use_deepseek and os.getenv("MATHPIX_APP_ID") and os.getenv("MATHPIX_APP_KEY"):
-        logger.info("🧮 Fallback avec Mathpix")
-
-        resultat_mathpix = extraire_avec_mathpix(fichier_path)
-
-        if resultat_mathpix.get("text") and len(resultat_mathpix["text"]) > 100:
-            logger.info(f"✅ Mathpix réussi: {len(resultat_mathpix['text'])} caractères")
-
-            return {
-                "texte_complet": resultat_mathpix["text"],
-                "elements_visuels": [],
-                "formules_latex": resultat_mathpix.get("latex_blocks", []),
-                "graphs": [],
-                "angles": [],
-                "numbers": [],
-                "structure_exercices": [],
-                "source_extraction": "mathpix",
-                "departement": dept_nom,
-                "exercices_struct": []  # Pas de structure d'exercices
-            }
+                # Nettoyage
+                os.unlink(temp_img.name)
         else:
-            logger.warning("⚠️ Mathpix échec, fallback standard")
+            # Image directe
+            schema_data = analyser_schema_avec_blip(fichier_path)
+            if schema_data.get('description'):
+                elements_visuels.append({
+                    "page": 1,
+                    "type": schema_data.get('type_schema', 'schéma'),
+                    "description": schema_data['description'],
+                    "source": "blip"
+                })
 
-    # 4) FALLBACK 2: ANALYSE STANDARD (OCR uniquement)
-    logger.info("🔤 Fallback final: OCR standard")
+        logger.info(f"✅ {len(elements_visuels)} schéma(s) décrit(s) par BLIP")
 
-    # Code OCR standard existant (à garder tel quel)
-    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
-    texte_ocr = ""
-
-    try:
-        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img = Image.open(fichier_path)
-            clean = preprocess_image_for_ocr(img)
-            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
-            logger.info(f"    ✓ OCR image brut extrait {len(texte_ocr)} caractères")
-
-        elif fichier_path.lower().endswith('.pdf'):
-            texte_ocr = extraire_texte_pdf(fichier_path)
-            logger.info(f"    ✓ PDFMiner extrait {len(texte_ocr)} caractères")
-
-            if len(texte_ocr) < 50:
-                logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
-                pages = convert_from_path(fichier_path, dpi=300)
-                txts = []
-                for page in pages:
-                    clean = preprocess_image_for_ocr(page)
-                    txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
-                texte_ocr = "\n".join(txts)
-                logger.info(f"    ✓ fallback OCR pages donne {len(texte_ocr)} caractères")
-    except Exception as e:
-        logger.error(f"❌ Erreur pendant OCR/PDF: {e}")
-
+    # 3) RETOURNER LE RÉSULTAT COMPLET
     return {
-        "texte_complet": texte_ocr,
-        "elements_visuels": [],
-        "formules_latex": [],
-        "graphs": [],
-        "angles": [],
-        "numbers": [],
-        "structure_exercices": [],
-        "source_extraction": "fallback_ocr",
-        "departement": dept_nom,
-        "exercices_struct": []
+        "texte_complet": texte_complet,
+        "elements_visuels": elements_visuels,
+        "formules_latex": resultat_mathpix.get("latex_blocks", []),
+        "source_extraction": "mathpix+blip",
+        "exercices_struct": []  # Sera fait par separer_exercices_avec_titres
     }
-
-
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
     Extraction simple : OCR direct → Analyse IA
