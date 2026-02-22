@@ -412,126 +412,61 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 # ============== NOUVELLE FONCTION: DeepSeek Vision Améliorée avec extraction structurée ==============
 def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
     """
-    Appel DeepSeek amélioré qui extrait:
-    - Le texte complet du document
-    - Les exercices avec leurs titres
-    - Les schémas associés à chaque exercice avec description détaillée
-    - Les formules LaTeX, graphiques, angles, nombres
-
-    Retourne un dictionnaire structuré avec une clé "exercices" contenant
-    les données spécifiques à chaque exercice.
+    Appel DeepSeek amélioré avec debug pour voir la réponse brute
     """
-    logger.info("🔄 Appel DeepSeek Vision Amélioré")
+    logger.info(f"🔄 Appel DeepSeek Vision Amélioré pour {path_fichier}")
 
     system_prompt = r"""
-    Tu es un expert en analyse de documents scolaires, particulièrement les exercices scientifiques.
+    Tu es un expert en analyse de documents scolaires.
 
-    INSTRUCTIONS:
-
-    1. IDENTIFIE LA STRUCTURE DU DOCUMENT:
-       - Repère les titres d'exercices (EXERCICE 1, PARTIE A, SITUATION PROBLÈME, etc.)
-       - Découpe le document en exercices distincts
-
-    2. POUR CHAQUE EXERCICE, EXTRAIS:
-       - Le titre complet de l'exercice
-       - Le texte intégral de l'exercice (énoncé, questions)
-       - Les formules mathématiques en format LaTeX
-       - Les données graphiques si présentes
-
-    3. POUR CHAQUE SCHÉMA DÉTECTÉ:
-       - Associe-le à l'exercice correspondant
-       - Décris son type (circuit électrique, figure géométrique, graphique, etc.)
-       - Liste ses éléments constitutifs
-       - Indique les relations spatiales entre éléments
-       - Extrais toutes les données numériques (angles, longueurs, valeurs)
-
-    RENVOIE UNIQUEMENT CE JSON STRUCTURÉ:
+    Analyse cette image et renvoie UNIQUEMENT un JSON avec cette structure exacte:
     {
       "exercices": [
         {
-          "titre": "EXERCICE 1",
-          "texte": "texte complet de l'exercice...",
-          "formules": ["$E = mc^2$", ...],
-          "schemas": [
-            {
-              "type": "circuit électrique",
-              "description": "Description détaillée du schéma...",
-              "elements": [
-                {"nom": "générateur", "valeur": "12V", "position": "haut"},
-                {"nom": "résistance R1", "valeur": "10Ω"}
-              ],
-              "relations": "R1 et R2 en série",
-              "donnees": {"angles": [], "longueurs": []}
-            }
-          ],
-          "graphs": [{"type": "fonction", "expression": "x**2", ...}],
-          "angles": [{"valeur": 30, "unite": "°"}],
-          "numbers": [{"valeur": 9.81, "unite": "m/s²"}]
+          "titre": "titre de l'exercice",
+          "texte": "texte complet de l'exercice",
+          "schemas": []
         }
-      ],
-      "latex_blocks": [],  # Pour compatibilité
-      "elements_visuels": []  # Pour compatibilité (sera rempli automatiquement)
+      ]
     }
-
-    IMPORTANT: Sois exhaustif dans les descriptions de schémas. Plus les détails sont précis,
-    meilleure sera la correction.
     """
 
     try:
-        # Encoder le fichier en base64
         with open(path_fichier, "rb") as f:
             data_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        # Message avec l'image
-        message_content = f"""
-        [image]{data_b64}[/image]
+        message_content = f"[image]{data_b64}[/image]\n\nExtrais le texte et les exercices."
 
-        Voici un document scolaire. Analyse-le en suivant les instructions.
-        Identifie chaque exercice et décris tous les schémas présents.
-        """
-
-        # Appel API DeepSeek
         response = openai.ChatCompletion.create(
-            model="deepseek-reasoner",
+            model=DEEPSEEK_VISION_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message_content}
             ],
             response_format={"type": "json_object"},
             temperature=0.0,
-            max_tokens=8000
+            max_tokens=4000
         )
 
         content = response.choices[0].message.content
-        resultat = json.loads(content) if isinstance(content, str) else content
 
-        # Post-traitement pour compatibilité avec l'ancien format
-        resultat["texte_complet"] = "\n\n".join([ex.get("texte", "") for ex in resultat.get("exercices", [])])
+        # 🔴 DEBUG: Logger la réponse brute
+        logger.info(f"📦 Réponse brute DeepSeek: {content[:500]}...")
 
-        # Remplir elements_visuels avec tous les schémas (pour compatibilité descendante)
-        elements_visuels = []
-        for ex in resultat.get("exercices", []):
-            for schema in ex.get("schemas", []):
-                schema["exercice_titre"] = ex.get("titre", "")
-                elements_visuels.append(schema)
-        resultat["elements_visuels"] = elements_visuels
-
-        # Remplir latex_blocks avec toutes les formules
-        latex_blocks = []
-        for ex in resultat.get("exercices", []):
-            latex_blocks.extend(ex.get("formules", []))
-        resultat["latex_blocks"] = latex_blocks
-
-        logger.info(f"✅ DeepSeek Vision Amélioré: {len(resultat.get('exercices', []))} exercices, "
-                    f"{len(elements_visuels)} schémas")
-
-        return resultat
+        # Essayer de parser le JSON
+        try:
+            resultat = json.loads(content) if isinstance(content, str) else content
+            logger.info(f"✅ Parsing JSON réussi: {len(resultat.get('exercices', []))} exercices")
+            return resultat
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON invalide: {e}")
+            logger.error(f"Contenu: {content[:200]}")
+            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
     except Exception as e:
-        logger.error(f"❌ Erreur DeepSeek Vision Amélioré: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Erreur DeepSeek: {e}")
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
