@@ -419,16 +419,40 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
     system_prompt = r"""
     Tu es un expert en analyse de documents scolaires.
 
-    Analyse cette image et renvoie UNIQUEMENT un JSON avec cette structure exacte:
+    INSTRUCTIONS PRÉCISES:
+    1. Ce document est un sujet d'examen/exercice de mathématiques/physique.
+    2. Il contient UN OU PLUSIEURS exercices clairement numérotés.
+    3. IDENTIFIE chaque exercice en cherchant :
+       - "EXERCICE 1", "Exercice 1", "EXERCICE 2", etc.
+       - "PARTIE A", "PARTIE B", "PROBLÈME"
+       - Des numéros comme "1.", "2.", "3." en début de ligne
+       - Des titres comme "Évaluation des compétences"
+
+    4. Pour CHAQUE exercice, extrais :
+       - Le TITRE complet (ex: "EXERCICE 1" ou "B. Évaluation des compétences")
+       - Le TEXTE intégral de l'énoncé
+       - Les FORMULES mathématiques (garde-les en LaTeX)
+       - Les SCHÉMAS : décris-les en détail
+
+    RENVOIE UNIQUEMENT CE JSON:
     {
       "exercices": [
         {
-          "titre": "titre de l'exercice",
-          "texte": "texte complet de l'exercice",
-          "schemas": []
+          "titre": "titre exact de l'exercice",
+          "texte": "texte complet de l'exercice avec toutes les questions",
+          "formules": ["$formule1$", "$formule2$"],
+          "schemas": [
+            {
+              "type": "type du schéma (circuit, figure, graphique...)",
+              "description": "description détaillée de ce qu'on voit",
+              "elements": [{"nom": "élément", "valeur": "valeur"}]
+            }
+          ]
         }
       ]
     }
+
+    IMPORTANT: Même s'il n'y a qu'un seul exercice, mets-le dans le tableau "exercices".
     """
 
     try:
