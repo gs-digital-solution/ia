@@ -410,7 +410,7 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 
 
 # ============== NOUVELLE FONCTION: DeepSeek Vision Améliorée avec extraction structurée ==============
-def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
+def call_deepseek_vision_ameliore(path_fichier: str, demande=None, re=None) -> dict:
     """
     Appel DeepSeek amélioré avec timeout long (120s) et redimensionnement automatique des images.
     Version optimisée pour gérer les images volumineuses et les timeouts.
@@ -636,6 +636,58 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
         import traceback
         logger.error(traceback.format_exc())
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
+
+def analyser_schema_avec_blip(image_path: str) -> dict:
+    """
+    Analyse un schéma/image avec BLIP et retourne une description.
+    BLIP est léger, rapide et gratuit (tourne en local).
+    """
+    logger.info(f"🖼️ Analyse schéma avec BLIP: {image_path}")
+
+    try:
+        import torch
+        # Charger le modèle BLIP (lazy loading)
+        processor, model = get_blip_model()
+
+        # Ouvrir et préparer l'image
+        from PIL import Image
+        image = Image.open(image_path).convert('RGB')
+
+        # Prétraiter l'image
+        inputs = processor(image, return_tensors="pt")
+
+        # Déplacer sur le même device que le modèle
+        device = next(model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Générer la description
+        with torch.no_grad():
+            out = model.generate(**inputs, max_length=100)
+
+        # Décoder la description
+        description = processor.decode(out[0], skip_special_tokens=True)
+
+        logger.info(f"✅ Description BLIP: {description[:100]}...")
+
+        # Retourner une structure compatible avec votre système
+        return {
+            "type_schema": "schéma",
+            "description": description,
+            "elements": [],
+            "relations": "",
+            "source": "blip"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Erreur BLIP: {e}")
+        return {
+            "type_schema": "inconnu",
+            "description": "",
+            "elements": [],
+            "relations": "",
+            "source": "blip_error"
+        }
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
