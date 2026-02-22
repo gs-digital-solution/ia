@@ -717,26 +717,30 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
             resultat_deepseek = call_deepseek_vision_ameliore(fichier_path, demande)
 
             # Vérifier que le résultat est utilisable
-            texte = resultat_deepseek.get("texte_complet", "")
-            if texte and len(texte) > 100:
-                logger.info(f"✅ DeepSeek réussi: {len(texte)} caractères, "
-                            f"{len(resultat_deepseek.get('exercices', []))} exercices, "
-                            f"{len(resultat_deepseek.get('elements_visuels', []))} schémas")
+            if resultat_deepseek and "exercices" in resultat_deepseek and len(
+                    resultat_deepseek.get("exercices", [])) > 0:
+
+                # Reconstruire texte_complet à partir des exercices
+                exercices = resultat_deepseek.get("exercices", [])
+                texte_complet = "\n\n".join([ex.get("texte", "") for ex in exercices])
+
+                logger.info(f"✅ DeepSeek réussi: {len(texte_complet)} caractères, "
+                            f"{len(exercices)} exercices")
 
                 return {
-                    "texte_complet": texte,
+                    "texte_complet": texte_complet,
                     "elements_visuels": resultat_deepseek.get("elements_visuels", []),
-                    "formules_latex": resultat_deepseek.get("latex_blocks", []),
-                    "graphs": [],  # Sera extrait des exercices si besoin
+                    "formules_latex": [],  # À extraire des exercices si besoin
+                    "graphs": [],
                     "angles": [],
                     "numbers": [],
-                    "structure_exercices": resultat_deepseek.get("exercices", []),
+                    "structure_exercices": exercices,
                     "source_extraction": "deepseek",
                     "departement": dept_nom,
-                    "exercices_struct": resultat_deepseek.get("exercices", [])  # NOUVEAU: structure complète
+                    "exercices_struct": exercices
                 }
             else:
-                logger.warning("⚠️ DeepSeek échec ou résultat trop court (<100 chars), fallback Mathpix")
+                logger.warning("⚠️ DeepSeek échec ou pas d'exercices détectés, fallback Mathpix")
                 use_deepseek = False
 
         except Exception as e:
