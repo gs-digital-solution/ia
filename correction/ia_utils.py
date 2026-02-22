@@ -642,36 +642,41 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None, ) -> dict:
 def analyser_schema_avec_blip(image_path: str) -> dict:
     """
     Analyse un schéma/image avec BLIP et retourne une description.
-    BLIP est léger, rapide et gratuit (tourne en local).
     """
     logger.info(f"🖼️ Analyse schéma avec BLIP: {image_path}")
 
     try:
         import torch
+        logger.info("✅ torch importé")
+
         # Charger le modèle BLIP (lazy loading)
+        logger.info("📦 Chargement du modèle BLIP...")
         processor, model = get_blip_model()
+        logger.info("✅ Modèle BLIP chargé")
 
         # Ouvrir et préparer l'image
         from PIL import Image
         image = Image.open(image_path).convert('RGB')
+        logger.info(f"✅ Image ouverte: {image.size}")
 
         # Prétraiter l'image
         inputs = processor(image, return_tensors="pt")
+        logger.info("✅ Image prétraitée")
 
         # Déplacer sur le même device que le modèle
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
+        logger.info(f"✅ Données déplacées sur {device}")
 
         # Générer la description
         with torch.no_grad():
             out = model.generate(**inputs, max_length=100)
+        logger.info("✅ Description générée")
 
         # Décoder la description
         description = processor.decode(out[0], skip_special_tokens=True)
+        logger.info(f"✅ Description: {description[:100]}...")
 
-        logger.info(f"✅ Description BLIP: {description[:100]}...")
-
-        # Retourner une structure compatible avec votre système
         return {
             "type_schema": "schéma",
             "description": description,
@@ -681,7 +686,9 @@ def analyser_schema_avec_blip(image_path: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"❌ Erreur BLIP: {e}")
+        logger.error(f"❌ Erreur BLIP: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {
             "type_schema": "inconnu",
             "description": "",
