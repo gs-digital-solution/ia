@@ -412,85 +412,120 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 # ============== NOUVELLE FONCTION: DeepSeek Vision Améliorée avec extraction structurée ==============
 def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
     """
-    Appel DeepSeek amélioré avec debug pour voir la réponse brute
+    Appel DeepSeek amélioré avec timeout et gestion d'erreur renforcée
     """
     logger.info(f"🔄 Appel DeepSeek Vision Amélioré pour {path_fichier}")
 
+    # Vérification clé API
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        logger.error("❌ DEEPSEEK_API_KEY non configurée")
+        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
+    # Vérification fichier
+    if not os.path.exists(path_fichier):
+        logger.error(f"❌ Fichier non trouvé: {path_fichier}")
+        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
+    # Taille du fichier
+    file_size = os.path.getsize(path_fichier)
+    logger.info(f"📁 Taille fichier: {file_size} octets")
+
+    if file_size > 5 * 1024 * 1024:  # 5 Mo max
+        logger.error(f"❌ Fichier trop grand: {file_size} octets")
+        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
     system_prompt = r"""
-    Tu es un expert en analyse de documents scolaires.
-
-    INSTRUCTIONS PRÉCISES:
-    1. Ce document est un sujet d'examen/exercice de mathématiques/physique.
-    2. Il contient UN OU PLUSIEURS exercices clairement numérotés.
-    3. IDENTIFIE chaque exercice en cherchant :
-       - "EXERCICE 1", "Exercice 1", "EXERCICE 2", etc.
-       - "PARTIE A", "PARTIE B", "PROBLÈME"
-       - Des numéros comme "1.", "2.", "3." en début de ligne
-       - Des titres comme "Évaluation des compétences"
-
-    4. Pour CHAQUE exercice, extrais :
-       - Le TITRE complet (ex: "EXERCICE 1" ou "B. Évaluation des compétences")
-       - Le TEXTE intégral de l'énoncé
-       - Les FORMULES mathématiques (garde-les en LaTeX)
-       - Les SCHÉMAS : décris-les en détail
-
-    RENVOIE UNIQUEMENT CE JSON:
+    Analyse cette image et renvoie UNIQUEMENT ce JSON:
     {
       "exercices": [
         {
-          "titre": "titre exact de l'exercice",
-          "texte": "texte complet de l'exercice avec toutes les questions",
-          "formules": ["$formule1$", "$formule2$"],
-          "schemas": [
-            {
-              "type": "type du schéma (circuit, figure, graphique...)",
-              "description": "description détaillée de ce qu'on voit",
-              "elements": [{"nom": "élément", "valeur": "valeur"}]
-            }
-          ]
+          "titre": "titre de l'exercice",
+          "texte": "texte complet",
+          "schemas": []
         }
       ]
     }
-
-    IMPORTANT: Même s'il n'y a qu'un seul exercice, mets-le dans le tableau "exercices".
     """
 
     try:
+        # Lecture et encodage de l'image
+        logger.info("📖 Lecture du fichier...")
         with open(path_fichier, "rb") as f:
-            data_b64 = base64.b64encode(f.read()).decode("utf-8")
+            data = f.read()
+
+        logger.info(f"📦 Fichier lu: {len(data)} octets")
+        data_b64 = base64.b64encode(data).decode("utf-8")
+        logger.info(f"🔐 Base64: {len(data_b64)} caractères")
+
+        # Tronquer si trop gros (DeepSeek a une limite)
+        if len(data_b64) > 500000:  # ~500 Ko
+            logger.warning("⚠️ Image trop grande en base64, redimensionnement nécessaire")
+            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
         message_content = f"[image]{data_b64}[/image]\n\nExtrais le texte et les exercices."
 
-        response = openai.ChatCompletion.create(
-            model=DEEPSEEK_VISION_MODEL,
-            messages=[
+        # Appel API avec timeout explicite
+        logger.info("📡 Envoi requête à DeepSeek...")
+
+        import requests  # Utiliser requests directement pour plus de contrôle
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": "deepseek-reasoner",
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message_content}
             ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-            max_tokens=4000
+            "response_format": {"type": "json_object"},
+            "temperature": 0.0,
+            "max_tokens": 4000
+        }
+
+        # Timeout court pour éviter les blocages
+        response = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30  # Timeout de 30 secondes
         )
 
-        content = response.choices[0].message.content
+        logger.info(f"📡 Réponse reçue: status {response.status_code}")
 
-        # 🔴 DEBUG: Logger la réponse brute
-        logger.info(f"📦 Réponse brute DeepSeek: {content[:500]}...")
+        if response.status_code != 200:
+            logger.error(f"❌ Erreur HTTP {response.status_code}: {response.text[:200]}")
+            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
-        # Essayer de parser le JSON
+        result = response.json()
+        content = result['choices'][0]['message']['content']
+
+        logger.info(f"📦 Réponse brute: {content[:200]}...")
+
+        # Parser le JSON
         try:
-            resultat = json.loads(content) if isinstance(content, str) else content
-            logger.info(f"✅ Parsing JSON réussi: {len(resultat.get('exercices', []))} exercices")
+            resultat = json.loads(content)
+            logger.info(f"✅ Parsing réussi: {len(resultat.get('exercices', []))} exercices")
             return resultat
         except json.JSONDecodeError as e:
             logger.error(f"❌ JSON invalide: {e}")
-            logger.error(f"Contenu: {content[:200]}")
+            logger.error(f"Contenu: {content[:500]}")
             return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
-    except Exception as e:
-        logger.error(f"❌ Erreur DeepSeek: {e}")
+    except requests.exceptions.Timeout:
+        logger.error("❌ Timeout DeepSeek (30s dépassé)")
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"❌ Erreur connexion DeepSeek: {e}")
+        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+    except Exception as e:
+        logger.error(f"❌ Erreur DeepSeek: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
 
