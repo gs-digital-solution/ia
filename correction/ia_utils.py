@@ -412,7 +412,8 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 # ============== NOUVELLE FONCTION: DeepSeek Vision Améliorée avec extraction structurée ==============
 def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
     """
-    Appel DeepSeek amélioré avec timeout et gestion d'erreur renforcée
+    Appel DeepSeek amélioré avec timeout long (120s) et redimensionnement automatique des images.
+    Version optimisée pour gérer les images volumineuses et les timeouts.
     """
     logger.info(f"🔄 Appel DeepSeek Vision Amélioré pour {path_fichier}")
 
@@ -429,11 +430,7 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
 
     # Taille du fichier
     file_size = os.path.getsize(path_fichier)
-    logger.info(f"📁 Taille fichier: {file_size} octets")
-
-    if file_size > 5 * 1024 * 1024:  # 5 Mo max
-        logger.error(f"❌ Fichier trop grand: {file_size} octets")
-        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+    logger.info(f"📁 Taille fichier originale: {file_size} octets ({file_size/1024:.1f} Ko)")
 
     system_prompt = """
     Tu es un expert en reconnaissance de textes et schémas dans des documents scolaires.
@@ -451,9 +448,10 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
     Tu ne dois PAS écrire "Un élève se vante dans la cour".
 
     POUR LES SCHÉMAS:
-    - Décris leur type (circuit, figure, graphique)
-    - Décris les éléments visibles
+    - Décris leur type (circuit, figure, graphique, plan incliné, etc.)
+    - Décris les éléments visibles et leur position
     - Décris les relations entre éléments
+    - Extrais toutes les valeurs numériques (angles, longueurs, tensions)
 
     RENVOIE UNIQUEMENT CE JSON:
     {
@@ -466,7 +464,8 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
               "type_schema": "type de schéma",
               "description": "description détaillée",
               "elements": ["élément1", "élément2"],
-              "relations": "relations entre éléments"
+              "relations": "relations entre éléments",
+              "valeurs": {"angle": "30°", "longueur": "70cm"}
             }
           ],
           "formules": ["$formule1$", "$formule2$"]
@@ -474,27 +473,64 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
       ]
     }
     """
+
     try:
-        # Lecture et encodage de l'image
-        logger.info("📖 Lecture du fichier...")
-        with open(path_fichier, "rb") as f:
-            data = f.read()
+        # ========== REDIMENSIONNEMENT INTELLIGENT DE L'IMAGE ==========
+        from PIL import Image
+        import io
 
-        logger.info(f"📦 Fichier lu: {len(data)} octets")
-        data_b64 = base64.b64encode(data).decode("utf-8")
-        logger.info(f"🔐 Base64: {len(data_b64)} caractères")
+        logger.info("📖 Lecture et optimisation de l'image...")
 
-        # Tronquer si trop gros (DeepSeek a une limite)
-        if len(data_b64) > 500000:  # ~500 Ko
-            logger.warning("⚠️ Image trop grande en base64, redimensionnement nécessaire")
-            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+        # Ouvrir l'image avec PIL
+        img = Image.open(path_fichier)
 
-        message_content = f"[image]{data_b64}[/image]\n\nExtrais le texte et les exercices."
+        # Log des dimensions originales
+        original_width, original_height = img.size
+        logger.info(f"📐 Dimensions originales: {original_width}x{original_height}")
 
-        # Appel API avec timeout explicite
-        logger.info("📡 Envoi requête à DeepSeek...")
+        # Redimensionner si trop grande (max 1200px de côté)
+        max_dimension = 1200
+        if original_width > max_dimension or original_height > max_dimension:
+            # Calculer le ratio de redimensionnement
+            ratio = min(max_dimension / original_width, max_dimension / original_height)
+            new_width = int(original_width * ratio)
+            new_height = int(original_height * ratio)
 
-        import requests  # Utiliser requests directement pour plus de contrôle
+            # Redimensionner avec conservation de la qualité
+            img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+            logger.info(f"📐 Image redimensionnée: {new_width}x{new_height} (ratio: {ratio:.2f})")
+
+        # Convertir en RGB si nécessaire (pour les PNG avec transparence)
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
+
+        # Sauvegarder en JPEG avec compression optimale
+        buffer = io.BytesIO()
+        img.save(buffer, format='JPEG', quality=85, optimize=True)
+        compressed_size = len(buffer.getvalue())
+        logger.info(f"📦 Taille après compression: {compressed_size} octets ({compressed_size/1024:.1f} Ko)")
+
+        # Encodage en base64
+        data_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        logger.info(f"🔐 Base64: {len(data_b64)} caractères ({len(data_b64)/1024:.1f} Ko)")
+
+        # Vérification taille base64 (limite DeepSeek ~500Ko)
+        if len(data_b64) > 600000:  # ~450 Ko après décodage
+            logger.warning(f"⚠️ Image encore trop grande ({len(data_b64)/1024:.1f} Ko), compression plus forte...")
+
+            # Recompression avec qualité plus faible
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=60, optimize=True)
+            data_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            logger.info(f"📦 Après compression renforcée: {len(data_b64)/1024:.1f} Ko")
+
+        # Construction du message
+        message_content = f"[image]{data_b64}[/image]\n\nExtrais le texte et les exercices exactement comme dans l'image."
+
+        # Appel API avec timeout long
+        logger.info("📡 Envoi requête à DeepSeek (timeout 120s)...")
+
+        import requests
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -509,44 +545,92 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
-            "max_tokens": 4000
+            "max_tokens": 8000  # Augmenté pour les descriptions détaillées
         }
 
-        # Timeout court pour éviter les blocages
+        logger.info(f"📤 Taille payload: {len(str(payload))/1024:.1f} Ko")
+
+        # Timeout long (120 secondes)
         response = requests.post(
             "https://api.deepseek.com/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=100  # Timeout de 30 secondes
+            timeout=120,  # 2 minutes
+            stream=False
         )
 
         logger.info(f"📡 Réponse reçue: status {response.status_code}")
 
         if response.status_code != 200:
-            logger.error(f"❌ Erreur HTTP {response.status_code}: {response.text[:200]}")
+            logger.error(f"❌ Erreur HTTP {response.status_code}: {response.text[:500]}")
             return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
         result = response.json()
-        content = result['choices'][0]['message']['content']
 
-        logger.info(f"📦 Réponse brute: {content[:200]}...")
+        # Vérification de la structure de la réponse
+        if 'choices' not in result or not result['choices']:
+            logger.error(f"❌ Structure réponse invalide: {result}")
+            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
+        content = result['choices'][0]['message']['content']
+        logger.info(f"📦 Réponse brute ({len(content)} caractères): {content[:300]}...")
+
+        # Nettoyage de la réponse (enlever les markdown json éventuels)
+        content = re.sub(r'```json\s*', '', content)
+        content = re.sub(r'\s*```', '', content)
+        content = content.strip()
 
         # Parser le JSON
         try:
             resultat = json.loads(content)
-            logger.info(f"✅ Parsing réussi: {len(resultat.get('exercices', []))} exercices")
+
+            # Validation de la structure
+            if "exercices" not in resultat:
+                logger.warning("⚠️ Structure JSON incorrecte (pas de clé 'exercices')")
+                # Tentative de correction
+                if isinstance(resultat, list):
+                    resultat = {"exercices": resultat}
+                elif isinstance(resultat, dict) and len(resultat) == 1:
+                    # Prendre la première clé comme exercices
+                    first_key = list(resultat.keys())[0]
+                    resultat = {"exercices": resultat[first_key]}
+
+            nb_exercices = len(resultat.get('exercices', []))
+            logger.info(f"✅ Parsing réussi: {nb_exercices} exercices")
+
+            # Log des schémas détectés
+            if nb_exercices > 0:
+                for i, ex in enumerate(resultat['exercices']):
+                    nb_schemas = len(ex.get('schemas', []))
+                    logger.info(f"   Exercice {i+1}: {nb_schemas} schéma(s)")
+
             return resultat
+
         except json.JSONDecodeError as e:
             logger.error(f"❌ JSON invalide: {e}")
             logger.error(f"Contenu: {content[:500]}")
+
+            # Tentative de récupération avec regex
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                try:
+                    resultat = json.loads(json_match.group())
+                    logger.info(f"✅ JSON récupéré par regex: {len(resultat.get('exercices', []))} exercices")
+                    return resultat
+                except:
+                    pass
+
             return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
     except requests.exceptions.Timeout:
-        logger.error("❌ Timeout DeepSeek (30s dépassé)")
+        logger.error("❌ Timeout DeepSeek (120s dépassé)")
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
     except requests.exceptions.ConnectionError as e:
         logger.error(f"❌ Erreur connexion DeepSeek: {e}")
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
+
     except Exception as e:
         logger.error(f"❌ Erreur DeepSeek: {type(e).__name__}: {e}")
         import traceback
