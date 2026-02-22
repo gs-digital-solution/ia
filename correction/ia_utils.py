@@ -435,17 +435,42 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None) -> dict:
         logger.error(f"❌ Fichier trop grand: {file_size} octets")
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
-    system_prompt = r"""
-    Analyse cette image et renvoie UNIQUEMENT ce JSON:
+    system_prompt = """
+    Tu es un expert en analyse de documents scolaires.
+
+    ANALYSE GÉNÉRIQUE:
+    1. Ce document est un SUJET D'EXAMEN scolaire.
+    2. Il peut être de physique, mathématiques, chimie, etc.
+    3. Il contient UN OU PLUSIEURS exercices.
+
+    INSTRUCTIONS:
+    - Extrais le texte EXACTEMENT comme il apparaît
+    - Identifie les TITRES d'exercices (EXERCICE 1, PARTIE A, etc.)
+    - Pour CHAQUE SCHÉMA présent :
+      * Décris son type (circuit électrique, figure géométrique, graphique, expérience, etc.)
+      * Décris les éléments visibles
+      * Décris les relations entre éléments
+    - Extrais toutes les FORMULES mathématiques en LaTeX
+
+    RENVOIE CE JSON:
     {
       "exercices": [
         {
-          "titre": "titre de l'exercice",
-          "texte": "texte complet",
-          "schemas": []
+          "titre": "titre exact de l'exercice",
+          "texte": "texte complet et exact",
+          "schemas": [
+            {
+              "type": "type de schéma détecté",
+              "description": "description détaillée",
+              "elements": [{"nom": "élément1", "propriétés": "..."}]
+            }
+          ],
+          "formules": ["$formule1$", "$formule2$"]
         }
       ]
     }
+
+    RÈGLE D'OR: Ne réécris PAS l'énoncé. Recopie-le mot pour mot.
     """
 
     try:
