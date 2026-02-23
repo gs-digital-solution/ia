@@ -8,7 +8,6 @@ import cv2
 from pdf2image import convert_from_path
 import matplotlib
 import openai
-from .pdf_utils import generer_pdf_corrige
 from datetime import datetime
 import logging
 import camelot
@@ -214,7 +213,6 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                     logger.debug(f"🧹 Fichier temporaire supprimé: {temp_file}")
             except Exception as e:
                 logger.warning(f"⚠️ Impossible de supprimer {temp_file}: {e}")
-
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -262,10 +260,10 @@ def get_blip_model():
 
 
 DEPARTEMENTS_SCIENTIFIQUES = [
-    'mathématiques', 'physique', 'chimie', 'biologie',
+     'physique', 'chimie', 'biologie',
     'svt', 'sciences', 'informatique', 'anglais'
     # Ajouter des variantes
-    'maths', 'mathematiques', 'math', 'physique-chimie',
+    'physique-chimie',
     'science', 'scientifique', 'biologie-géologie'
 ]
 
@@ -408,370 +406,137 @@ def call_deepseek_vision(path_fichier: str) -> dict:
         print(f"❌ Erreur call_deepseek_vision: {e}")
         return {"text": "", "latex_blocks": [], "captions": [], "graphs": []}
 
-
-# ============== NOUVELLE FONCTION: DeepSeek Vision Améliorée avec extraction structurée ==============
-def call_deepseek_vision_ameliore(path_fichier: str, demande=None, ) -> dict:
-    """
-    Appel DeepSeek amélioré avec timeout long (120s) et redimensionnement automatique des images.
-    Version optimisée pour gérer les images volumineuses et les timeouts.
-    """
-    import re
-    logger.info(f"🔄 Appel DeepSeek Vision Amélioré pour {path_fichier}")
-
-    # Vérification clé API
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        logger.error("❌ DEEPSEEK_API_KEY non configurée")
-        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-    # Vérification fichier
-    if not os.path.exists(path_fichier):
-        logger.error(f"❌ Fichier non trouvé: {path_fichier}")
-        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-    # Taille du fichier
-    file_size = os.path.getsize(path_fichier)
-    logger.info(f"📁 Taille fichier originale: {file_size} octets ({file_size/1024:.1f} Ko)")
-
-    system_prompt = """
-    Tu es un expert en reconnaissance de textes et schémas dans des documents scolaires.
-
-    INSTRUCTIONS ABSOLUES:
-    1. Ce document est un SUJET D'EXAMEN. Il contient du texte et des schémas.
-    2. Tu dois EXTRAIRE le texte EXACTEMENT comme il apparaît, sans modification, sans réécriture.
-    3. Tu dois IDENTIFIER la structure du document (exercices, parties).
-    4. Tu dois DÉCRIRE les schémas en détail.
-
-    RÈGLE D'OR: Ne réécris PAS l'énoncé. Recopie-le mot pour mot, avec les mêmes phrases, les mêmes mots.
-
-    EXEMPLE:
-    Si le texte dit "Dans la cour de récréation, l'élève Mbonto se vante", tu dois écrire exactement cela.
-    Tu ne dois PAS écrire "Un élève se vante dans la cour".
-
-    POUR LES SCHÉMAS:
-    - Décris leur type (circuit, figure, graphique, plan incliné, etc.)
-    - Décris les éléments visibles et leur position
-    - Décris les relations entre éléments
-    - Extrais toutes les valeurs numériques (angles, longueurs, tensions)
-
-    RENVOIE UNIQUEMENT CE JSON:
-    {
-      "exercices": [
-        {
-          "titre": "titre exact de l'exercice",
-          "texte": "texte exact recopié sans modification",
-          "schemas": [
-            {
-              "type_schema": "type de schéma",
-              "description": "description détaillée",
-              "elements": ["élément1", "élément2"],
-              "relations": "relations entre éléments",
-              "valeurs": {"angle": "30°", "longueur": "70cm"}
-            }
-          ],
-          "formules": ["$formule1$", "$formule2$"]
-        }
-      ]
-    }
-    """
-
-    try:
-        # ========== REDIMENSIONNEMENT INTELLIGENT DE L'IMAGE ==========
-        from PIL import Image
-        import io
-
-        logger.info("📖 Lecture et optimisation de l'image...")
-
-        # Ouvrir l'image avec PIL
-        img = Image.open(path_fichier)
-
-        # Log des dimensions originales
-        original_width, original_height = img.size
-        logger.info(f"📐 Dimensions originales: {original_width}x{original_height}")
-
-        # Redimensionner si trop grande (max 1200px de côté)
-        max_dimension = 1200
-        if original_width > max_dimension or original_height > max_dimension:
-            # Calculer le ratio de redimensionnement
-            ratio = min(max_dimension / original_width, max_dimension / original_height)
-            new_width = int(original_width * ratio)
-            new_height = int(original_height * ratio)
-
-            # Redimensionner avec conservation de la qualité
-            img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-            logger.info(f"📐 Image redimensionnée: {new_width}x{new_height} (ratio: {ratio:.2f})")
-
-        # Convertir en RGB si nécessaire (pour les PNG avec transparence)
-        if img.mode in ('RGBA', 'P'):
-            img = img.convert('RGB')
-
-        # Sauvegarder en JPEG avec compression optimale
-        buffer = io.BytesIO()
-        img.save(buffer, format='JPEG', quality=85, optimize=True)
-        compressed_size = len(buffer.getvalue())
-        logger.info(f"📦 Taille après compression: {compressed_size} octets ({compressed_size/1024:.1f} Ko)")
-
-        # Encodage en base64
-        data_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        logger.info(f"🔐 Base64: {len(data_b64)} caractères ({len(data_b64)/1024:.1f} Ko)")
-
-        # Vérification taille base64 (limite DeepSeek ~500Ko)
-        if len(data_b64) > 600000:  # ~450 Ko après décodage
-            logger.warning(f"⚠️ Image encore trop grande ({len(data_b64)/1024:.1f} Ko), compression plus forte...")
-
-            # Recompression avec qualité plus faible
-            buffer = io.BytesIO()
-            img.save(buffer, format='JPEG', quality=60, optimize=True)
-            data_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-            logger.info(f"📦 Après compression renforcée: {len(data_b64)/1024:.1f} Ko")
-
-        # Construction du message
-        message_content = f"[image]{data_b64}[/image]\n\nExtrais le texte et les exercices exactement comme dans l'image."
-
-        # Appel API avec timeout long
-        logger.info("📡 Envoi requête à DeepSeek (timeout 120s)...")
-
-        import requests
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_content}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.0,
-            "max_tokens": 8000  # Augmenté pour les descriptions détaillées
-        }
-
-        logger.info(f"📤 Taille payload: {len(str(payload))/1024:.1f} Ko")
-
-        # Timeout long (120 secondes)
-        response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=120,  # 2 minutes
-            stream=False
-        )
-
-        logger.info(f"📡 Réponse reçue: status {response.status_code}")
-
-        if response.status_code != 200:
-            logger.error(f"❌ Erreur HTTP {response.status_code}: {response.text[:500]}")
-            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-        result = response.json()
-
-        # Vérification de la structure de la réponse
-        if 'choices' not in result or not result['choices']:
-            logger.error(f"❌ Structure réponse invalide: {result}")
-            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-        content = result['choices'][0]['message']['content']
-        logger.info(f"📦 Réponse brute ({len(content)} caractères): {content[:300]}...")
-
-        # Nettoyage de la réponse (enlever les markdown json éventuels)
-        content = re.sub(r'```json\s*', '', content)
-        content = re.sub(r'\s*```', '', content)
-        content = content.strip()
-
-        # Parser le JSON
-        try:
-            resultat = json.loads(content)
-
-            # Validation de la structure
-            if "exercices" not in resultat:
-                logger.warning("⚠️ Structure JSON incorrecte (pas de clé 'exercices')")
-                # Tentative de correction
-                if isinstance(resultat, list):
-                    resultat = {"exercices": resultat}
-                elif isinstance(resultat, dict) and len(resultat) == 1:
-                    # Prendre la première clé comme exercices
-                    first_key = list(resultat.keys())[0]
-                    resultat = {"exercices": resultat[first_key]}
-
-            nb_exercices = len(resultat.get('exercices', []))
-            logger.info(f"✅ Parsing réussi: {nb_exercices} exercices")
-
-            # Log des schémas détectés
-            if nb_exercices > 0:
-                for i, ex in enumerate(resultat['exercices']):
-                    nb_schemas = len(ex.get('schemas', []))
-                    logger.info(f"   Exercice {i+1}: {nb_schemas} schéma(s)")
-
-            return resultat
-
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ JSON invalide: {e}")
-            logger.error(f"Contenu: {content[:500]}")
-
-            # Tentative de récupération avec regex
-            import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                try:
-                    resultat = json.loads(json_match.group())
-                    logger.info(f"✅ JSON récupéré par regex: {len(resultat.get('exercices', []))} exercices")
-                    return resultat
-                except:
-                    pass
-
-            return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-    except requests.exceptions.Timeout:
-        logger.error("❌ Timeout DeepSeek (120s dépassé)")
-        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"❌ Erreur connexion DeepSeek: {e}")
-        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-    except Exception as e:
-        logger.error(f"❌ Erreur DeepSeek: {type(e).__name__}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return {"exercices": [], "texte_complet": "", "elements_visuels": []}
-
-
-def analyser_schema_avec_florence(image_path: str) -> dict:
-    """
-    Analyse un schéma/image avec Florence-2 (Microsoft).
-    Extrait le texte (OCR) ET décrit le schéma en une seule passe.
-    """
-    logger.info(f"🖼️ Analyse schéma avec Florence-2: {image_path}")
-
-    try:
-        import torch
-        from transformers import AutoProcessor, AutoModelForCausalLM
-        from PIL import Image
-
-        # Charger le modèle (lazy loading comme BLIP)
-        # À déplacer dans une fonction get_florence_model() si vous voulez lazy loader
-        model = AutoModelForCausalLM.from_pretrained(
-            "microsoft/Florence-2-large-ft",
-            trust_remote_code=True,
-            torch_dtype=torch.float32  # ← Plus besoin de flash_attn
-        ).eval()
-
-        processor = AutoProcessor.from_pretrained(
-            "microsoft/Florence-2-large-ft",
-            trust_remote_code=True
-        )
-
-        # Déplacer sur GPU si disponible
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = model.to(device)
-
-        # Ouvrir l'image
-        image = Image.open(image_path).convert('RGB')
-
-        # TÂCHE 1: OCR - lire les légendes/texte sur le schéma
-        prompt_ocr = "<OCR>"
-        inputs_ocr = processor(text=prompt_ocr, images=image, return_tensors="pt").to(device)
-
-        with torch.no_grad():
-            generated_ids = model.generate(
-                **inputs_ocr,
-                max_new_tokens=500,
-                num_beams=3
-            )
-
-        texte_extrait = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        logger.info(f"📝 Texte extrait par OCR: {texte_extrait[:100]}...")
-
-        # TÂCHE 2: Description détaillée du schéma
-        prompt_desc = "<DETAILED_CAPTION>"
-        inputs_desc = processor(text=prompt_desc, images=image, return_tensors="pt").to(device)
-
-        with torch.no_grad():
-            generated_ids = model.generate(
-                **inputs_desc,
-                max_new_tokens=500,
-                num_beams=3
-            )
-
-        description = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        logger.info(f"📝 Description: {description[:100]}...")
-
-        return {
-            "type_schema": "schéma",
-            "description": description,
-            "texte_ocri": texte_extrait,  # ← Les légendes/texte du schéma !
-            "elements": [],
-            "relations": "",
-            "source": "florence-2"
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Erreur Florence-2: {type(e).__name__}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return {
-            "type_schema": "inconnu",
-            "description": "",
-            "texte_ocri": "",
-            "elements": [],
-            "relations": "",
-            "source": "florence_error"
-        }
-
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
+
 def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
     """
-    Analyse scientifique : Mathpix pour le texte + Florence-2 pour les schémas
+    Analyse scientifique avancée avec choix du moteur selon département.
+    Pour les départements scientifiques : Mathpix (formules LaTeX précises)
+    Sinon : OCR standard + DeepSeek Vision
     """
     logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
 
-    # 1) MATHPIX POUR LE TEXTE (TOUJOURS)
-    logger.info("🧮 Extraction du texte avec Mathpix")
-    resultat_mathpix = extraire_avec_mathpix(fichier_path)
+    # 1) DÉTECTION DU DÉPARTEMENT POUR CHOIX DE LA MÉTHODE
+    use_mathpix = False
+    dept_nom = "inconnu"
 
-    texte_complet = resultat_mathpix.get("text", "")
-    logger.info(f"✅ Mathpix: {len(texte_complet)} caractères")
+    if demande and demande.departement:
+        dept_nom = demande.departement.nom
+        use_mathpix = is_departement_scientifique(demande.departement)
+        logger.info(f"📊 Département '{dept_nom}' → Mathpix = {use_mathpix}")
 
-    # 2) FLORENCE-2 POUR LES SCHÉMAS (si département scientifique)
-    elements_visuels = []
+    # 2) EXTRACTION AVEC MATHPIX POUR DÉPARTEMENTS SCIENTIFIQUES
+    if use_mathpix:
+        logger.info("🧮 Extraction avec Mathpix (département scientifique)")
 
-    if demande and is_departement_scientifique(demande.departement):
-        logger.info("🖼️ Analyse des schémas avec Florence-2")
+        # Vérifier que la configuration Mathpix existe
+        if not os.getenv("MATHPIX_APP_ID") or not os.getenv("MATHPIX_APP_KEY"):
+            logger.warning("⚠️ Configuration Mathpix manquante, fallback standard")
+            use_mathpix = False
+        else:
+            resultat_mathpix = extraire_avec_mathpix(fichier_path)
 
-        # Analyser avec Florence-2
-        schema_data = analyser_schema_avec_florence(fichier_path)
+            if resultat_mathpix.get("text") and len(resultat_mathpix["text"]) > 100:
+                logger.info(f"✅ Mathpix réussi: {len(resultat_mathpix['text'])} caractères, "
+                            f"{len(resultat_mathpix.get('latex_blocks', []))} formules LaTeX")
 
-        if schema_data.get('description') or schema_data.get('texte_ocri'):
-            elements_visuels.append({
-                "page": 1,
-                "type": schema_data.get('type_schema', 'schéma'),
-                "description": schema_data.get('description', ''),
-                "texte_legende": schema_data.get('texte_ocri', ''),  # ← NOUVEAU
-                "source": "florence-2"
-            })
+                return {
+                    "texte_complet": resultat_mathpix["text"],
+                    "elements_visuels": [],
+                    "formules_latex": resultat_mathpix.get("latex_blocks", []),
+                    "graphs": [],
+                    "angles": [],
+                    "numbers": [],
+                    "structure_exercices": [],
+                    "source_extraction": "mathpix",
+                    "departement": dept_nom
+                }
+            else:
+                logger.warning("⚠️ Mathpix échec ou résultat trop court (<100 chars), fallback standard")
+                use_mathpix = False
 
-        logger.info(f"✅ {len(elements_visuels)} schéma(s) décrit(s) par Florence-2")
+    # 3) FALLBACK: ANALYSE STANDARD (OCR + DeepSeek Vision)
+    logger.info("🔤 Extraction standard (OCR + DeepSeek Vision)")
 
-    # 3) CONSTRUIRE LA STRUCTURE EXERCICES AVEC LES SCHÉMAS
-    exercices_struct = []
-    if elements_visuels:
-        exercices_struct.append({
-            "titre": "Document avec schéma(s)",
-            "texte": texte_complet,
-            "schemas": elements_visuels,  # ← ICI les schémas !
-            "formules": resultat_mathpix.get("latex_blocks", [])
-        })
+    # 3a) OCR fallback pour avoir un premier texte
+    config_tesseract = r'--oem 3 --psm 6 -l fra+eng+digits'
+    texte_ocr = ""
 
-    return {
-        "texte_complet": texte_complet,
-        "elements_visuels": elements_visuels,
-        "formules_latex": resultat_mathpix.get("latex_blocks", []),
-        "source_extraction": "mathpix+florence",
-        "exercices_struct": exercices_struct
-    }
+    try:
+        if fichier_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            img = Image.open(fichier_path)
+            clean = preprocess_image_for_ocr(img)
+            texte_ocr = pytesseract.image_to_string(clean, config=config_tesseract)
+            logger.info(f"    ✓ OCR image brut extrait {len(texte_ocr)} caractères")
+
+        elif fichier_path.lower().endswith('.pdf'):
+            texte_ocr = extraire_texte_pdf(fichier_path)
+            logger.info(f"    ✓ PDFMiner extrait {len(texte_ocr)} caractères")
+
+            if len(texte_ocr) < 50:
+                logger.warning("    ⚠️ OCR PDFMiner trop court, fallback page à page")
+                pages = convert_from_path(fichier_path, dpi=300)
+                txts = []
+                for page in pages:
+                    clean = preprocess_image_for_ocr(page)
+                    txts.append(pytesseract.image_to_string(clean, config=config_tesseract))
+                texte_ocr = "\n".join(txts)
+                logger.info(f"    ✓ fallback OCR pages donne {len(texte_ocr)} caractères")
+
+        else:
+            raise ValueError(f"Format non supporté pour OCR: {fichier_path}")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur pendant OCR/PDF: {e}")
+        # On continue avec texte_ocr vide
+
+    # 3b) Appel deepseek-vl2 pour tout : texte + schémas + JSON
+    try:
+        vision_json = call_deepseek_vision(fichier_path)
+
+        # 3c) Texte complet : fallback sur OCR si résultat trop court
+        texte_json = vision_json.get("text", "") or ""
+        if len(texte_json) < 50:
+            texte_json = texte_ocr
+
+        # 3d) Récupération des blocs
+        captions = vision_json.get("captions", [])
+        latex_blocks = vision_json.get("latex_blocks", [])
+        graphs = vision_json.get("graphs", [])
+        angles = vision_json.get("angles", [])
+        numbers = vision_json.get("numbers", [])
+        struct_exos = vision_json.get("structure_exercices", [])
+
+        logger.info(f"✅ DeepSeek Vision OK : texte {len(texte_json)} chars, "
+                    f"{len(captions)} schémas, {len(latex_blocks)} formules, "
+                    f"{len(angles)} angles, {len(numbers)} nombres")
+
+        return {
+            "texte_complet": texte_json,
+            "elements_visuels": captions,
+            "formules_latex": latex_blocks,
+            "graphs": graphs,
+            "angles": angles,
+            "numbers": numbers,
+            "structure_exercices": struct_exos,
+            "source_extraction": "standard",
+            "departement": dept_nom
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Erreur DeepSeek Vision: {e}")
+        # Fallback minimal
+        return {
+            "texte_complet": texte_ocr,
+            "elements_visuels": [],
+            "formules_latex": [],
+            "graphs": [],
+            "angles": [],
+            "numbers": [],
+            "structure_exercices": [],
+            "source_extraction": "fallback_ocr",
+            "departement": dept_nom
+        }
 
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
@@ -1237,34 +1002,31 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
     Returns:
         Tuple (corrige_text, graph_list)
     """
+    import time
+    from datetime import datetime
+
     start_time = time.time()
 
-    logger.info(f"\n{'=' * 70}")
-    logger.info(f"🤖 DÉBUT generer_corrige_par_exercice - {datetime.now().strftime('%H:%M:%S')}")
-    logger.info(f"{'=' * 70}")
+    print(f"\n{'=' * 70}")
+    print(f"🤖 DÉBUT generer_corrige_par_exercice - {datetime.now().strftime('%H:%M:%S')}")
+    print(f"{'=' * 70}")
 
     if demande:
-        logger.info(f"📋 Informations demande:")
-        logger.info(f"   - ID: {demande.id}")
-        logger.info(f"   - Matière: {demande.matiere.nom if demande.matiere else 'Non spécifiée'}")
-        logger.info(f"   - Classe: {demande.classe.nom if demande.classe else 'Non spécifiée'}")
-        logger.info(f"   - Département: {demande.departement.nom if demande.departement else 'Non spécifiée'}")
+        print(f"📋 Informations demande:")
+        print(f"   - ID: {demande.id}")
+        print(f"   - Matière: {demande.matiere.nom if demande.matiere else 'Non spécifiée'}")
+        print(f"   - Classe: {demande.classe.nom if demande.classe else 'Non spécifiée'}")
+        print(f"   - Département: {demande.departement.nom if demande.departement else 'Non spécifiée'}")
 
-    logger.info(f"📊 Métriques:")
-    logger.info(f"   - Longueur exercice: {len(texte_exercice)} caractères")
-    logger.info(f"   - Contexte: {contexte}")
-    logger.info(f"   - Données vision: {'PRÉSENTES' if donnees_vision else 'ABSENTES'}")
+    print(f"📊 Métriques:")
+    print(f"   - Longueur exercice: {len(texte_exercice)} caractères")
+    print(f"   - Contexte: {contexte}")
+    print(f"   - Données vision: {'PRÉSENTES' if donnees_vision else 'ABSENTES'}")
 
     if donnees_vision:
-        schemas = donnees_vision.get('elements_visuels', [])
-        logger.info(f"   - Schémas pour cet exercice: {len(schemas)}")
-        if schemas:
-            for i, s in enumerate(schemas[:3]):  # Afficher les 3 premiers
-                schema_type = s.get('type', 'inconnu')
-                schema_desc = s.get('description', '')[:100]
-                logger.info(f"      Schéma {i + 1}: {schema_type} - {schema_desc}...")
-        logger.info(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
-        logger.info(f"   - Graphiques détectés: {len(donnees_vision.get('graphs', []))}")
+        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
+        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
+        print(f"   - Graphiques détectés: {len(donnees_vision.get('graphs', []))}")
 
     try:
         # 1) RÉCUPÉRATION DU PROMPT MÉTIER
@@ -1272,21 +1034,21 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         promptia = get_best_promptia(demande)
         prompt_time = time.time() - prompt_start
 
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"📝 RÉCUPÉRATION PROMPT")
-        logger.info(f"{'─' * 40}")
-        logger.info(f"✅ Prompt trouvé: {'OUI' if promptia else 'NON (DEFAULT)'}")
-        logger.info(f"⏱️  Temps recherche: {prompt_time:.1f}s")
+        print(f"\n{'─' * 40}")
+        print(f"📝 RÉCUPÉRATION PROMPT")
+        print(f"{'─' * 40}")
+        print(f"✅ Prompt trouvé: {'OUI' if promptia else 'NON (DEFAULT)'}")
+        print(f"⏱️  Temps recherche: {prompt_time:.1f}s")
 
         if promptia:
-            logger.info(f"   - ID Prompt: {promptia.id}")
-            logger.info(f"   - Pays: {promptia.pays.nom if promptia.pays else 'Global'}")
-            logger.info(f"   - Matière: {promptia.matiere.nom if promptia.matiere else 'Global'}")
+            print(f"   - ID Prompt: {promptia.id}")
+            print(f"   - Pays: {promptia.pays.nom if promptia.pays else 'Global'}")
+            print(f"   - Matière: {promptia.matiere.nom if promptia.matiere else 'Global'}")
 
         # 2) CONSTRUCTION DES MESSAGES
         msg_system, msg_user = build_promptia_messages(promptia, contexte)
 
-        # 3) ENRICHISSEMENT AVEC DONNÉES VISION (SCHÉMAS SPÉCIFIQUES)
+        # 3) ENRICHISSEMENT AVEC DONNÉES VISION
         user_blocks = [
             msg_user["content"],
             "----- EXERCICE À CORRIGER -----",
@@ -1294,53 +1056,31 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         ]
 
         vision_elements_count = 0
-
         if donnees_vision:
-            # SCHÉMAS IDENTIFIÉS POUR CET EXERCICE
-            schemas = donnees_vision.get('elements_visuels', [])
-            if schemas:
-                user_blocks.append(f"----- SCHÉMAS DE CET EXERCICE ({len(schemas)}) -----")
-                for idx, schema in enumerate(schemas, 1):
-                    # Description détaillée du schéma
-                    desc = f"📐 Schéma {idx} - Type: {schema.get('type', 'non spécifié')}"
-                    user_blocks.append(desc)
-
-                    if schema.get('description'):
-                        user_blocks.append(f"   Description: {schema['description']}")
-
-                    if schema.get('elements'):
-                        elements_desc = []
-                        for elem in schema.get('elements', []):
-                            if isinstance(elem, dict) and elem.get('nom'):
-                                val = f"={elem.get('valeur')}" if elem.get('valeur') else ""
-                                elements_desc.append(f"{elem['nom']}{val}")
-                        if elements_desc:
-                            user_blocks.append(f"   Éléments: {', '.join(elements_desc)}")
-
-                    if schema.get('relations'):
-                        user_blocks.append(f"   Relations: {schema['relations']}")
-
-                    if schema.get('donnees'):
-                        if schema['donnees'].get('angles'):
-                            user_blocks.append(f"   Angles: {schema['donnees']['angles']}")
-                        if schema['donnees'].get('longueurs'):
-                            user_blocks.append(f"   Longueurs: {schema['donnees']['longueurs']}")
-
+            # Schémas identifiés
+            if donnees_vision.get("elements_visuels"):
+                elements = donnees_vision["elements_visuels"]
+                user_blocks.append(f"----- SCHÉMAS IDENTIFIÉS ({len(elements)}) -----")
+                for element in elements[:5]:  # Limiter à 5 pour éviter payload trop gros
+                    desc = element.get("description", "")
+                    user_blocks.append(f"- {desc}")
                     vision_elements_count += 1
+                if len(elements) > 5:
+                    user_blocks.append(f"- ... et {len(elements) - 5} autres schémas")
 
             # Formules LaTeX
-            formules = donnees_vision.get('formules_latex', [])
-            if formules:
+            if donnees_vision.get("formules_latex"):
+                formules = donnees_vision["formules_latex"]
                 user_blocks.append(f"----- FORMULES DÉTECTÉES ({len(formules)}) -----")
-                for formule in formules[:10]:
+                for formule in formules[:10]:  # Limiter à 10 formules
                     user_blocks.append(f"- {formule}")
                     vision_elements_count += 1
                 if len(formules) > 10:
                     user_blocks.append(f"- ... et {len(formules) - 10} autres formules")
 
             # Données graphiques brutes (JSON limité)
-            graphs = donnees_vision.get('graphs', [])
-            if graphs:
+            if donnees_vision.get("graphs"):
+                graphs = donnees_vision["graphs"]
                 user_blocks.append(f"----- DONNÉES GRAPHIQUES ({len(graphs)}) -----")
                 # Limiter la taille du JSON
                 if len(graphs) <= 3:
@@ -1351,14 +1091,14 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
         msg_user["content"] = "\n\n".join(user_blocks)
 
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"📦 CONSTRUCTION MESSAGE IA")
-        logger.info(f"{'─' * 40}")
-        logger.info(f"✅ Message construit")
-        logger.info(f"   - Longueur système: {len(msg_system['content'])} caractères")
-        logger.info(f"   - Longueur utilisateur: {len(msg_user['content'])} caractères")
-        logger.info(f"   - Éléments vision intégrés: {vision_elements_count}")
-        logger.info(f"   - Total tokens estimé: {estimer_tokens(msg_user['content'])}")
+        print(f"\n{'─' * 40}")
+        print(f"📦 CONSTRUCTION MESSAGE IA")
+        print(f"{'─' * 40}")
+        print(f"✅ Message construit")
+        print(f"   - Longueur système: {len(msg_system['content'])} caractères")
+        print(f"   - Longueur utilisateur: {len(msg_user['content'])} caractères")
+        print(f"   - Éléments vision intégrés: {vision_elements_count}")
+        print(f"   - Total tokens estimé: {estimer_tokens(msg_user['content'])}")
 
         # 4) PRÉPARATION APPEL API
         api_url = "https://api.deepseek.com/v1/chat/completions"
@@ -1366,7 +1106,7 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
         if not api_key:
             error_msg = "❌ API KEY DeepSeek non configurée"
-            logger.error(f"\n{error_msg}")
+            print(f"\n{error_msg}")
             return error_msg, None
 
         data = {
@@ -1385,27 +1125,27 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
             "User-Agent": "CIS-Education/1.0"
         }
 
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"📡 CONFIGURATION API DEEPSEEK")
-        logger.info(f"{'─' * 40}")
-        logger.info(f"🔧 Paramètres:")
-        logger.info(f"   - Modèle: {data['model']}")
-        logger.info(f"   - Température: {data['temperature']}")
-        logger.info(f"   - Max tokens: {data['max_tokens']}")
-        logger.info(f"   - Timeout: 120s")
-        logger.info(f"   - URL: {api_url[:50]}...")
+        print(f"\n{'─' * 40}")
+        print(f"📡 CONFIGURATION API DEEPSEEK")
+        print(f"{'─' * 40}")
+        print(f"🔧 Paramètres:")
+        print(f"   - Modèle: {data['model']}")
+        print(f"   - Température: {data['temperature']}")
+        print(f"   - Max tokens: {data['max_tokens']}")
+        print(f"   - Timeout: 120s")
+        print(f"   - URL: {api_url[:50]}...")
 
         # 5) APPEL API AVEC RETRIES INTELLIGENTS
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"🔄 DÉBUT APPEL API DEEPSEEK")
-        logger.info(f"{'─' * 40}")
+        print(f"\n{'─' * 40}")
+        print(f"🔄 DÉBUT APPEL API DEEPSEEK")
+        print(f"{'─' * 40}")
 
         output = None
         final_response_data = None
         last_error = None
 
         for tentative in range(3):  # 3 tentatives maximum
-            logger.info(f"\n   🔄 TENTATIVE {tentative + 1}/3")
+            print(f"\n   🔄 TENTATIVE {tentative + 1}/3")
             api_call_start = time.time()
 
             try:
@@ -1419,15 +1159,15 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                 )
 
                 api_call_time = time.time() - api_call_start
-                logger.info(f"   ✅ Réponse reçue ({api_call_time:.1f}s)")
-                logger.info(f"   📊 Status code: {response.status_code}")
+                print(f"   ✅ Réponse reçue ({api_call_time:.1f}s)")
+                print(f"   📊 Status code: {response.status_code}")
 
                 if response.status_code == 200:
                     response_data = response.json()
 
                     # Vérification structure réponse
                     if 'choices' not in response_data or not response_data['choices']:
-                        logger.info(f"   ⚠️  Structure réponse invalide, pas de 'choices'")
+                        print(f"   ⚠️  Structure réponse invalide, pas de 'choices'")
                         last_error = "Structure réponse API invalide"
                         continue
 
@@ -1439,54 +1179,54 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                     output = response_data['choices'][0]['message']['content']
                     final_response_data = response_data
 
-                    logger.info(f"   📝 Réponse IA: {len(output)} caractères")
-                    logger.info(f"   📊 Usage tokens: {response_data.get('usage', {}).get('total_tokens', 'N/A')}")
+                    print(f"   📝 Réponse IA: {len(output)} caractères")
+                    print(f"   📊 Usage tokens: {response_data.get('usage', {}).get('total_tokens', 'N/A')}")
 
                     # Vérification qualité
                     if verifier_qualite_corrige(output, texte_exercice):
-                        logger.info(f"   ✅ Qualité validée (tentative {tentative + 1})")
+                        print(f"   ✅ Qualité validée (tentative {tentative + 1})")
                         break
                     else:
-                        logger.info(f"   🔄 Qualité insuffisante, préparation nouvelle tentative...")
+                        print(f"   🔄 Qualité insuffisante, préparation nouvelle tentative...")
                         last_error = "Qualité insuffisante"
 
                         # Ajout consigne pour amélioration
                         data["messages"][1][
-                            "content"] += "\n\n⚠️ IMPORTANT: Sois extrêmement rigoureux ! Vérifie chaque calcul, explique chaque étape, sois précis et complet. Utilise les schémas fournis pour guider ta réponse."
+                            "content"] += "\n\n⚠️ IMPORTANT: Sois extrêmement rigoureux ! Vérifie chaque calcul, explique chaque étape, sois précis et complet."
 
                         # Attente exponentielle avant prochaine tentative
                         wait_time = 2 * (tentative + 1)
-                        logger.info(f"   ⏳ Attente {wait_time}s...")
+                        print(f"   ⏳ Attente {wait_time}s...")
                         time.sleep(wait_time)
 
                 else:
                     # Erreur HTTP
                     error_detail = response.text[:200] if response.text else "Pas de détail"
-                    logger.error(f"   ❌ Erreur HTTP {response.status_code}: {error_detail}")
+                    print(f"   ❌ Erreur HTTP {response.status_code}: {error_detail}")
                     last_error = f"HTTP {response.status_code}: {error_detail}"
 
                     # Attente exponentielle
                     wait_time = 5 * (tentative + 1)
-                    logger.info(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
                     time.sleep(wait_time)
 
             except requests.exceptions.Timeout:
                 api_call_time = time.time() - api_call_start
-                logger.info(f"   ⏰ TIMEOUT après {api_call_time:.1f}s")
+                print(f"   ⏰ TIMEOUT après {api_call_time:.1f}s")
                 last_error = f"Timeout après {api_call_time:.1f}s"
 
                 if tentative < 2:  # Pas la dernière tentative
                     wait_time = 10 * (tentative + 1)
-                    logger.info(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
                     time.sleep(wait_time)
 
             except requests.exceptions.ConnectionError as e:
-                logger.error(f"   🔌 ERREUR CONNEXION: {str(e)[:100]}")
+                print(f"   🔌 ERREUR CONNEXION: {str(e)[:100]}")
                 last_error = f"ConnectionError: {str(e)[:100]}"
 
                 if tentative < 2:
                     wait_time = 15 * (tentative + 1)
-                    logger.info(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
                     time.sleep(wait_time)
 
             except Exception as e:
@@ -1496,48 +1236,48 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
 
                 if tentative < 2:
                     wait_time = 8 * (tentative + 1)
-                    logger.info(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
+                    print(f"   ⏳ Attente {wait_time}s avant nouvelle tentative...")
                     time.sleep(wait_time)
 
         # 6) VÉRIFICATION SUCCÈS APPEL API
         if not output or not final_response_data:
             total_api_time = time.time() - start_time
             error_msg = f"Échec après 3 tentatives. Dernière erreur: {last_error}"
-            logger.info(f"\n❌ {error_msg}")
-            logger.info(f"⏱️  Temps total API: {total_api_time:.1f}s")
+            print(f"\n❌ {error_msg}")
+            print(f"⏱️  Temps total API: {total_api_time:.1f}s")
             return f"Erreur IA: {error_msg}", None
 
         # 7) POST-TRAITEMENT DE LA RÉPONSE
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"🛠️  POST-TRAITEMENT RÉPONSE IA")
-        logger.info(f"{'─' * 40}")
+        print(f"\n{'─' * 40}")
+        print(f"🛠️  POST-TRAITEMENT RÉPONSE IA")
+        print(f"{'─' * 40}")
 
         postprocess_start = time.time()
 
         # Étape 1: Fusion LaTeX multilignes
         output = flatten_multiline_latex_blocks(output)
-        logger.info(f"✅ Fusion LaTeX multilignes")
+        print(f"✅ Fusion LaTeX multilignes")
 
         # Étape 2: Structuration pour PDF
         output_structured = format_corrige_pdf_structure(output)
-        logger.info(f"✅ Structuration pour PDF")
+        print(f"✅ Structuration pour PDF")
 
         # Étape 3: Extraction JSON graphiques
         json_blocks = extract_json_blocks(output_structured)
-        logger.info(f"✅ JSON blocks détectés: {len(json_blocks)}")
+        print(f"✅ JSON blocks détectés: {len(json_blocks)}")
 
         # 8) GÉNÉRATION GRAPHIQUES
         graph_list = []
         if json_blocks:
-            logger.info(f"\n{'─' * 40}")
-            logger.infot(f"🖼️  GÉNÉRATION GRAPHIQUES")
-            logger.info(f"{'─' * 40}")
+            print(f"\n{'─' * 40}")
+            print(f"🖼️  GÉNÉRATION GRAPHIQUES")
+            print(f"{'─' * 40}")
 
             json_blocks = sorted(json_blocks, key=lambda x: x[1], reverse=True)
 
             for idx, (graph_dict, start, end) in enumerate(json_blocks, start=1):
                 try:
-                    logger.info(f"   🔧 Graphique {idx}/{len(json_blocks)}")
+                    print(f"   🔧 Graphique {idx}/{len(json_blocks)}")
 
                     output_name = f"graphique_{idx}_{int(time.time())}.png"
                     img_path = tracer_graphique(graph_dict, output_name)
@@ -1553,15 +1293,15 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
                         output_structured = output_structured[:start] + img_tag + output_structured[end:]
                         graph_list.append(graph_dict)
 
-                        logger.info(f"   ✅ Graphique inséré: {img_path}")
+                        print(f"   ✅ Graphique inséré: {img_path}")
                     else:
-                        logger.error(f"   ⚠️  Échec génération graphique")
+                        print(f"   ⚠️  Échec génération graphique")
                         # Remplacement par message d'erreur
                         error_tag = f'<div class="graph-error">[Graphique non généré - Erreur technique]</div>'
                         output_structured = output_structured[:start] + error_tag + output_structured[end:]
 
                 except Exception as e:
-                    logger.error(f"   ❌ Erreur graphique {idx}: {type(e).__name__}: {str(e)[:100]}")
+                    print(f"   ❌ Erreur graphique {idx}: {type(e).__name__}: {str(e)[:100]}")
                     continue
 
         postprocess_time = time.time() - postprocess_start
@@ -1569,48 +1309,51 @@ def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees
         # 9) FINALISATION
         total_time = time.time() - start_time
 
-        logger.info(f"\n{'=' * 70}")
-        logger.info(f"✅ SUCCÈS generer_corrige_par_exercice")
-        logger.info(f"{'=' * 70}")
-        logger.info(f"📊 STATISTIQUES:")
-        logger.info(f"   ⏱️  Temps total: {total_time:.1f}s")
-        logger.info(f"   📝 Longueur corrigé final: {len(output_structured)} caractères")
-        logger.info(f"   🖼️  Graphiques générés: {len(graph_list)}/{len(json_blocks)}")
-        logger.info(f"   🔄 Tentatives API: {min(tentative + 1, 3)}/3")
-        logger.info(f"   📦 Taille réponse IA: {len(output)} caractères")
-        logger.info(f"   🕐 {datetime.now().strftime('%H:%M:%S')}")
+        print(f"\n{'=' * 70}")
+        print(f"✅ SUCCÈS generer_corrige_par_exercice")
+        print(f"{'=' * 70}")
+        print(f"📊 STATISTIQUES:")
+        print(f"   ⏱️  Temps total: {total_time:.1f}s")
+        print(f"   📝 Longueur corrigé final: {len(output_structured)} caractères")
+        print(f"   🖼️  Graphiques générés: {len(graph_list)}/{len(json_blocks)}")
+        print(f"   🔄 Tentatives API: {min(tentative + 1, 3)}/3")
+        print(f"   📦 Taille réponse IA: {len(output)} caractères")
+        print(f"   🕐 {datetime.now().strftime('%H:%M:%S')}")
 
         # Aperçu du corrigé
-        logger.info(f"\n📋 APERÇU CORRIGÉ (premiers 300 caractères):")
+        print(f"\n📋 APERÇU CORRIGÉ (premiers 300 caractères):")
         preview = output_structured[:300].replace('\n', ' ')
-        logger.info(f"   \"{preview}...\"")
-        logger.info(f"{'=' * 70}")
+        print(f"   \"{preview}...\"")
+        print(f"{'=' * 70}")
 
         return output_structured.strip(), graph_list
 
     except Exception as e:
         total_time = time.time() - start_time
 
-        logger.info(f"\n{'=' * 70}")
-        logger.error(f"❌ ERREUR CRITIQUE dans generer_corrige_par_exercice")
-        logger.info(f"{'=' * 70}")
-        logger.info(f"⏱️  Temps écoulé: {total_time:.1f}s")
-        logger.info(f"📛 Type erreur: {type(e).__name__}")
-        logger.info(f"📄 Message: {str(e)[:300]}")
-        logger.info(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+        print(f"\n{'=' * 70}")
+        print(f"❌ ERREUR CRITIQUE dans generer_corrige_par_exercice")
+        print(f"{'=' * 70}")
+        print(f"⏱️  Temps écoulé: {total_time:.1f}s")
+        print(f"📛 Type erreur: {type(e).__name__}")
+        print(f"📄 Message: {str(e)[:300]}")
+        print(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
 
         # Traceback détaillé
         import traceback
-        logger.info(f"\n🔍 TRACEBACK:")
+        print(f"\n🔍 TRACEBACK:")
         tb_lines = traceback.format_exc().split('\n')[:10]
         for line in tb_lines:
             if line.strip():
-                logger.info(f"   {line}")
+                print(f"   {line}")
 
-        logger.info(f"{'=' * 70}")
+        print(f"{'=' * 70}")
 
         error_msg = f"Erreur traitement IA: {type(e).__name__}: {str(e)[:200]}"
         return error_msg, None
+
+
+
 
 def extract_and_process_graphs(output: str):
     """
@@ -1861,14 +1604,10 @@ def extraire_texte_pdf(fichier_path):
 # ============== EXTRACTION MULTIMODALE AMÉLIORÉE ==============
 def extraire_texte_fichier(fichier_field, demande=None):
     """
-    Extraction robuste avec support DeepSeek en priorité
-    Retourne un dictionnaire complet avec:
-    - texte_complet: le texte extrait
-    - exercices_struct: la structure des exercices avec leurs schémas
-    - source_extraction: la méthode utilisée
+    Extraction robuste avec support Mathpix conditionnel
     """
     if not fichier_field:
-        return {"texte_complet": "", "exercices_struct": [], "source_extraction": "none"}
+        return ""
 
     # Sauvegarde locale
     temp_dir = tempfile.gettempdir()
@@ -1880,37 +1619,19 @@ def extraire_texte_fichier(fichier_field, demande=None):
     # Appel à l'analyse scientifique AVEC paramètre demande
     try:
         analyse = analyser_document_scientifique(local_path, demande)
-
         texte = analyse.get("texte_complet", "")
-        exercices_struct = analyse.get("exercices_struct", [])
-        source = analyse.get("source_extraction", "inconnu")
 
-        logger.info(f"📄 Extraction terminée: {len(texte)} caractères, "
-                    f"{len(exercices_struct)} exercices structurés "
-                    f"(source: {source})")
+        logger.info(f"📄 Extraction terminée: {len(texte)} caractères "
+                    f"(source: {analyse.get('source_extraction', 'inconnu')})")
 
         # Stocker la méthode d'extraction dans la demande si disponible
         if demande and hasattr(demande, 'methode_extraction'):
-            demande.methode_extraction = source
+            demande.methode_extraction = analyse.get('source_extraction', 'standard')
             demande.save()
-
-        resultat = {
-            "texte_complet": texte,
-            "exercices_struct": exercices_struct,
-            "source_extraction": source,
-            "elements_visuels": analyse.get("elements_visuels", []),
-            "formules_latex": analyse.get("formules_latex", [])
-        }
 
     except Exception as e:
         logger.error(f"❌ Analyse échouée: {e}")
-        resultat = {
-            "texte_complet": "",
-            "exercices_struct": [],
-            "source_extraction": "erreur",
-            "elements_visuels": [],
-            "formules_latex": []
-        }
+        texte = ""
 
     # Nettoyage
     try:
@@ -1918,7 +1639,8 @@ def extraire_texte_fichier(fichier_field, demande=None):
     except:
         pass
 
-    return resultat
+    return texte.strip()
+
 # ============== DESSIN DE GRAPHIQUES ==============
 def style_axes(ax, graphique_dict):
     """
@@ -2266,8 +1988,8 @@ def generer_corrige_direct(texte_enonce, contexte, lecons_contenus, exemples_cor
     """
     Traitement direct pour les épreuves courtes avec données vision.
     """
-    logger.info("🎯 Traitement DIRECT avec analyse vision")
-    logger.info("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
+    print("🎯 Traitement DIRECT avec analyse vision")
+    print("\n[DEBUG] --> generer_corrige_direct called avec demande:", getattr(demande, 'id', None),
           "/", type(demande))
 
     # ✅ PASSER les données vision à la fonction de génération
@@ -2312,16 +2034,16 @@ def generer_corrige_decoupe(texte_epreuve, contexte, matiere, donnees_vision=Non
 
 
 def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None, exemples_corriges=None, matiere=None,
-                                    demande=None, donnees_vision=None, exercice_index=None):
+                                    demande=None, donnees_vision=None):
     """
     Version SIMPLIFIÉE pour les exercices uniques.
     Appelle directement generer_corrige_par_exercice sans logique de décision.
     """
-    logger.info("\n" + "=" * 60)
-    logger.info("🚀 DÉBUT TRAITEMENT IA POUR EXERCICE UNIQUE")
-    logger.info("=" * 60)
-    logger.info(f"📏 Longueur texte: {len(texte_enonce)} caractères")
-    logger.info(f"📝 Contexte: {contexte}")
+    print("\n" + "=" * 60)
+    print("🚀 DÉBUT TRAITEMENT IA POUR EXERCICE UNIQUE")
+    print("=" * 60)
+    print(f"📏 Longueur texte: {len(texte_enonce)} caractères")
+    print(f"📝 Contexte: {contexte}")
 
     if lecons_contenus is None:
         lecons_contenus = []
@@ -2330,20 +2052,19 @@ def generer_corrige_ia_et_graphique(texte_enonce, contexte, lecons_contenus=None
 
     # Données vision
     if donnees_vision:
-        logger.info(f"🔬 Données vision disponibles:")
-        logger.info(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
-        logger.info(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
+        print(f"🔬 Données vision disponibles:")
+        print(f"   - Éléments visuels: {len(donnees_vision.get('elements_visuels', []))}")
+        print(f"   - Formules LaTeX: {len(donnees_vision.get('formules_latex', []))}")
 
     # POUR LES EXERCICES UNIQUES : APPEL DIRECT
-    logger.info("🎯 Appel direct à generer_corrige_par_exercice")
+    print("🎯 Appel direct à generer_corrige_par_exercice")
 
     return generer_corrige_par_exercice(
         texte_exercice=texte_enonce,
         contexte=contexte,
         matiere=matiere,
         donnees_vision=donnees_vision,
-        demande=demande,
-        exercice_index=exercice_index
+        demande=demande
     )
 
 #les fonctions utilitaires , utilisables ou non, donc optionnelles
@@ -2376,7 +2097,7 @@ def extraire_exercice_par_index(texte_epreuve, index=0, demande=None):
                         'source': 'exercices_data'  # Pour le debug
                     }
         except json.JSONDecodeError as e:
-            logger.info(f"❌ [extraire_exercice_par_index] Erreur JSON: {e}")
+            print(f"❌ [extraire_exercice_par_index] Erreur JSON: {e}")
 
     # FALLBACK : Extraction traditionnelle
     exercices_data = separer_exercices_avec_titres(texte_epreuve)
@@ -2419,341 +2140,6 @@ def obtenir_liste_exercices(texte_epreuve, avec_preview=False):
         result.append(item)
 
     return result
-
-
-# ========== ANALYSE DES SCHÉMAS AVEC DEEPSEEK-CHAT ==========
-# À AJOUTER vers la fin de ia_utils.py, avant les @shared_task
-
-def analyser_schema_avec_deepseek_vl(image_path: str, question: str = None) -> dict:
-    """
-    Analyse un schéma/image avec deepseek-chat et retourne une description structurée.
-    Version améliorée avec prompt plus détaillé pour des descriptions riches.
-    """
-    logger.info(f"🖼️ Analyse schéma avec deepseek-chat: {image_path}")
-
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        logger.error("❌ DEEPSEEK_API_KEY non configurée")
-        return {"description": "", "error": "api_key_missing"}
-
-    try:
-        # Encodage de l'image en base64
-        with open(image_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode()
-
-        # Vérifier la taille (limite ~5Mo)
-        img_size = len(img_b64) * 3 / 4
-        if img_size > 5 * 1024 * 1024:  # 5Mo
-            logger.warning(f"⚠️ Image trop grande ({img_size / 1024 / 1024:.1f}Mo), redimensionnement")
-            from PIL import Image
-            import io
-            img = Image.open(image_path)
-            img.thumbnail((1200, 1200))
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG", quality=85, optimize=True)
-            img_b64 = base64.b64encode(buffer.getvalue()).decode()
-            logger.info(f"✅ Image redimensionnée: {len(img_b64) * 3 / 4 / 1024:.1f}Ko")
-
-        # Construction du prompt amélioré
-        if not question:
-            question = """
-            Analyse ce schéma scientifique en détail et retourne UNIQUEMENT un JSON structuré avec :
-
-            {
-                "type_schema": "type précis (plan incliné, circuit électrique, montage optique, graphique, etc.)",
-                "description": "description détaillée de ce que représente le schéma",
-                "elements_principaux": ["liste", "des", "éléments", "clés"],
-
-                "angles": [
-                    {
-                        "valeur": 30,
-                        "unite": "°",
-                        "description": "angle entre quels éléments"
-                    }
-                ],
-
-                "dimensions": [
-                    {
-                        "valeur": 5,
-                        "unite": "cm",
-                        "description": "quelle dimension"
-                    }
-                ],
-
-                "textes": ["tous", "les", "textes", "lus", "dans", "le", "schéma"],
-
-                "objets": ["cercle", "triangle", "ligne", "fleche", "resistance", "bobine", ...],
-
-                "interpretation": "interprétation scientifique complète (lois, théorèmes, concepts illustrés)"
-            }
-
-            RÈGLES IMPORTANTES:
-            - Sois extrêmement précis sur les angles et dimensions si visibles
-            - Si une valeur exacte n'est pas claire, mets "≈" devant (ex: "≈45°")
-            - Décris TOUS les éléments visibles et leurs relations
-            - Ne retourne que du JSON valide, pas de texte avant/après
-            - Utilise des guillemets doubles, pas simples
-            """
-
-        prompt_texte = f"[image]{img_b64}[/image]\n\n{question}"
-
-        # Appel à l'API deepseek-chat
-        payload = {
-            "model": "deepseek-reasoner",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt_texte
-                }
-            ],
-            "temperature": 0.1,
-            "max_tokens": 6000,
-            "response_format": {"type": "json_object"}
-        }
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-
-        logger.info(f"📡 Envoi à deepseek-chat")
-        response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
-
-            # Nettoyer la réponse
-            content = re.sub(r'```json\s*', '', content)
-            content = re.sub(r'\s*```', '', content)
-            content = content.strip()
-
-            try:
-                data = json.loads(content)
-
-                # S'assurer que tous les champs existent
-                if "angles" not in data:
-                    data["angles"] = []
-                if "dimensions" not in data:
-                    data["dimensions"] = []
-                if "textes" not in data:
-                    data["textes"] = []
-                if "objets" not in data:
-                    data["objets"] = []
-                if "elements_principaux" not in data:
-                    data["elements_principaux"] = []
-
-                logger.info(f"✅ Analyse schéma réussie")
-                logger.info(f"   - Type: {data.get('type_schema', 'inconnu')}")
-                logger.info(f"   - Description: {len(data.get('description', ''))} caractères")
-                logger.info(f"   - Angles: {len(data.get('angles', []))}")
-                logger.info(f"   - Dimensions: {len(data.get('dimensions', []))}")
-                logger.info(f"   - Textes: {len(data.get('textes', []))}")
-
-                return data
-
-            except json.JSONDecodeError as e:
-                logger.error(f"❌ Erreur parsing JSON: {e}")
-                # Fallback minimal
-                return {
-                    "type_schema": "inconnu",
-                    "description": content[:500] if content else "Erreur d'analyse",
-                    "elements_principaux": [],
-                    "angles": [],
-                    "dimensions": [],
-                    "textes": [],
-                    "objets": [],
-                    "interpretation": ""
-                }
-        else:
-            logger.error(f"❌ Erreur API: {response.status_code}")
-            return {
-                "type_schema": "inconnu",
-                "description": "",
-                "elements_principaux": [],
-                "angles": [],
-                "dimensions": [],
-                "textes": [],
-                "objets": [],
-                "interpretation": "",
-                "error": f"api_error_{response.status_code}"
-            }
-
-    except Exception as e:
-        logger.error(f"❌ Exception analyser_schema: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "type_schema": "inconnu",
-            "description": "",
-            "elements_principaux": [],
-            "angles": [],
-            "dimensions": [],
-            "textes": [],
-            "objets": [],
-            "interpretation": "",
-            "error": str(e)
-        }
-
-
-def extraire_schemas_du_document(fichier_path: str, demande=None) -> list:
-    """
-    Extrait et analyse tous les schémas d'un document.
-    Version améliorée avec détection intelligente et descriptions riches.
-
-    Args:
-        fichier_path: Chemin vers le fichier (PDF ou image)
-        demande: Objet DemandeCorrection optionnel
-
-    Returns:
-        list: Liste des schémas détectés avec leur page et données
-              [{"page": 1, "schemas": [...], "nombre": n}, ...]
-    """
-    logger.info(f"📑 Extraction des schémas du document: {fichier_path}")
-
-    schemas_detectes = []
-    ext = os.path.splitext(fichier_path)[1].lower()
-    temp_files = []
-
-    try:
-        # === CAS 1: Fichier PDF ===
-        if ext == '.pdf':
-            from pdf2image import convert_from_path
-
-            logger.info("📄 Conversion PDF en images...")
-            images = convert_from_path(fichier_path, dpi=150)
-
-            logger.info(f"   {len(images)} page(s) converties")
-
-            for page_num, image in enumerate(images, 1):
-                logger.info(f"   🔍 Analyse page {page_num}/{len(images)}...")
-
-                # Sauvegarder temporairement
-                temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                temp_img.close()
-                image.save(temp_img.name, 'PNG', quality=85, optimize=True)
-                temp_files.append(temp_img.name)
-
-                # Détection rapide si la page contient probablement un schéma
-                a_schema = _detection_rapide_schema(temp_img.name)
-
-                if a_schema:
-                    # Analyse approfondie
-                    schema_data = analyser_schema_avec_deepseek_vl(temp_img.name)
-
-                    if schema_data.get('description') and len(schema_data.get('description', '')) > 30:
-                        schemas_detectes.append({
-                            "page": page_num,
-                            "schemas": [schema_data],
-                            "nombre": 1
-                        })
-                        logger.info(f"   ✅ Schéma détecté page {page_num}: {schema_data.get('type_schema', 'inconnu')}")
-                    else:
-                        logger.info(f"   ⚠️ Page {page_num}: pas de schéma clair")
-                else:
-                    logger.info(f"   ⚠️ Page {page_num}: probablement pas de schéma")
-
-                # Petite pause pour éviter surcharge API
-                time.sleep(0.3)
-
-        # === CAS 2: Image simple ===
-        elif ext in ['.png', '.jpg', '.jpeg']:
-            logger.info("🖼️ Analyse image unique")
-
-            schema_data = analyser_schema_avec_deepseek_vl(fichier_path)
-
-            if schema_data.get('description'):
-                schemas_detectes.append({
-                    "page": 1,
-                    "schemas": [schema_data],
-                    "nombre": 1
-                })
-                logger.info(f"✅ Schéma détecté: {schema_data.get('type_schema', 'inconnu')}")
-
-        logger.info(f"📊 Bilan: {len(schemas_detectes)} page(s) avec schémas")
-        return schemas_detectes
-
-    except Exception as e:
-        logger.error(f"❌ Erreur extraction schémas: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
-
-    finally:
-        for temp_file in temp_files:
-            try:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
-            except:
-                pass
-
-
-def _detection_rapide_schema(image_path: str) -> bool:
-    """
-    Détection rapide si une image contient probablement un schéma.
-    Utilise des heuristiques simples pour éviter d'analyser des pages sans schéma.
-    """
-    try:
-
-        # Lire l'image
-        img = cv2.imread(image_path)
-        if img is None:
-            return True  # En cas d'erreur, on analyse quand même
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
-
-        # Si l'image est trop petite, probablement pas un schéma détaillé
-        if h < 100 or w < 100:
-            return False
-
-        # Détection de contours
-        edges = cv2.Canny(gray, 50, 150)
-
-        # Détection de lignes
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 50, minLineLength=30, maxLineGap=10)
-
-        # Compter les lignes
-        n_lines = len(lines) if lines is not None else 0
-
-        # Détection de cercles
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 20,
-                                   param1=50, param2=30, minRadius=5, maxRadius=200)
-        has_circles = circles is not None
-
-        # Calculer la densité de contours (pour distinguer texte pur vs schéma)
-        cell_size = 50
-        cells_with_edges = 0
-        n_cells_h = h // cell_size + 1
-        n_cells_w = w // cell_size + 1
-
-        for i in range(0, h, cell_size):
-            for j in range(0, w, cell_size):
-                cell = edges[i:min(i + cell_size, h), j:min(j + cell_size, w)]
-                if np.sum(cell) > 1000:
-                    cells_with_edges += 1
-
-        density = cells_with_edges / (n_cells_h * n_cells_w) if (n_cells_h * n_cells_w) > 0 else 0
-
-        # Heuristique: un schéma a généralement pas mal de lignes,
-        # et une densité de contours modérée (pas trop dense comme du texte)
-        est_schema = (n_lines > 8 or has_circles) and 0.1 < density < 0.7
-
-        if est_schema:
-            logger.debug(f"   ✅ Détection rapide: schéma probable (lignes={n_lines}, densité={density:.2f})")
-        else:
-            logger.debug(f"   ⚠️ Détection rapide: probablement pas schéma (lignes={n_lines}, densité={density:.2f})")
-
-        return est_schema
-
-    except Exception as e:
-        logger.warning(f"⚠️ Erreur détection rapide: {e}")
-        return True  # En cas d'erreur, on analyse quand même
 
 
 # ============== TÂCHE ASYNCHRONE ==============
@@ -2804,12 +2190,12 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         else:
             texte_brut = demande.enonce_texte or ""
 
-        logger.info("📥 TEXTE BRUT AVEC VISION (premiers 500 chars) :")
-        logger.info(texte_brut[:500].replace("\n", "\\n"), "...\n")
+        print("📥 TEXTE BRUT AVEC VISION (premiers 500 chars) :")
+        print(texte_brut[:500].replace("\n", "\\n"), "...\n")
 
         # Étape 1b : Extraire les exercices et stocker les données
         exercices_data = separer_exercices_avec_titres(texte_brut)
-        logger.info(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
+        print(f"✅ {len(exercices_data)} exercice(s) détecté(s)")
 
         # Stocker les données des exercices dans la demande
         demande.exercices_data = json.dumps([
@@ -2857,6 +2243,7 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         soumission.progression = 80
         soumission.save()
 
+        from .pdf_utils import generer_pdf_corrige
         pdf_path = generer_pdf_corrige(
             {
                 "titre_corrige": contexte,
@@ -2890,15 +2277,15 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
         demande.corrigé = corrige_txt
         demande.save()
 
-        logger.info("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
-        logger.info(f"   Exercices détectés: {len(exercices_data)}")
+        print("🎉 TRAITEMENT AVEC VISION TERMINÉ AVEC SUCCÈS!")
+        print(f"   Exercices détectés: {len(exercices_data)}")
         for i, ex in enumerate(exercices_data, 1):
-            logger.info(f"   {i}. {ex['titre'][:50]}...")
+            print(f"   {i}. {ex['titre'][:50]}...")
 
         return True
 
     except Exception as e:
-        logger.info(f"❌ ERREUR dans la tâche IA: {e}")
+        print(f"❌ ERREUR dans la tâche IA: {e}")
         import traceback
         traceback.print_exc()
         try:
@@ -2917,14 +2304,14 @@ def generer_corrige_exercice_async(self, soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
     Version robuste avec retries automatiques, timeout gérés et logging détaillé.
-    Utilise les données pré-stockées dans exercices_data (texte + schémas)
+    Support Mathpix pour départements scientifiques.
     """
 
     task_start = time.time()
-    logger.info(f"\n{'=' * 70}")
-    logger.info(f"🎯 DÉBUT TÂCHE ASYNC - {datetime.now().strftime('%H:%M:%S')}")
-    logger.info(f"   Soumission ID: {soumission_id}")
-    logger.info(f"{'=' * 70}")
+    print(f"\n{'=' * 70}")
+    print(f"🎯 DÉBUT TÂCHE ASYNC - {datetime.now().strftime('%H:%M:%S')}")
+    print(f"   Soumission ID: {soumission_id}")
+    print(f"{'=' * 70}")
 
     try:
         # 1) RÉCUPÉRATION DE LA SOUMISSION
@@ -2933,77 +2320,51 @@ def generer_corrige_exercice_async(self, soumission_id):
         dem = soum.demande
         recovery_time = time.time() - recovery_start
 
-        logger.info(f"✅ Soumission récupérée ({recovery_time:.1f}s)")
-        logger.info(f"   - Demande ID: {dem.id}")
-        logger.info(f"   - Exercice index: {soum.exercice_index}")
-        logger.info(f"   - Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
-        logger.info(f"   - Statut initial: {soum.statut}")
+        print(f"✅ Soumission récupérée ({recovery_time:.1f}s)")
+        print(f"   - Demande ID: {dem.id}")
+        print(f"   - Exercice index: {soum.exercice_index}")
+        print(f"   - Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
+        print(f"   - Statut initial: {soum.statut}")
 
-        # Vérification DeepSeek/Mathpix disponible
-        deepseek_configure = bool(os.getenv("DEEPSEEK_API_KEY"))
+        # Vérification Mathpix disponible
         mathpix_configure = bool(os.getenv("MATHPIX_APP_ID") and os.getenv("MATHPIX_APP_KEY"))
-
         if dem.departement and is_departement_scientifique(dem.departement):
-            print(f"   - Département scientifique → DeepSeek: {'Activé' if deepseek_configure else 'Non configuré'}")
+            print(f"   - Département scientifique → Mathpix: {'Activé' if mathpix_configure else 'Non configuré'}")
 
         # 2) MISE À JOUR STATUT IMMÉDIATE
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
-        logger.info(f"📊 Statut mis à jour: analyse_ia (20%)")
+        print(f"📊 Statut mis à jour: analyse_ia (20%)")
 
-        # 3) RÉCUPÉRATION OPTIMISÉE DU CONTENU DEPUIS exercices_data (AVEC SCHÉMAS)
+        # 3) RÉCUPÉRATION OPTIMISÉE DU CONTENU AVEC SUPPORT MATHPIX
         extraction_start = time.time()
         fragment = None
         source = "unknown"
         idx = soum.exercice_index or 0
         methode_extraction = "standard"  # Pour le suivi
-        donnees_vision_exercice = {}  # ← NOUVEAU : stocker les schémas spécifiques
 
-        # Tentative 1: Récupération depuis exercices_data (avec schémas)
+        # Tentative 1: Récupération depuis exercices_data
         if dem.exercices_data:
             try:
                 exercices_list = json.loads(dem.exercices_data)
                 for ex in exercices_list:
                     if ex.get('index') == idx:
                         fragment = ex.get('contenu_complet') or ex.get('contenu', '')
-                        source = ex.get('source_extraction', 'exercices_data')
-                        methode_extraction = source
-
-                        # ✅ RÉCUPÉRATION DES DONNÉES VISION SPÉCIFIQUES À CET EXERCICE
-                        donnees_vision_exercice = {
-                            "elements_visuels": ex.get('schemas', []),
-                            "formules_latex": ex.get('formules', []),
-                            "graphs": ex.get('graphs', []),
-                            "angles": ex.get('angles', []),
-                            "numbers": ex.get('numbers', [])
-                        }
-
-                        logger.info(f"✅ Contenu récupéré depuis exercices_data")
-                        logger.info(f"   - Source: {source}")
-                        logger.info(f"   - Longueur: {len(fragment)} caractères")
-                        logger.info(f"   - Schémas: {len(donnees_vision_exercice['elements_visuels'])}")
-                        logger.info(f"   - Formules: {len(donnees_vision_exercice['formules_latex'])}")
-
-                        # Afficher les schémas pour debug
-                        if donnees_vision_exercice['elements_visuels']:
-                            for i, s in enumerate(donnees_vision_exercice['elements_visuels'][:2]):
-                                print(
-                                    f"      Schéma {i + 1}: {s.get('type', 'inconnu')} - {s.get('description', '')[:50]}...")
-
+                        source = "exercices_data"
+                        print(f"✅ Contenu récupéré depuis exercices_data")
+                        print(f"   - Source: {source}")
+                        print(f"   - Longueur: {len(fragment)} caractères")
                         break
             except json.JSONDecodeError as e:
-                logger.info(f"⚠️  Erreur JSON exercices_data: {e}")
+                print(f"⚠️  Erreur JSON exercices_data: {e}")
 
-        # Tentative 2: Fallback extraction fichier AVEC DEEPSEEK CONDITIONNEL
+        # Tentative 2: Fallback extraction fichier AVEC MATHPIX CONDITIONNEL
         if not fragment and dem.fichier:
-            logger.info(f"🔄 Fallback: extraction depuis fichier")
+            print(f"🔄 Fallback: extraction depuis fichier")
             try:
-                # Extraction complète avec DeepSeek (si département scientifique)
-                analyse_complete = extraire_texte_fichier(dem.fichier, dem)
-
-                texte_complet = analyse_complete.get("texte_complet", "") if isinstance(analyse_complete,
-                                                                                        dict) else analyse_complete
+                # MODIFICATION CLÉ : Passer la demande pour choix Mathpix
+                texte_complet = extraire_texte_fichier(dem.fichier, dem)  # ← dem ajouté comme 2ème paramètre
 
                 if texte_complet and len(texte_complet.strip()) > 50:
                     exercices_data = separer_exercices_avec_titres(texte_complet)
@@ -3015,46 +2376,34 @@ def generer_corrige_exercice_async(self, soumission_id):
                     ex_data = exercices_data[idx] if exercices_data else {}
                     fragment = ex_data.get('contenu', '')
                     source = "extraction_fraiche"
+                    print(f"✅ Contenu extrait via fallback")
+                    print(f"   - Source: {source}")
+                    print(f"   - Longueur: {len(fragment)} caractères")
 
-                    # Récupérer les exercices structurés si disponibles
-                    exercices_struct = analyse_complete.get("exercices_struct", []) if isinstance(analyse_complete,
-                                                                                                  dict) else []
-
-                    if exercices_struct and idx < len(exercices_struct):
-                        ex_vision = exercices_struct[idx]
-                        donnees_vision_exercice = {
-                            "elements_visuels": ex_vision.get("schemas", []),
-                            "formules_latex": ex_vision.get("formules", []),
-                            "graphs": ex_vision.get("graphs", []),
-                            "angles": ex_vision.get("angles", []),
-                            "numbers": ex_vision.get("numbers", [])
-                        }
-
-                    logger.info(f"✅ Contenu extrait via fallback")
-                    logger.info(f"   - Source: {source}")
-                    logger.info(f"   - Longueur: {len(fragment)} caractères")
-                    logger.info(f"   - Schémas: {len(donnees_vision_exercice.get('elements_visuels', []))}")
-
-                    # Enregistrer la méthode d'extraction
-                    if isinstance(analyse_complete, dict):
-                        methode_extraction = analyse_complete.get('source_extraction', 'standard')
+                    # Enregistrer la méthode d'extraction depuis la demande si disponible
+                    if hasattr(dem, 'methode_extraction') and dem.methode_extraction:
+                        methode_extraction = dem.methode_extraction
+                        print(f"   - Méthode extraction: {methode_extraction}")
                     else:
-                        methode_extraction = "standard"
-
-                    logger.info(f"   - Méthode extraction: {methode_extraction}")
+                        # Déterminer la méthode basée sur le département
+                        if dem.departement and is_departement_scientifique(dem.departement):
+                            methode_extraction = "mathpix" if mathpix_configure else "standard"
+                        else:
+                            methode_extraction = "standard"
+                        print(f"   - Méthode déduite: {methode_extraction}")
 
                 else:
-                    logger.info(f"⚠️  Texte extrait trop court: {len(texte_complet or '')} caractères")
+                    print(f"⚠️  Texte extrait trop court: {len(texte_complet or '')} caractères")
             except Exception as e:
-                logger.info(f"❌ Erreur extraction fichier: {type(e).__name__}: {str(e)[:100]}")
+                print(f"❌ Erreur extraction fichier: {type(e).__name__}: {str(e)[:100]}")
 
         extraction_time = time.time() - extraction_start
 
         # 4) VALIDATION DU FRAGMENT
         if not fragment or len(fragment.strip()) < 20:
             error_msg = f"Fragment invalide (longueur: {len(fragment or '')} chars, source: {source})"
-            logger.info(f"❌ {error_msg}")
-            logger.info(f"⏱️  Temps extraction: {extraction_time:.1f}s")
+            print(f"❌ {error_msg}")
+            print(f"⏱️  Temps extraction: {extraction_time:.1f}s")
 
             # Mise à jour statut erreur
             soum.statut = 'erreur'
@@ -3062,10 +2411,10 @@ def generer_corrige_exercice_async(self, soumission_id):
 
             raise ValueError(error_msg)
 
-        logger.info(f"✅ Fragment validé")
-        logger.info(f"⏱️  Extraction totale: {extraction_time:.1f}s")
-        logger.info(f"📝 Début fragment: {fragment[:100].replace(chr(10), ' ')}...")
-        logger.info(f"🔧 Méthode extraction: {methode_extraction}")
+        print(f"✅ Fragment validé")
+        print(f"⏱️  Extraction totale: {extraction_time:.1f}s")
+        print(f"📝 Début fragment: {fragment[:100].replace(chr(10), ' ')}...")
+        print(f"🔧 Méthode extraction: {methode_extraction}")
 
         # 5) PRÉPARATION CONTEXTE IA
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
@@ -3085,27 +2434,26 @@ def generer_corrige_exercice_async(self, soumission_id):
         contexte = f"Exercice de {mat.nom if mat else 'Matière'} – {titre_exercice}"
         if dem.departement:
             contexte += f" – Département {dem.departement.nom}"
-        logger.info(f"🎯 Contexte IA: {contexte}")
+        print(f"🎯 Contexte IA: {contexte}")
 
         # 6) GÉNÉRATION IA AVEC GESTION D'ERREURS ROBUSTE
         ia_start = time.time()
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"🤖 DÉBUT GÉNÉRATION IA AVEC SCHÉMAS")
-        logger.info(f"{'─' * 40}")
+        print(f"\n{'─' * 40}")
+        print(f"🤖 DÉBUT GÉNÉRATION IA")
+        print(f"{'─' * 40}")
 
         try:
-            # Appel IA avec les données vision pré-filtrées
+            # Appel IA avec timeout global
             corrige_txt, _ = generer_corrige_ia_et_graphique(
                 texte_enonce=fragment,
                 contexte=contexte,
                 matiere=mat,
-                donnees_vision=donnees_vision_exercice if donnees_vision_exercice else None,  # ← Données filtrées !
                 demande=dem
             )
 
             ia_time = time.time() - ia_start
-            logger.info(f"✅ Génération IA réussie ({ia_time:.1f}s)")
-            logger.info(f"📝 Longueur corrigé: {len(corrige_txt or '')} caractères")
+            print(f"✅ Génération IA réussie ({ia_time:.1f}s)")
+            print(f"📝 Longueur corrigé: {len(corrige_txt or '')} caractères")
 
             # Validation basique du corrigé
             if not corrige_txt or len(corrige_txt.strip()) < 50:
@@ -3115,26 +2463,26 @@ def generer_corrige_exercice_async(self, soumission_id):
 
         except Exception as ia_error:
             ia_time = time.time() - ia_start
-            logger.error(f"\n❌ ÉCHEC GÉNÉRATION IA ({ia_time:.1f}s)")
-            logger.info(f"   Type erreur: {type(ia_error).__name__}")
-            logger.info(f"   Message: {str(ia_error)[:200]}")
-            logger.info(f"{'─' * 40}")
+            print(f"\n❌ ÉCHEC GÉNÉRATION IA ({ia_time:.1f}s)")
+            print(f"   Type erreur: {type(ia_error).__name__}")
+            print(f"   Message: {str(ia_error)[:200]}")
+            print(f"{'─' * 40}")
 
             # Retry automatique après délai
-            logger.info(f"🔄 Retry automatique dans 60s...")
+            print(f"🔄 Retry automatique dans 60s...")
             raise self.retry(exc=ia_error, countdown=60)
 
         # 7) MISE À JOUR STATUT INTERMÉDIAIRE
         soum.statut = 'formatage_pdf'
         soum.progression = 60
         soum.save()
-        logger.info(f"📊 Statut mis à jour: formatage_pdf (60%)")
+        print(f"📊 Statut mis à jour: formatage_pdf (60%)")
 
         # 8) GÉNÉRATION PDF
         pdf_start = time.time()
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"📄 DÉBUT GÉNÉRATION PDF")
-        logger.info(f"{'─' * 40}")
+        print(f"\n{'─' * 40}")
+        print(f"📄 DÉBUT GÉNÉRATION PDF")
+        print(f"{'─' * 40}")
 
         try:
             pdf_url = generer_pdf_corrige(
@@ -3154,20 +2502,20 @@ def generer_corrige_exercice_async(self, soumission_id):
 
         except Exception as pdf_error:
             pdf_time = time.time() - pdf_start
-            logger.error(f"❌ Échec génération PDF ({pdf_time:.1f}s)")
-            logger.info(f"   Erreur: {type(pdf_error).__name__}: {str(pdf_error)[:200]}")
+            print(f"❌ Échec génération PDF ({pdf_time:.1f}s)")
+            print(f"   Erreur: {type(pdf_error).__name__}: {str(pdf_error)[:200]}")
             raise pdf_error
 
         # 9) DÉBIT CRÉDIT
         debit_start = time.time()
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"💳 DÉBIT CRÉDIT UTILISATEUR")
-        logger.info(f"{'─' * 40}")
+        print(f"\n{'─' * 40}")
+        print(f"💳 DÉBIT CRÉDIT UTILISATEUR")
+        print(f"{'─' * 40}")
 
         try:
             if not debiter_credit_abonnement(dem.user):
                 error_msg = "Crédits insuffisants"
-                logger.info(f"❌ {error_msg}")
+                print(f"❌ {error_msg}")
 
                 soum.statut = 'erreur_credit'
                 soum.save()
@@ -3175,7 +2523,7 @@ def generer_corrige_exercice_async(self, soumission_id):
                 raise ValueError(error_msg)
 
             debit_time = time.time() - debit_start
-            logger.info(f"✅ Débit crédit réussi ({debit_time:.1f}s)")
+            print(f"✅ Débit crédit réussi ({debit_time:.1f}s)")
 
         except Exception as debit_error:
             print(f"❌ Erreur débit crédit: {type(debit_error).__name__}")
@@ -3183,9 +2531,9 @@ def generer_corrige_exercice_async(self, soumission_id):
 
         # 10) CRÉATION CORRIGEPARTIEL
         corrige_start = time.time()
-        logger.info(f"\n{'─' * 40}")
-        logger.info(f"📁 CRÉATION CORRIGEPARTIEL")
-        logger.info(f"{'─' * 40}")
+        print(f"\n{'─' * 40}")
+        print(f"📁 CRÉATION CORRIGEPARTIEL")
+        print(f"{'─' * 40}")
 
         try:
             # Préparation titre
@@ -3199,7 +2547,7 @@ def generer_corrige_exercice_async(self, soumission_id):
 
             if not os.path.exists(pdf_absolute_path):
                 error_msg = f"Fichier PDF non trouvé: {pdf_absolute_path}"
-                logger.error(f"❌ {error_msg}")
+                print(f"❌ {error_msg}")
                 raise FileNotFoundError(error_msg)
 
             # Création CorrigePartiel avec info d'extraction
@@ -3212,25 +2560,27 @@ def generer_corrige_exercice_async(self, soumission_id):
                     f"corrige_{dem.id}_ex{idx + 1}_{soum.id}_{int(time.time())}.pdf",
                     File(f)
                 )
+                # Optionnel: stocker la méthode d'extraction dans les métadonnées
                 corrige.save()
 
             corrige_time = time.time() - corrige_start
-            logger.info(f"✅ CorrigePartiel créé ({corrige_time:.1f}s)")
-            logger.info(f"   - ID: {corrige.id}")
-            logger.info(f"   - Titre: {titre_reel}")
-            logger.info(f"   - Méthode extraction: {methode_extraction}")
+            print(f"✅ CorrigePartiel créé ({corrige_time:.1f}s)")
+            print(f"   - ID: {corrige.id}")
+            print(f"   - Titre: {titre_reel}")
+            print(f"   - Méthode extraction: {methode_extraction}")
 
         except Exception as corrige_error:
             corrige_time = time.time() - corrige_start
-            logger.info(f"❌ Erreur création CorrigePartiel ({corrige_time:.1f}s)")
-            logger.info(f"   Erreur: {type(corrige_error).__name__}: {str(corrige_error)[:200]}")
+            print(f"❌ Erreur création CorrigePartiel ({corrige_time:.1f}s)")
+            print(f"   Erreur: {type(corrige_error).__name__}: {str(corrige_error)[:200]}")
             raise corrige_error
 
         # 11) FINALISATION
         total_time = time.time() - task_start
 
-        # Préparer le résultat JSON avec les informations des schémas
-        resultat_json = {
+        soum.statut = 'termine'
+        soum.progression = 100
+        soum.resultat_json = {
             "exercice_index": idx,
             "exercice_titre": titre_reel,
             "corrige_text": corrige_txt,
@@ -3238,48 +2588,41 @@ def generer_corrige_exercice_async(self, soumission_id):
             "timestamp": datetime.now().isoformat(),
             "processing_time": total_time,
             "source_content": source,
-            "methode_extraction": methode_extraction,
-            "departement": dem.departement.nom if dem.departement else None,
-            "schemas_utilises": len(
-                donnees_vision_exercice.get('elements_visuels', [])) if donnees_vision_exercice else 0
+            "methode_extraction": methode_extraction,  # Ajout pour suivi
+            "departement": dem.departement.nom if dem.departement else None
         }
-
-        soum.statut = 'termine'
-        soum.progression = 100
-        soum.resultat_json = resultat_json
         soum.save()
 
-        logger.info(f"\n{'=' * 70}")
-        logger.info(f"✅ TÂCHE TERMINÉE AVEC SUCCÈS!")
-        logger.info(f"   Temps total: {total_time:.1f}s")
-        logger.info(f"   Exercice: {titre_reel}")
-        logger.info(f"   Source contenu: {source}")
-        logger.info(f"   Méthode extraction: {methode_extraction}")
-        logger.info(f"   Schémas utilisés: {resultat_json['schemas_utilises']}")
-        logger.info(f"   Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
-        logger.info(f"   Corrigé: {len(corrige_txt)} caractères")
-        logger.info(f"   {datetime.now().strftime('%H:%M:%S')}")
-        logger.info(f"{'=' * 70}")
+        print(f"\n{'=' * 70}")
+        print(f"✅ TÂCHE TERMINÉE AVEC SUCCÈS!")
+        print(f"   Temps total: {total_time:.1f}s")
+        print(f"   Exercice: {titre_reel}")
+        print(f"   Source contenu: {source}")
+        print(f"   Méthode extraction: {methode_extraction}")
+        print(f"   Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
+        print(f"   Corrigé: {len(corrige_txt)} caractères")
+        print(f"   {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'=' * 70}")
 
         return True
 
     except Exception as e:
         total_time = time.time() - task_start
 
-        logger.info(f"\n{'=' * 70}")
-        logger.error(f"❌ ERREUR CRITIQUE DANS LA TÂCHE")
-        logger.info(f"   Temps écoulé: {total_time:.1f}s")
-        logger.info(f"   Type erreur: {type(e).__name__}")
-        logger.info(f"   Message: {str(e)[:300]}")
-        logger.info(f"   Soumission ID: {soumission_id}")
-        logger.info(f"   {datetime.now().strftime('%H:%M:%S')}")
-        logger.info(f"{'=' * 70}")
+        print(f"\n{'=' * 70}")
+        print(f"❌ ERREUR CRITIQUE DANS LA TÂCHE")
+        print(f"   Temps écoulé: {total_time:.1f}s")
+        print(f"   Type erreur: {type(e).__name__}")
+        print(f"   Message: {str(e)[:300]}")
+        print(f"   Soumission ID: {soumission_id}")
+        print(f"   {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'=' * 70}")
 
         # Log détaillé de l'erreur
         import traceback
         error_details = traceback.format_exc()
-        logger.info(f"\n📋 TRACEBACK COMPLET:")
-        logger.info(error_details[:1000])  # Limité pour éviter logs trop longs
+        print(f"\n📋 TRACEBACK COMPLET:")
+        print(error_details[:1000])  # Limité pour éviter logs trop longs
 
         # Mise à jour statut erreur si possible
         try:
@@ -3292,8 +2635,9 @@ def generer_corrige_exercice_async(self, soumission_id):
         # Si c'est une erreur réseau/timeout, on retry
         error_type = type(e).__name__
         if error_type in ['Timeout', 'ConnectionError', 'ReadTimeout', 'ConnectTimeout']:
-            logger.error(f"🔄 Erreur réseau détectée, retry automatique...")
+            print(f"🔄 Erreur réseau détectée, retry automatique...")
             raise self.retry(exc=e, countdown=120)
 
         # Pour les autres erreurs, on ne retry pas
         return False
+

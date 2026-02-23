@@ -61,24 +61,17 @@ from .models import ContactWhatsApp
 
 
 class UserRegisterAPIView(APIView):
-    # permission_classes = [AllowAny]
+    # permission_classes = [AllowAny] # à n’activer que si tu as activé la protection dans settings/auth
 
     def post(self, request):
-        print(f"🔵 [APIView] Données reçues: {request.data}")
-
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()  # ← L'abonnement est créé DANS le serializer
-            print(f"✅ [APIView] Utilisateur créé: {user.whatsapp_number}")
-
+            user = serializer.save()
             return Response(
                 {"success": True, "message": "Inscription réussie."},
                 status=status.HTTP_201_CREATED
             )
-
-        print(f"❌ [APIView] Erreurs: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 # *API de connexion — code complet et expliqué*
 class UserLoginAPIView(APIView):
@@ -540,8 +533,7 @@ class SplitExercisesAPIView(APIView):
     """
     POST /api/split/
     - Crée une DemandeCorrection
-    - Extrait le texte et les schémas avec DeepSeek (si département scientifique)
-    - Stocke les exercices avec leurs titres complets ET leurs schémas dans exercices_data
+    - Stocke les exercices avec leurs titres complets dans exercices_data
     - Retourne { demande_id: ..., exercices: [...] } avec vrais titres
     """
     permission_classes = [IsAuthenticated]
@@ -603,34 +595,25 @@ class SplitExercisesAPIView(APIView):
             except Exception:
                 pass
 
-        # 4) Extraire le texte et les schémas avec analyse scientifique
-        #    (DeepSeek en priorité pour les départements scientifiques)
-        analyse_complete = extraire_texte_fichier(fichier,
-                                                  demande)  # Cette fonction retourne maintenant un dict complet
+        # 4) Extraire le texte et découper en exercices
+        texte = extraire_texte_fichier(fichier, demande)   # ← Extraction UNE FOIS
 
-        # Vérifier que l'extraction a fonctionné
-        if not analyse_complete or not analyse_complete.get("texte_complet"):
+        if not texte:
             return Response(
                 {"error": "Impossible d'extraire le texte de la demande."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        texte = analyse_complete.get("texte_complet", "")
-        exercices_struct = analyse_complete.get("exercices_struct", [])
-        source_extraction = analyse_complete.get("source_extraction", "inconnue")
+        print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
 
-        print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères (source: {source_extraction})")
-        print(f"✅ [SplitExercises] Exercices détectés par IA: {len(exercices_struct)}")
-
-        # 5) Séparation des exercices avec la fonction existante
+        # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # 6) Construire la liste JSON complète pour stockage AVEC SCHÉMAS
+        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
         exercices_complets = []
-
         for idx, ex in enumerate(exercices_detaillees):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
-            contenu_complet = ex.get('contenu', '')
+            contenu_complet = ex.get('contenu', '')  # ← CONTENU COMPLET
 
             # Nettoyer le titre pour l'affichage
             titre_affichage = titre_complet
@@ -640,7 +623,7 @@ class SplitExercisesAPIView(APIView):
             # Extraire un extrait (premières lignes) pour l'affichage rapide
             lignes = contenu_complet.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:
+            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
@@ -649,62 +632,29 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # Récupérer les données vision spécifiques à cet exercice (si disponibles)
-            schemas_exercice = []
-            formules_exercice = []
-            graphs_exercice = []
-            angles_exercice = []
-            numbers_exercice = []
-
-            # Si DeepSeek a fourni une structure d'exercices, l'utiliser
-            if exercices_struct and idx < len(exercices_struct):
-                ex_vision = exercices_struct[idx]
-                schemas_exercice = ex_vision.get("schemas", [])
-                formules_exercice = ex_vision.get("formules", [])
-                graphs_exercice = ex_vision.get("graphs", [])
-                angles_exercice = ex_vision.get("angles", [])
-                numbers_exercice = ex_vision.get("numbers", [])
-
-                print(f"   📊 Exercice {idx + 1}: {len(schemas_exercice)} schéma(s) associé(s)")
-
-            # ✅ STOCKER LE CONTENU COMPLET ET LES SCHÉMAS
+            # ✅ STOCKER LE CONTENU COMPLET CETTE FOIS
             exercices_complets.append({
                 "index": idx,
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu_complet": contenu_complet,
-                "longueur_contenu": len(contenu_complet),
-
-                # NOUVEAU: Données vision spécifiques à cet exercice
-                "schemas": schemas_exercice,
-                "formules": formules_exercice,
-                "graphs": graphs_exercice,
-                "angles": angles_exercice,
-                "numbers": numbers_exercice,
-
-                # Métadonnées
-                "source_extraction": source_extraction
+                "contenu_complet": contenu_complet,  # ← NOUVEAU : CONTENU COMPLET
+                "longueur_contenu": len(contenu_complet)
             })
 
         # 7) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec leurs schémas")
+        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
 
         # 8) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
-            # Indiquer s'il y a des schémas (pour info)
-            has_schemas = "📊 " if ex.get("schemas") and len(ex["schemas"]) > 0 else ""
-
             exercices_reponse.append({
                 "index": ex["index"],
-                "titre": f"{has_schemas}{ex['titre']}",
-                "extrait": ex["extrait"],
-                "has_schemas": len(ex.get("schemas", [])) > 0,
-                "schemas_count": len(ex.get("schemas", []))
+                "titre": ex["titre"],
+                "extrait": ex["extrait"]
             })
 
         # 9) Répondre
@@ -713,8 +663,7 @@ class SplitExercisesAPIView(APIView):
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "source_extraction": source_extraction,
-            "info": f"{len(exercices_complets)} exercices détectés, contenu complet et schémas stockés"
+            "info": f"{len(exercices_complets)} exercices détectés, contenu complet stocké"
         })
 
 #VUE PARTIELLE DES EXERCICES
@@ -725,7 +674,7 @@ class PartialCorrectionAPIView(APIView):
     def post(self, request):
         try:
             user = request.user
-            # ===== VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
+            # ===== AJOUT: VÉRIFICATION CRÉDITS AVANT DE COMMENCER =====
             if not user_abonnement_actif(user):
                 return Response(
                     {"error": "Crédits épuisés ou abonnement expiré. Veuillez recharger votre abonnement."},
@@ -753,40 +702,21 @@ class PartialCorrectionAPIView(APIView):
             # 2) Vérifier la demande
             demande = get_object_or_404(DemandeCorrection, id=demande_id, user=user)
 
-            # 3) RÉCUPÉRATION DU CONTENU ET DES SCHÉMAS DEPUIS EXERCICES_DATA
+            # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
             fragment_trouve = False
-            schemas_trouves = False
-            contenu_exercice = ""
-            schemas_exercice = []
-            titre_exercice = f"Exercice {idx + 1}"
 
             if demande.exercices_data:
                 try:
                     exercices_list = json.loads(demande.exercices_data)
                     for ex in exercices_list:
                         if ex.get('index') == idx:
-                            # Récupérer le contenu complet
-                            contenu_exercice = ex.get('contenu_complet', '')
-                            if contenu_exercice and len(contenu_exercice) > 50:
+                            # Vérifier qu'on a du contenu complet
+                            if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
                                 fragment_trouve = True
                                 print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
-                                print(f"   Longueur contenu: {len(contenu_exercice)} caractères")
-
-                            # Récupérer les schémas
-                            schemas_exercice = ex.get('schemas', [])
-                            if schemas_exercice and len(schemas_exercice) > 0:
-                                schemas_trouves = True
-                                print(
-                                    f"✅ [PartialCorrection] {len(schemas_exercice)} schéma(s) associé(s) à cet exercice")
-
-                                # Afficher les types de schémas pour debug
-                                types = [s.get('type_schema', 'inconnu') for s in schemas_exercice if
-                                         isinstance(s, dict)]
-                                if types:
-                                    print(f"   Types: {list(set(types))}")
-                            break
-                except json.JSONDecodeError as e:
-                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data: {e}")
+                                break
+                except json.JSONDecodeError:
+                    print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
 
             # 4) Si pas de contenu stocké, vérifier qu'on a un fichier
             if not fragment_trouve and not demande.fichier:
@@ -795,47 +725,33 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 5) Si on a du contenu, le stocker temporairement sur la demande pour la tâche asynchrone
-            if fragment_trouve:
-                # Stocker le contenu dans un attribut temporaire (sera utilisé par la tâche)
-                demande._contenu_exercice_temp = contenu_exercice
-                demande._schemas_exercice_temp = schemas_exercice
-                demande._titre_exercice_temp = titre_exercice
-
-            # 6) Création de la soumission
+            # 5) Création de la soumission
             soumission = SoumissionIA.objects.create(
                 user=user,
                 demande=demande,
                 statut='en_attente',
                 progression=0,
-                exercice_index=idx  # ← CRUCIAL: stocker l'index pour la tâche asynchrone
+                exercice_index=idx
             )
 
-            # 7) Information de debug
+            # 6) Information de debug
             print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
             print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
-            print(f"   - Longueur contenu: {len(contenu_exercice) if fragment_trouve else 'N/A'}")
-            print(f"   - Schémas pré-stockés: {'OUI' if schemas_trouves else 'NON'}")
-            print(f"   - Nombre schémas: {len(schemas_exercice)}")
             print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
 
-            # 8) Lancement asynchrone avec l'index bien passé
-            from .ia_utils import generer_corrige_exercice_async
+            # 7) Lancement asynchrone
             generer_corrige_exercice_async.delay(soumission.id)
 
-            # 9) Réponse
+            # 8) Réponse
             return Response({
                 "success": True,
                 "soumission_exercice_id": soumission.id,
                 "message": "Exercice envoyé au traitement.",
-                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction",
-                "schemas_disponibles": schemas_trouves,
-                "nombre_schemas": len(schemas_exercice)
+                "optimisation": "contenu_pré_stocké" if fragment_trouve else "nécessite_extraction"
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
             # Affiche la stack complète dans les logs
-            import traceback
             traceback.print_exc()
             # Renvoie un message minimal au front
             return Response(
