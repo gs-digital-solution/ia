@@ -639,62 +639,86 @@ def call_deepseek_vision_ameliore(path_fichier: str, demande=None, ) -> dict:
         return {"exercices": [], "texte_complet": "", "elements_visuels": []}
 
 
-def analyser_schema_avec_blip(image_path: str) -> dict:
+def analyser_schema_avec_florence(image_path: str) -> dict:
     """
-    Analyse un schéma/image avec BLIP et retourne une description.
+    Analyse un schéma/image avec Florence-2 (Microsoft).
+    Extrait le texte (OCR) ET décrit le schéma en une seule passe.
     """
-    logger.info(f"🖼️ Analyse schéma avec BLIP: {image_path}")
+    logger.info(f"🖼️ Analyse schéma avec Florence-2: {image_path}")
 
     try:
         import torch
-        logger.info("✅ torch importé")
-
-        # Charger le modèle BLIP (lazy loading)
-        logger.info("📦 Chargement du modèle BLIP...")
-        processor, model = get_blip_model()
-        logger.info("✅ Modèle BLIP chargé")
-
-        # Ouvrir et préparer l'image
+        from transformers import AutoProcessor, AutoModelForCausalLM
         from PIL import Image
+
+        # Charger le modèle (lazy loading comme BLIP)
+        # À déplacer dans une fonction get_florence_model() si vous voulez lazy loader
+        model = AutoModelForCausalLM.from_pretrained(
+            "microsoft/Florence-2-large-ft",
+            trust_remote_code=True,
+            torch_dtype=torch.float32  # ← Plus besoin de flash_attn
+        ).eval()
+
+        processor = AutoProcessor.from_pretrained(
+            "microsoft/Florence-2-large-ft",
+            trust_remote_code=True
+        )
+
+        # Déplacer sur GPU si disponible
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = model.to(device)
+
+        # Ouvrir l'image
         image = Image.open(image_path).convert('RGB')
-        logger.info(f"✅ Image ouverte: {image.size}")
 
-        # Prétraiter l'image
-        inputs = processor(image, return_tensors="pt")
-        logger.info("✅ Image prétraitée")
+        # TÂCHE 1: OCR - lire les légendes/texte sur le schéma
+        prompt_ocr = "<OCR>"
+        inputs_ocr = processor(text=prompt_ocr, images=image, return_tensors="pt").to(device)
 
-        # Déplacer sur le même device que le modèle
-        device = next(model.parameters()).device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        logger.info(f"✅ Données déplacées sur {device}")
-
-        # Générer la description
         with torch.no_grad():
-            out = model.generate(**inputs, max_length=100)
-        logger.info("✅ Description générée")
+            generated_ids = model.generate(
+                **inputs_ocr,
+                max_new_tokens=500,
+                num_beams=3
+            )
 
-        # Décoder la description
-        description = processor.decode(out[0], skip_special_tokens=True)
-        logger.info(f"✅ Description: {description[:100]}...")
+        texte_extrait = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        logger.info(f"📝 Texte extrait par OCR: {texte_extrait[:100]}...")
+
+        # TÂCHE 2: Description détaillée du schéma
+        prompt_desc = "<DETAILED_CAPTION>"
+        inputs_desc = processor(text=prompt_desc, images=image, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            generated_ids = model.generate(
+                **inputs_desc,
+                max_new_tokens=500,
+                num_beams=3
+            )
+
+        description = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        logger.info(f"📝 Description: {description[:100]}...")
 
         return {
             "type_schema": "schéma",
             "description": description,
+            "texte_ocri": texte_extrait,  # ← Les légendes/texte du schéma !
             "elements": [],
             "relations": "",
-            "source": "blip"
+            "source": "florence-2"
         }
 
     except Exception as e:
-        logger.error(f"❌ Erreur BLIP: {type(e).__name__}: {e}")
+        logger.error(f"❌ Erreur Florence-2: {type(e).__name__}: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return {
             "type_schema": "inconnu",
             "description": "",
+            "texte_ocri": "",
             "elements": [],
             "relations": "",
-            "source": "blip_error"
+            "source": "florence_error"
         }
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
@@ -731,8 +755,8 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
                 temp_img.close()
                 image.save(temp_img.name, 'PNG')
 
-                # Analyser avec BLIP
-                schema_data = analyser_schema_avec_blip(temp_img.name)
+                # Analyser avec FLORENCE
+                schema_data = analyser_schema_avec_florence(temp_img.name)
 
                 if schema_data.get('description'):
                     elements_visuels.append({
@@ -746,7 +770,7 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
                 os.unlink(temp_img.name)
         else:
             # Image directe
-            schema_data = analyser_schema_avec_blip(fichier_path)
+            schema_data = analyser_schema_avec_florence(fichier_path)
             if schema_data.get('description'):
                 elements_visuels.append({
                     "page": 1,
