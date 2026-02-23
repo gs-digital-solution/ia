@@ -757,14 +757,27 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
 
         logger.info(f"✅ {len(elements_visuels)} schéma(s) décrit(s) par BLIP")
 
-    # 3) RETOURNER LE RÉSULTAT COMPLET
+    # 3) CONSTRUIRE LA STRUCTURE EXERCICES AVEC LES SCHÉMAS
+    exercices_struct = []
+
+    # Créer un exercice virtuel pour contenir les schémas (puisque BLIP analyse toute l'image)
+    if elements_visuels:
+        exercices_struct.append({
+            "titre": "Document avec schéma(s)",
+            "texte": texte_complet,
+            "schemas": elements_visuels,  # ← Transfert ici !
+            "formules": resultat_mathpix.get("latex_blocks", [])
+        })
+
+    # 4) RETOURNER LE RÉSULTAT COMPLET
     return {
         "texte_complet": texte_complet,
-        "elements_visuels": elements_visuels,
+        "elements_visuels": elements_visuels,  # Gardé pour compatibilité
         "formules_latex": resultat_mathpix.get("latex_blocks", []),
         "source_extraction": "mathpix+blip",
-        "exercices_struct": []  # Sera fait par separer_exercices_avec_titres
+        "exercices_struct": exercices_struct
     }
+
 def extraire_texte_robuste(fichier_path: str) -> str:
     """
     Extraction simple : OCR direct → Analyse IA
