@@ -722,10 +722,9 @@ def analyser_schema_avec_florence(image_path: str) -> dict:
         }
 
 # ── NOUVELLE FONCTION : Analyse scientifique avancée ────
-
 def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
     """
-    Analyse scientifique : Mathpix pour le texte + BLIP pour les schémas
+    Analyse scientifique : Mathpix pour le texte + Florence-2 pour les schémas
     """
     logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
 
@@ -736,69 +735,41 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
     texte_complet = resultat_mathpix.get("text", "")
     logger.info(f"✅ Mathpix: {len(texte_complet)} caractères")
 
-    # 2) BLIP POUR LES SCHÉMAS (si département scientifique)
+    # 2) FLORENCE-2 POUR LES SCHÉMAS (si département scientifique)
     elements_visuels = []
 
     if demande and is_departement_scientifique(demande.departement):
-        logger.info("🖼️ Analyse des schémas avec BLIP")
+        logger.info("🖼️ Analyse des schémas avec Florence-2")
 
-        # Pour les PDF, on convertit chaque page en image
-        ext = os.path.splitext(fichier_path)[1].lower()
+        # Analyser avec Florence-2
+        schema_data = analyser_schema_avec_florence(fichier_path)
 
-        if ext == '.pdf':
-            from pdf2image import convert_from_path
-            images = convert_from_path(fichier_path, dpi=150)
+        if schema_data.get('description') or schema_data.get('texte_ocri'):
+            elements_visuels.append({
+                "page": 1,
+                "type": schema_data.get('type_schema', 'schéma'),
+                "description": schema_data.get('description', ''),
+                "texte_legende": schema_data.get('texte_ocri', ''),  # ← NOUVEAU
+                "source": "florence-2"
+            })
 
-            for page_num, image in enumerate(images, 1):
-                # Sauvegarder temporairement
-                temp_img = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                temp_img.close()
-                image.save(temp_img.name, 'PNG')
-
-                # Analyser avec FLORENCE
-                schema_data = analyser_schema_avec_florence(temp_img.name)
-
-                if schema_data.get('description'):
-                    elements_visuels.append({
-                        "page": page_num,
-                        "type": schema_data.get('type_schema', 'schéma'),
-                        "description": schema_data['description'],
-                        "source": "blip"
-                    })
-
-                # Nettoyage
-                os.unlink(temp_img.name)
-        else:
-            # Image directe
-            schema_data = analyser_schema_avec_florence(fichier_path)
-            if schema_data.get('description'):
-                elements_visuels.append({
-                    "page": 1,
-                    "type": schema_data.get('type_schema', 'schéma'),
-                    "description": schema_data['description'],
-                    "source": "blip"
-                })
-
-        logger.info(f"✅ {len(elements_visuels)} schéma(s) décrit(s) par BLIP")
+        logger.info(f"✅ {len(elements_visuels)} schéma(s) décrit(s) par Florence-2")
 
     # 3) CONSTRUIRE LA STRUCTURE EXERCICES AVEC LES SCHÉMAS
     exercices_struct = []
-
-    # Créer un exercice virtuel pour contenir les schémas (puisque BLIP analyse toute l'image)
     if elements_visuels:
         exercices_struct.append({
             "titre": "Document avec schéma(s)",
             "texte": texte_complet,
-            "schemas": elements_visuels,  # ← Transfert ici !
+            "schemas": elements_visuels,  # ← ICI les schémas !
             "formules": resultat_mathpix.get("latex_blocks", [])
         })
 
-    # 4) RETOURNER LE RÉSULTAT COMPLET
     return {
         "texte_complet": texte_complet,
-        "elements_visuels": elements_visuels,  # Gardé pour compatibilité
+        "elements_visuels": elements_visuels,
         "formules_latex": resultat_mathpix.get("latex_blocks", []),
-        "source_extraction": "mathpix+blip",
+        "source_extraction": "mathpix+florence",
         "exercices_struct": exercices_struct
     }
 
