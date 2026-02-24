@@ -12,7 +12,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from abonnement.services import user_abonnement_actif, debiter_credit_abonnement
 from .models import DemandeCorrection, SoumissionIA
-from .ia_utils import generer_corrige_ia_et_graphique_async
+from .ia_utils import generer_corrige_ia_et_graphique_async, analyser_document_scientifique, \
+    associer_schemas_aux_exercices
 from resources.models import Pays, SousSysteme, Classe, Matiere, TypeExercice,Lecon,Departement
 import json
 from rest_framework.parsers import MultiPartParser, JSONParser
@@ -58,6 +59,8 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from correction.ia_utils import  separer_exercices_avec_titres
 from .models import ContactWhatsApp
+import logging
+logger = logging.getLogger(__name__)
 
 
 class UserRegisterAPIView(APIView):
@@ -541,6 +544,7 @@ class SplitExercisesAPIView(APIView):
 
     def post(self, request):
         user = request.user
+        logger.info(f"📤 [SplitExercises] Début traitement pour utilisateur {user.id}")
 
         # 1) Récupérer les IDs passés
         pays_id = request.data.get('pays')
@@ -554,6 +558,7 @@ class SplitExercisesAPIView(APIView):
         # 2) Récupérer le fichier d'énoncé et vérifier sa présence
         fichier = request.FILES.get('fichier')
         if not fichier:
+            logger.warning("❌ [SplitExercises] Aucun fichier fourni")
             return Response(
                 {"error": "Le fichier d'énoncé est requis."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -561,6 +566,7 @@ class SplitExercisesAPIView(APIView):
 
         # 2b) VÉRIFICATION TAILLE FICHIER (1 Mo max)
         if fichier.size > 1048576:  # 1 Mo en octets
+            logger.warning(f"❌ [SplitExercises] Fichier trop volumineux: {fichier.size} octets")
             return Response(
                 {"error": "Le fichier ne doit pas dépasser 1 Mo."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -570,12 +576,14 @@ class SplitExercisesAPIView(APIView):
         ext = os.path.splitext(fichier.name)[1].lower()
         allowed_ext = ['.pdf', '.png', '.jpg', '.jpeg']
         if ext not in allowed_ext:
+            logger.warning(f"❌ [SplitExercises] Format non supporté: {ext}")
             return Response(
                 {"error": f"Format {ext} non supporté. Utilisez PDF, PNG, JPG ou JPEG."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3) Créer la demande (nom_fichier sera auto-rempli via save())
+        # 3) Créer la demande
+        logger.info(f"📝 [SplitExercises] Création demande pour fichier {fichier.name}")
         demande = DemandeCorrection.objects.create(
             user=user,
             pays_id=pays_id,
@@ -592,28 +600,53 @@ class SplitExercisesAPIView(APIView):
             try:
                 ids = json.loads(lecons_ids) if isinstance(lecons_ids, str) else lecons_ids
                 demande.lecons.set(ids)
-            except Exception:
-                pass
+                logger.info(f"   📚 {len(ids)} leçon(s) liée(s)")
+            except Exception as e:
+                logger.error(f"   ❌ Erreur liaison leçons: {e}")
 
-        # 4) Extraire le texte et découper en exercices
-        texte = extraire_texte_fichier(fichier, demande)   # ← Extraction UNE FOIS
+        # 4) Sauvegarder le fichier temporairement pour extraction
+        temp_dir = tempfile.gettempdir()
+        local_path = os.path.join(temp_dir, f"split_{demande.id}_{fichier.name}")
+        with open(local_path, "wb") as f:
+            for chunk in fichier.chunks():
+                f.write(chunk)
+        logger.info(f"   💾 Fichier sauvegardé temporairement: {local_path}")
+
+        # 5) Extraire le texte ET les schémas via analyser_document_scientifique
+        logger.info(f"🔍 [SplitExercises] Lancement analyse scientifique...")
+        analyse = analyser_document_scientifique(local_path, demande)
+        texte = analyse.get("texte_complet", "")
+        schemas_data = analyse.get("schemas_data", {})
+
+        logger.info(f"   ✅ Texte extrait: {len(texte)} caractères")
+        logger.info(f"   ✅ Schémas extraits: {len(schemas_data)} page(s) avec schémas")
 
         if not texte:
+            logger.warning("⚠️ [SplitExercises] Texte extrait vide")
+            # Nettoyer le fichier temporaire
+            try:
+                os.unlink(local_path)
+            except:
+                pass
             return Response(
                 {"error": "Impossible d'extraire le texte de la demande."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        print(f"✅ [SplitExercises] Texte extrait: {len(texte)} caractères")
-
-        # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
+        # 6) Séparation en exercices
+        logger.info(f"🔪 [SplitExercises] Découpage du texte en exercices...")
         exercices_detaillees = separer_exercices_avec_titres(texte)
+        logger.info(f"   ✅ {len(exercices_detaillees)} exercice(s) détecté(s)")
 
-        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
+        # 7) Associer les schémas aux exercices
+        logger.info(f"🔄 [SplitExercises] Association schémas ↔ exercices...")
+        exercices_avec_schemas = associer_schemas_aux_exercices(exercices_detaillees, schemas_data)
+
+        # 8) Construire la liste JSON complète pour stockage
         exercices_complets = []
-        for idx, ex in enumerate(exercices_detaillees):
+        for idx, ex in enumerate(exercices_avec_schemas):
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
-            contenu_complet = ex.get('contenu', '')  # ← CONTENU COMPLET
+            contenu_complet = ex.get('contenu', '')
 
             # Nettoyer le titre pour l'affichage
             titre_affichage = titre_complet
@@ -623,7 +656,7 @@ class SplitExercisesAPIView(APIView):
             # Extraire un extrait (premières lignes) pour l'affichage rapide
             lignes = contenu_complet.strip().split('\n')
             extrait_lignes = []
-            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
+            for line in lignes[:3]:
                 line_stripped = line.strip()
                 if line_stripped and len(line_stripped) < 100:
                     extrait_lignes.append(line_stripped)
@@ -632,23 +665,34 @@ class SplitExercisesAPIView(APIView):
             if len(extrait) > 150:
                 extrait = extrait[:147] + "..."
 
-            # ✅ STOCKER LE CONTENU COMPLET CETTE FOIS
             exercices_complets.append({
                 "index": idx,
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
                 "extrait": extrait,
-                "contenu_complet": contenu_complet,  # ← NOUVEAU : CONTENU COMPLET
+                "contenu_complet": contenu_complet,  # DÉJÀ ENRICHI AVEC SCHÉMA !
                 "longueur_contenu": len(contenu_complet)
             })
 
-        # 7) Stocker les exercices COMPLETS dans la demande
+            # Log un extrait pour vérification
+            if idx < 2:  # Log seulement les 2 premiers pour éviter pollution
+                logger.info(f"   📝 Exercice {idx + 1}: {titre_affichage[:50]}...")
+                if "**📐 Schéma :**" in contenu_complet:
+                    logger.info(f"      ✅ Contient un schéma")
+
+        # 9) Stocker les exercices dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
+        logger.info(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec schémas intégrés")
 
-        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
+        # 10) Nettoyer le fichier temporaire
+        try:
+            os.unlink(local_path)
+            logger.info(f"   🧹 Fichier temporaire supprimé")
+        except Exception as e:
+            logger.warning(f"   ⚠️ Impossible de supprimer {local_path}: {e}")
 
-        # 8) Construire la réponse pour le frontend (extraits seulement)
+        # 11) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
         for ex in exercices_complets:
             exercices_reponse.append({
@@ -657,13 +701,14 @@ class SplitExercisesAPIView(APIView):
                 "extrait": ex["extrait"]
             })
 
-        # 9) Répondre
+        # 12) Répondre
+        logger.info(f"✅ [SplitExercises] Traitement terminé avec succès")
         return Response({
             "demande_id": demande.id,
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, contenu complet stocké"
+            "info": f"{len(exercices_complets)} exercices détectés, schémas intégrés"
         })
 
 #VUE PARTIELLE DES EXERCICES

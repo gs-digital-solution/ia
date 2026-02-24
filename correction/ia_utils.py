@@ -51,7 +51,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
     """
     Extraction avec Mathpix – gère les images et les PDF multi-pages.
     Pour les PDF, convertit et traite TOUTES les pages, puis concatène les résultats.
-    Retourne le texte avec les formules formatées pour MathJax.
+    Retourne le texte avec les formules formatées pour MathJax et les données des schémas.
     """
     headers = {
         "app_id": os.getenv("MATHPIX_APP_ID"),
@@ -65,6 +65,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
     temp_files = []
     all_text_parts = []
     all_latex_blocks = []
+    all_schemas_data = {}  # NOUVEAU: stocker les données des schémas
 
     try:
         # === 1. GESTION DES PDF (conversion de TOUTES les pages) ===
@@ -94,11 +95,13 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                 with open(temp_img.name, "rb") as f:
                     image_data = base64.b64encode(f.read()).decode()
 
-                # Appel à Mathpix pour cette page
+                # Appel à Mathpix pour cette page - AVEC PARAMÈTRES SCHÉMAS
                 data = {
                     "src": f"data:image/jpeg;base64,{image_data}",
                     "formats": ["text", "latex_styled"],
                     "ocr": ["math", "text"],
+                    "include_diagram_text": True,  # CRUCIAL: active l'extraction du texte dans les schémas
+                    "include_line_data": True,  # CRUCIAL: active la structure hiérarchique
                     "skip_recrop": False,
                     "math_inline_delimiters": ["$", "$"],
                     "rm_spaces": True,
@@ -117,6 +120,12 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                         result = response.json()
                         page_texte = result.get("text", "")
                         page_latex = result.get("latex_styled", [])
+
+                        # NOUVEAU: Extraire les données des schémas de cette page
+                        page_schemas = extraire_schemas_de_la_reponse(result, page_num)
+                        if page_schemas:
+                            all_schemas_data[f"page_{page_num}"] = page_schemas
+                            logger.info(f"   📐 Page {page_num}: {len(page_schemas)} schéma(s) détecté(s)")
 
                         # Ajouter un séparateur de page pour la lisibilité
                         if page_texte:
@@ -148,6 +157,8 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                 "src": f"data:image/jpeg;base64,{image_data}",
                 "formats": ["text", "latex_styled"],
                 "ocr": ["math", "text"],
+                "include_diagram_text": True,  # CRUCIAL
+                "include_line_data": True,  # CRUCIAL
                 "skip_recrop": False,
                 "math_inline_delimiters": ["$", "$"],
                 "rm_spaces": True,
@@ -165,10 +176,17 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                 result = response.json()
                 all_text_parts = [result.get("text", "")]
                 all_latex_blocks = result.get("latex_styled", [])
+
+                # NOUVEAU: Extraire les données des schémas
+                page_schemas = extraire_schemas_de_la_reponse(result, 1)
+                if page_schemas:
+                    all_schemas_data["page_1"] = page_schemas
+                    logger.info(f"   📐 {len(page_schemas)} schéma(s) détecté(s)")
+
                 logger.info(f"✅ Image traitée: {len(all_text_parts[0])} caractères")
             else:
                 logger.error(f"❌ Mathpix error {response.status_code}")
-                return {"text": "", "latex_blocks": [], "source": "error"}
+                return {"text": "", "latex_blocks": [], "schemas": {}, "source": "error"}
 
         # === 3. CONCATÉNATION ET FORMATAGE FINAL ===
         texte_complet = "\n\n".join(all_text_parts)
@@ -189,11 +207,14 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
         )
 
         logger.info(
-            f"✅ Extraction terminée: {len(texte_complet)} caractères au total, {len(all_latex_blocks)} blocs LaTeX")
+            f"✅ Extraction terminée: {len(texte_complet)} caractères au total, "
+            f"{len(all_latex_blocks)} blocs LaTeX, {len(all_schemas_data)} page(s) avec schémas"
+        )
 
         return {
             "text": texte_complet,
             "latex_blocks": all_latex_blocks,
+            "schemas": all_schemas_data,  # NOUVEAU: données structurées des schémas
             "source": "mathpix",
             "pages_traitees": len(images) if ext == '.pdf' else 1
         }
@@ -202,7 +223,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
         logger.error(f"❌ Mathpix exception: {e}")
         import traceback
         traceback.print_exc()
-        return {"text": "", "latex_blocks": [], "source": "error"}
+        return {"text": "", "latex_blocks": [], "schemas": {}, "source": "error"}
 
     finally:
         # === 4. NETTOYAGE ===
@@ -213,6 +234,113 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
                     logger.debug(f"🧹 Fichier temporaire supprimé: {temp_file}")
             except Exception as e:
                 logger.warning(f"⚠️ Impossible de supprimer {temp_file}: {e}")
+
+
+def extraire_schemas_de_la_reponse(mathpix_response: dict, page_num: int) -> list:
+    """
+    Extrait les données structurées des schémas depuis la réponse Mathpix.
+    Retourne une liste de dictionnaires, un par schéma détecté.
+    """
+    schemas = []
+
+    try:
+        data_elements = mathpix_response.get("data", [])
+
+        # Parcourir tous les éléments pour trouver les diagrammes
+        for elem in data_elements:
+            if elem.get("type") == "diagram":
+                diag_id = elem.get("id")
+
+                # Collecter tous les textes enfants de ce diagramme
+                enfants = []
+                for child in data_elements:
+                    if child.get("parent_id") == diag_id and child.get("type") == "text":
+                        text_content = child.get("text", "").strip()
+                        if text_content:
+                            enfants.append(text_content)
+
+                if enfants:
+                    schema_info = {
+                        "id": diag_id,
+                        "page": page_num,
+                        "elements": enfants,
+                        "description": " ; ".join(enfants)
+                    }
+                    schemas.append(schema_info)
+                    logger.debug(f"   📐 Schéma détecté page {page_num}: {schema_info['description']}")
+
+        logger.info(f"   📊 Page {page_num}: {len(schemas)} schéma(s) extrait(s)")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur extraction schémas page {page_num}: {e}")
+
+    return schemas
+
+
+def associer_schemas_aux_exercices(exercices: list, schemas_data: dict) -> list:
+    """
+    Associe chaque schéma à l'exercice correspondant.
+    Stratégie: on suppose que les schémas apparaissent dans l'ordre des pages,
+    et que chaque exercice peut avoir 0, 1 ou plusieurs schémas.
+
+    Args:
+        exercices: Liste des exercices détectés par separer_exercices_avec_titres
+        schemas_data: Dictionnaire {page_X: [liste_de_schemas]}
+
+    Returns:
+        Liste des exercices enrichis avec les descriptions de schémas
+    """
+    logger.info(f"🔄 Association de {len(schemas_data)} page(s) de schémas à {len(exercices)} exercice(s)")
+
+    exercices_enrichis = []
+
+    # Stratégie simple: répartir les schémas proportionnellement
+    # Compter le nombre total de schémas
+    total_schemas = 0
+    schemas_par_page = {}
+    for page_key, schemas in schemas_data.items():
+        schemas_par_page[page_key] = schemas
+        total_schemas += len(schemas)
+
+    logger.info(f"   📊 Total schémas détectés: {total_schemas}")
+
+    if total_schemas == 0:
+        # Aucun schéma, retourner les exercices inchangés
+        return exercices
+
+    # Répartir les schémas entre les exercices (1 schéma par exercice si possible)
+    # Version simplifiée: on prend les schémas dans l'ordre et on les assigne aux exercices
+    liste_plat_schemas = []
+    for page_key in sorted(schemas_par_page.keys()):
+        for schema in schemas_par_page[page_key]:
+            liste_plat_schemas.append(schema)
+
+    for idx, exercice in enumerate(exercices):
+        exercice_copy = exercice.copy()
+        contenu = exercice_copy.get('contenu', '')
+
+        # Chercher si un schéma correspond à cet exercice
+        if idx < len(liste_plat_schemas):
+            schema = liste_plat_schemas[idx]
+            description = schema.get('description', '')
+
+            # Ajouter la description à la fin de l'exercice
+            contenu_enrichi = f"""{contenu}
+
+---
+**📐 Schéma :** {description}"""
+
+            exercice_copy['contenu'] = contenu_enrichi
+            logger.info(f"   ✅ Exercice {idx + 1} enrichi avec schéma: {description[:50]}...")
+        else:
+            # Pas de schéma pour cet exercice
+            exercice_copy['contenu'] = contenu
+            logger.info(f"   ℹ️ Exercice {idx + 1} sans schéma")
+
+        exercices_enrichis.append(exercice_copy)
+
+    return exercices_enrichis
+
 def preprocess_image_for_ocr(pil_image):
     """
     Convertit une PIL.Image en image binaire nettoyée pour Tesseract.
@@ -411,7 +539,7 @@ def call_deepseek_vision(path_fichier: str) -> dict:
 def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
     """
     Analyse scientifique avancée avec choix du moteur selon département.
-    Pour les départements scientifiques : Mathpix (formules LaTeX précises)
+    Pour les départements scientifiques : Mathpix (formules LaTeX précises + schémas)
     Sinon : OCR standard + DeepSeek Vision
     """
     logger.info(f"🔍 Début analyse scientifique pour {fichier_path}")
@@ -438,12 +566,14 @@ def analyser_document_scientifique(fichier_path: str, demande=None) -> dict:
 
             if resultat_mathpix.get("text") and len(resultat_mathpix["text"]) > 100:
                 logger.info(f"✅ Mathpix réussi: {len(resultat_mathpix['text'])} caractères, "
-                            f"{len(resultat_mathpix.get('latex_blocks', []))} formules LaTeX")
+                            f"{len(resultat_mathpix.get('latex_blocks', []))} formules LaTeX, "
+                            f"{len(resultat_mathpix.get('schemas', {}))} page(s) avec schémas")
 
                 return {
                     "texte_complet": resultat_mathpix["text"],
-                    "elements_visuels": [],
+                    "elements_visuels": [],  # Gardé pour compatibilité
                     "formules_latex": resultat_mathpix.get("latex_blocks", []),
+                    "schemas_data": resultat_mathpix.get("schemas", {}),  # NOUVEAU: données des schémas
                     "graphs": [],
                     "angles": [],
                     "numbers": [],
