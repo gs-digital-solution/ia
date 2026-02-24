@@ -245,6 +245,13 @@ def extraire_schemas_de_la_reponse(mathpix_response: dict, page_num: int) -> lis
 
     try:
         data_elements = mathpix_response.get("data", [])
+        logger.info(f"🔍 DEBUG - Nombre d'éléments data reçus: {len(data_elements)}")
+
+        # Log les 10 premiers éléments pour voir leur structure
+        for i, elem in enumerate(data_elements[:10]):
+            logger.info(f"🔍 DEBUG - Élément {i}: type={elem.get('type')}, id={elem.get('id')}")
+            if elem.get("type") == "text":
+                logger.info(f"            texte: {elem.get('text', '')[:30]}")
 
         # Parcourir tous les éléments pour trouver les diagrammes
         for elem in data_elements:
