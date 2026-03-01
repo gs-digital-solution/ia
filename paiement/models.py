@@ -14,6 +14,7 @@ class PaymentMethod(models.Model):
     TYPE_CHOICES = [
         ('INTERNE', 'Paiement interne (via app)'),
         ('EXTERNE', 'Paiement externe (redirection)'),
+        ('IFRAME', 'Paiement par iframe intégré'),  # NOUVEAU - iKeePay
     ]
 
     code = models.CharField(max_length=64, unique=True)  # Ex: "PAIEMENTMARCHAND_MTN_CM", "LYGOS_CM"
@@ -33,7 +34,7 @@ class PaymentMethod(models.Model):
     lien_externe = models.URLField(max_length=500, blank=True, null=True, help_text="URL de redirection")
     instructions_externes = models.TextField(
         blank=True,
-        default="Cliquez sur le lien suivant pour payer. Après paiement, faites une capture d'écran du message de confirmation et envoyez-la par WhatsApp.",
+        default="Cliquez sur le lien suivant pour payer. Après paiement, faites une capture d'écran du message de paiement et envoyez-la par WhatsApp.",
         help_text="Instructions pour les paiements externes"
     )
 
@@ -48,6 +49,10 @@ class PaymentMethod(models.Model):
 
     def est_externe(self):
         return self.type_paiement == 'EXTERNE'
+
+    def est_iframe(self):
+        """Nouvelle méthode utilitaire"""
+        return self.type_paiement == 'IFRAME'
 
 ### B. *Historique des paiements/transactions*
 class PaymentTransaction(models.Model):
