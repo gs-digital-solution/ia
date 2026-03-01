@@ -3,6 +3,7 @@ _PROVIDERS = {
     'CAMPAY': 'paiement.providers.campay.CampayProvider',
     'EXTERNE': 'paiement.providers.externe.ExterneProvider',  # NOUVEAU
     'LYGOS': 'paiement.providers.externe.ExterneProvider',  # Utilise le même provider
+    'IKEEPAY': 'paiement.providers.ikeepay.IkeePayProvider',
 }
 
 

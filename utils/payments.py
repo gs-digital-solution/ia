@@ -35,6 +35,15 @@ def get_provider_config_for_method(payment_method):
             "service_code":   payment_method.service_code or "",
         }
 
+    # --- 3) IKEEPAY (NOUVEAU) ---
+    elif code.startswith("IKEEPAY"):
+        # UNE SEULE config pour tous les pays (pas de préfixe pays)
+        return {
+            "base_url": os.getenv("IKEEPAY_BASE_URL", "https://api.ikeepay.com"),
+            "public_key": os.getenv("IKEEPAY_PUBLIC_KEY"),
+            "secret_key": os.getenv("IKEEPAY_SECRET_KEY"),
+            "service_code": payment_method.service_code or "",
+        }
     # --- Aucun provider trouvé ---
     else:
         raise ValueError(f"Aucun provider configuré pour le code `{payment_method.code}`")

@@ -2298,8 +2298,8 @@ def generer_corrige_ia_et_graphique_async(demande_id, matiere_id=None):
 
 @shared_task(name='correction.ia_utils.generer_corrige_exercice_async',
              bind=True,
-             max_retries=3,
-             default_retry_delay=60)
+             max_retries=5,
+             default_retry_delay=120)
 def generer_corrige_exercice_async(self, soumission_id):
     """
     Tâche asynchrone pour corriger UN exercice isolé.
