@@ -2308,10 +2308,10 @@ def generer_corrige_exercice_async(self, soumission_id):
     """
 
     task_start = time.time()
-    print(f"\n{'=' * 70}")
-    print(f"🎯 DÉBUT TÂCHE ASYNC - {datetime.now().strftime('%H:%M:%S')}")
-    print(f"   Soumission ID: {soumission_id}")
-    print(f"{'=' * 70}")
+    logger.info(f"\n{'=' * 70}")
+    logger.info(f"🎯 DÉBUT TÂCHE ASYNC - {datetime.now().strftime('%H:%M:%S')}")
+    logger.info(f"   Soumission ID: {soumission_id}")
+    logger.info(f"{'=' * 70}")
 
     try:
         # 1) RÉCUPÉRATION DE LA SOUMISSION
@@ -2320,22 +2320,22 @@ def generer_corrige_exercice_async(self, soumission_id):
         dem = soum.demande
         recovery_time = time.time() - recovery_start
 
-        print(f"✅ Soumission récupérée ({recovery_time:.1f}s)")
-        print(f"   - Demande ID: {dem.id}")
-        print(f"   - Exercice index: {soum.exercice_index}")
-        print(f"   - Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
-        print(f"   - Statut initial: {soum.statut}")
+        logger.info(f"✅ Soumission récupérée ({recovery_time:.1f}s)")
+        logger.info(f"   - Demande ID: {dem.id}")
+        logger.infof("   - Exercice index: {soum.exercice_index}")
+        logger.info(f"   - Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
+        logger.info(f"   - Statut initial: {soum.statut}")
 
         # Vérification Mathpix disponible
         mathpix_configure = bool(os.getenv("MATHPIX_APP_ID") and os.getenv("MATHPIX_APP_KEY"))
         if dem.departement and is_departement_scientifique(dem.departement):
-            print(f"   - Département scientifique → Mathpix: {'Activé' if mathpix_configure else 'Non configuré'}")
+            logger.info(f"   - Département scientifique → Mathpix: {'Activé' if mathpix_configure else 'Non configuré'}")
 
         # 2) MISE À JOUR STATUT IMMÉDIATE
         soum.statut = 'analyse_ia'
         soum.progression = 20
         soum.save()
-        print(f"📊 Statut mis à jour: analyse_ia (20%)")
+        logger.info(f"📊 Statut mis à jour: analyse_ia (20%)")
 
         # 3) RÉCUPÉRATION OPTIMISÉE DU CONTENU AVEC SUPPORT MATHPIX
         extraction_start = time.time()
@@ -2352,16 +2352,16 @@ def generer_corrige_exercice_async(self, soumission_id):
                     if ex.get('index') == idx:
                         fragment = ex.get('contenu_complet') or ex.get('contenu', '')
                         source = "exercices_data"
-                        print(f"✅ Contenu récupéré depuis exercices_data")
-                        print(f"   - Source: {source}")
-                        print(f"   - Longueur: {len(fragment)} caractères")
+                        logger.info(f"✅ Contenu récupéré depuis exercices_data")
+                        logger.info(f"   - Source: {source}")
+                        logger.info(f"   - Longueur: {len(fragment)} caractères")
                         break
             except json.JSONDecodeError as e:
-                print(f"⚠️  Erreur JSON exercices_data: {e}")
+                logger.info(f"⚠️  Erreur JSON exercices_data: {e}")
 
         # Tentative 2: Fallback extraction fichier AVEC MATHPIX CONDITIONNEL
         if not fragment and dem.fichier:
-            print(f"🔄 Fallback: extraction depuis fichier")
+            logger.info(f"🔄 Fallback: extraction depuis fichier")
             try:
                 # MODIFICATION CLÉ : Passer la demande pour choix Mathpix
                 texte_complet = extraire_texte_fichier(dem.fichier, dem)  # ← dem ajouté comme 2ème paramètre
@@ -2370,40 +2370,40 @@ def generer_corrige_exercice_async(self, soumission_id):
                     exercices_data = separer_exercices_avec_titres(texte_complet)
 
                     if idx >= len(exercices_data):
-                        print(f"⚠️  Index {idx} hors limites, ajustement")
+                        logger.info(f"⚠️  Index {idx} hors limites, ajustement")
                         idx = len(exercices_data) - 1 if exercices_data else 0
 
                     ex_data = exercices_data[idx] if exercices_data else {}
                     fragment = ex_data.get('contenu', '')
                     source = "extraction_fraiche"
-                    print(f"✅ Contenu extrait via fallback")
-                    print(f"   - Source: {source}")
-                    print(f"   - Longueur: {len(fragment)} caractères")
+                    logger.info(f"✅ Contenu extrait via fallback")
+                    logger.info(f"   - Source: {source}")
+                    logger.info(f"   - Longueur: {len(fragment)} caractères")
 
                     # Enregistrer la méthode d'extraction depuis la demande si disponible
                     if hasattr(dem, 'methode_extraction') and dem.methode_extraction:
                         methode_extraction = dem.methode_extraction
-                        print(f"   - Méthode extraction: {methode_extraction}")
+                        logger.info(f"   - Méthode extraction: {methode_extraction}")
                     else:
                         # Déterminer la méthode basée sur le département
                         if dem.departement and is_departement_scientifique(dem.departement):
                             methode_extraction = "mathpix" if mathpix_configure else "standard"
                         else:
                             methode_extraction = "standard"
-                        print(f"   - Méthode déduite: {methode_extraction}")
+                        logger.info(f"   - Méthode déduite: {methode_extraction}")
 
                 else:
-                    print(f"⚠️  Texte extrait trop court: {len(texte_complet or '')} caractères")
+                    logger.info(f"⚠️  Texte extrait trop court: {len(texte_complet or '')} caractères")
             except Exception as e:
-                print(f"❌ Erreur extraction fichier: {type(e).__name__}: {str(e)[:100]}")
+                logger.info(f"❌ Erreur extraction fichier: {type(e).__name__}: {str(e)[:100]}")
 
         extraction_time = time.time() - extraction_start
 
         # 4) VALIDATION DU FRAGMENT
         if not fragment or len(fragment.strip()) < 20:
             error_msg = f"Fragment invalide (longueur: {len(fragment or '')} chars, source: {source})"
-            print(f"❌ {error_msg}")
-            print(f"⏱️  Temps extraction: {extraction_time:.1f}s")
+            logger.info(f"❌ {error_msg}")
+            logger.info(f"⏱️  Temps extraction: {extraction_time:.1f}s")
 
             # Mise à jour statut erreur
             soum.statut = 'erreur'
@@ -2411,10 +2411,10 @@ def generer_corrige_exercice_async(self, soumission_id):
 
             raise ValueError(error_msg)
 
-        print(f"✅ Fragment validé")
-        print(f"⏱️  Extraction totale: {extraction_time:.1f}s")
-        print(f"📝 Début fragment: {fragment[:100].replace(chr(10), ' ')}...")
-        print(f"🔧 Méthode extraction: {methode_extraction}")
+        logger.info(f"✅ Fragment validé")
+        logger.info(f"⏱️  Extraction totale: {extraction_time:.1f}s")
+        logger.info(f"📝 Début fragment: {fragment[:100].replace(chr(10), ' ')}...")
+        logger.info(f"🔧 Méthode extraction: {methode_extraction}")
 
         # 5) PRÉPARATION CONTEXTE IA
         mat = dem.matiere if dem.matiere else Matiere.objects.first()
@@ -2434,13 +2434,13 @@ def generer_corrige_exercice_async(self, soumission_id):
         contexte = f"Exercice de {mat.nom if mat else 'Matière'} – {titre_exercice}"
         if dem.departement:
             contexte += f" – Département {dem.departement.nom}"
-        print(f"🎯 Contexte IA: {contexte}")
+        logger.info(f"🎯 Contexte IA: {contexte}")
 
         # 6) GÉNÉRATION IA AVEC GESTION D'ERREURS ROBUSTE
         ia_start = time.time()
-        print(f"\n{'─' * 40}")
-        print(f"🤖 DÉBUT GÉNÉRATION IA")
-        print(f"{'─' * 40}")
+        logger.info(f"\n{'─' * 40}")
+        logger.info(f"🤖 DÉBUT GÉNÉRATION IA")
+        logger.info(f"{'─' * 40}")
 
         try:
             # Appel IA avec timeout global
@@ -2452,37 +2452,37 @@ def generer_corrige_exercice_async(self, soumission_id):
             )
 
             ia_time = time.time() - ia_start
-            print(f"✅ Génération IA réussie ({ia_time:.1f}s)")
-            print(f"📝 Longueur corrigé: {len(corrige_txt or '')} caractères")
+            logger.info(f"✅ Génération IA réussie ({ia_time:.1f}s)")
+            logger.info(f"📝 Longueur corrigé: {len(corrige_txt or '')} caractères")
 
             # Validation basique du corrigé
             if not corrige_txt or len(corrige_txt.strip()) < 50:
                 error_msg = f"Corrigé trop court: {len(corrige_txt or '')} caractères"
-                print(f"⚠️  {error_msg}")
+                logger.error(f"⚠️  {error_msg}")
                 raise ValueError(error_msg)
 
         except Exception as ia_error:
             ia_time = time.time() - ia_start
-            print(f"\n❌ ÉCHEC GÉNÉRATION IA ({ia_time:.1f}s)")
-            print(f"   Type erreur: {type(ia_error).__name__}")
-            print(f"   Message: {str(ia_error)[:200]}")
-            print(f"{'─' * 40}")
+            logger.info(f"\n❌ ÉCHEC GÉNÉRATION IA ({ia_time:.1f}s)")
+            logger.info(f"   Type erreur: {type(ia_error).__name__}")
+            logger.info(f"   Message: {str(ia_error)[:200]}")
+            logger.info(f"{'─' * 40}")
 
             # Retry automatique après délai
-            print(f"🔄 Retry automatique dans 60s...")
+            logger.info(f"🔄 Retry automatique dans 60s...")
             raise self.retry(exc=ia_error, countdown=60)
 
         # 7) MISE À JOUR STATUT INTERMÉDIAIRE
         soum.statut = 'formatage_pdf'
         soum.progression = 60
         soum.save()
-        print(f"📊 Statut mis à jour: formatage_pdf (60%)")
+        logger.info(f"📊 Statut mis à jour: formatage_pdf (60%)")
 
         # 8) GÉNÉRATION PDF
         pdf_start = time.time()
-        print(f"\n{'─' * 40}")
-        print(f"📄 DÉBUT GÉNÉRATION PDF")
-        print(f"{'─' * 40}")
+        logger.info(f"\n{'─' * 40}")
+        logger.info(f"📄 DÉBUT GÉNÉRATION PDF")
+        logger.info(f"{'─' * 40}")
 
         try:
             pdf_url = generer_pdf_corrige(
@@ -2497,25 +2497,25 @@ def generer_corrige_exercice_async(self, soumission_id):
             )
 
             pdf_time = time.time() - pdf_start
-            print(f"✅ Génération PDF réussie ({pdf_time:.1f}s)")
-            print(f"📎 URL PDF: {pdf_url}")
+            logger.info(f"✅ Génération PDF réussie ({pdf_time:.1f}s)")
+            logger.info(f"📎 URL PDF: {pdf_url}")
 
         except Exception as pdf_error:
             pdf_time = time.time() - pdf_start
-            print(f"❌ Échec génération PDF ({pdf_time:.1f}s)")
-            print(f"   Erreur: {type(pdf_error).__name__}: {str(pdf_error)[:200]}")
+            logger.info(f"❌ Échec génération PDF ({pdf_time:.1f}s)")
+            logger.info(f"   Erreur: {type(pdf_error).__name__}: {str(pdf_error)[:200]}")
             raise pdf_error
 
         # 9) DÉBIT CRÉDIT
         debit_start = time.time()
-        print(f"\n{'─' * 40}")
-        print(f"💳 DÉBIT CRÉDIT UTILISATEUR")
-        print(f"{'─' * 40}")
+        logger.info(f"\n{'─' * 40}")
+        logger.info(f"💳 DÉBIT CRÉDIT UTILISATEUR")
+        logger.info(f"{'─' * 40}")
 
         try:
             if not debiter_credit_abonnement(dem.user):
                 error_msg = "Crédits insuffisants"
-                print(f"❌ {error_msg}")
+                logger.error(f"❌ {error_msg}")
 
                 soum.statut = 'erreur_credit'
                 soum.save()
@@ -2523,17 +2523,17 @@ def generer_corrige_exercice_async(self, soumission_id):
                 raise ValueError(error_msg)
 
             debit_time = time.time() - debit_start
-            print(f"✅ Débit crédit réussi ({debit_time:.1f}s)")
+            logger.info(f"✅ Débit crédit réussi ({debit_time:.1f}s)")
 
         except Exception as debit_error:
-            print(f"❌ Erreur débit crédit: {type(debit_error).__name__}")
+            logger.info(f"❌ Erreur débit crédit: {type(debit_error).__name__}")
             raise debit_error
 
         # 10) CRÉATION CORRIGEPARTIEL
         corrige_start = time.time()
-        print(f"\n{'─' * 40}")
-        print(f"📁 CRÉATION CORRIGEPARTIEL")
-        print(f"{'─' * 40}")
+        logger.info(f"\n{'─' * 40}")
+        logger.info(f"📁 CRÉATION CORRIGEPARTIEL")
+        logger.info(f"{'─' * 40}")
 
         try:
             # Préparation titre
@@ -2547,7 +2547,7 @@ def generer_corrige_exercice_async(self, soumission_id):
 
             if not os.path.exists(pdf_absolute_path):
                 error_msg = f"Fichier PDF non trouvé: {pdf_absolute_path}"
-                print(f"❌ {error_msg}")
+                logger.info(f"❌ {error_msg}")
                 raise FileNotFoundError(error_msg)
 
             # Création CorrigePartiel avec info d'extraction
@@ -2564,15 +2564,15 @@ def generer_corrige_exercice_async(self, soumission_id):
                 corrige.save()
 
             corrige_time = time.time() - corrige_start
-            print(f"✅ CorrigePartiel créé ({corrige_time:.1f}s)")
-            print(f"   - ID: {corrige.id}")
-            print(f"   - Titre: {titre_reel}")
-            print(f"   - Méthode extraction: {methode_extraction}")
+            logger.info(f"✅ CorrigePartiel créé ({corrige_time:.1f}s)")
+            logger.info(f"   - ID: {corrige.id}")
+            logger.info(f"   - Titre: {titre_reel}")
+            logger.info(f"   - Méthode extraction: {methode_extraction}")
 
         except Exception as corrige_error:
             corrige_time = time.time() - corrige_start
-            print(f"❌ Erreur création CorrigePartiel ({corrige_time:.1f}s)")
-            print(f"   Erreur: {type(corrige_error).__name__}: {str(corrige_error)[:200]}")
+            logger.info(f"❌ Erreur création CorrigePartiel ({corrige_time:.1f}s)")
+            logger.info(f"   Erreur: {type(corrige_error).__name__}: {str(corrige_error)[:200]}")
             raise corrige_error
 
         # 11) FINALISATION
@@ -2593,36 +2593,36 @@ def generer_corrige_exercice_async(self, soumission_id):
         }
         soum.save()
 
-        print(f"\n{'=' * 70}")
-        print(f"✅ TÂCHE TERMINÉE AVEC SUCCÈS!")
-        print(f"   Temps total: {total_time:.1f}s")
-        print(f"   Exercice: {titre_reel}")
-        print(f"   Source contenu: {source}")
-        print(f"   Méthode extraction: {methode_extraction}")
-        print(f"   Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
-        print(f"   Corrigé: {len(corrige_txt)} caractères")
-        print(f"   {datetime.now().strftime('%H:%M:%S')}")
-        print(f"{'=' * 70}")
+        logger.info(f"\n{'=' * 70}")
+        logger.info(f"✅ TÂCHE TERMINÉE AVEC SUCCÈS!")
+        logger.info(f"   Temps total: {total_time:.1f}s")
+        logger.info(f"   Exercice: {titre_reel}")
+        logger.info(f"   Source contenu: {source}")
+        logger.info(f"   Méthode extraction: {methode_extraction}")
+        logger.info(f"   Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
+        logger.info(f"   Corrigé: {len(corrige_txt)} caractères")
+        logger.info(f"   {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"{'=' * 70}")
 
         return True
 
     except Exception as e:
         total_time = time.time() - task_start
 
-        print(f"\n{'=' * 70}")
-        print(f"❌ ERREUR CRITIQUE DANS LA TÂCHE")
-        print(f"   Temps écoulé: {total_time:.1f}s")
-        print(f"   Type erreur: {type(e).__name__}")
-        print(f"   Message: {str(e)[:300]}")
-        print(f"   Soumission ID: {soumission_id}")
-        print(f"   {datetime.now().strftime('%H:%M:%S')}")
-        print(f"{'=' * 70}")
+        logger.info(f"\n{'=' * 70}")
+        logger.info(f"❌ ERREUR CRITIQUE DANS LA TÂCHE")
+        logger.info(f"   Temps écoulé: {total_time:.1f}s")
+        logger.info(f"   Type erreur: {type(e).__name__}")
+        logger.info(f"   Message: {str(e)[:300]}")
+        logger.info(f"   Soumission ID: {soumission_id}")
+        logger.info(f"   {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"{'=' * 70}")
 
         # Log détaillé de l'erreur
         import traceback
         error_details = traceback.format_exc()
-        print(f"\n📋 TRACEBACK COMPLET:")
-        print(error_details[:1000])  # Limité pour éviter logs trop longs
+        logger.info(f"\n📋 TRACEBACK COMPLET:")
+        logger.info(error_details[:1000])  # Limité pour éviter logs trop longs
 
         # Mise à jour statut erreur si possible
         try:
