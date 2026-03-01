@@ -2322,7 +2322,7 @@ def generer_corrige_exercice_async(self, soumission_id):
 
         logger.info(f"✅ Soumission récupérée ({recovery_time:.1f}s)")
         logger.info(f"   - Demande ID: {dem.id}")
-        logger.infof("   - Exercice index: {soum.exercice_index}")
+        logger.info("   - Exercice index: {soum.exercice_index}")
         logger.info(f"   - Département: {dem.departement.nom if dem.departement else 'Non spécifié'}")
         logger.info(f"   - Statut initial: {soum.statut}")
 
