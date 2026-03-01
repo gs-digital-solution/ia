@@ -13,7 +13,7 @@ def get_provider_for_method(payment_method):
         from paiement.providers.externe import ExterneProvider
         return ExterneProvider(payment_method)
 
-    # Sinon, logique normale
+    # Sinon, logique normale:
     prefix = payment_method.code.split('_')[0].upper()
     path = _PROVIDERS.get(prefix)
     if not path:

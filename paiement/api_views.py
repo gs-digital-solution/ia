@@ -16,6 +16,10 @@ from .serializers import (
 from .models import PaymentMethod, PaymentTransaction
 from .services import process_payment
 from abonnement.models import SubscriptionType
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+import logging
+logger = logging.getLogger('paiement')
 
 
 class PaymentMethodListAPI(generics.ListAPIView):
@@ -110,3 +114,62 @@ class PaymentTransactionListAPI(ListAPIView):
 
     def get_queryset(self):
         return PaymentTransaction.objects.filter(user=self.request.user).order_by('-created')
+
+
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def confirm_ikeepay_payment(request):
+    """
+    Endpoint appelé par Flutter après réception du message 'ikeepay-success'
+    POST /api/paiement/confirm-ikeepay/
+    """
+    transaction_id = request.data.get('transaction_id')
+
+    if not transaction_id:
+        return Response(
+            {'error': 'transaction_id requis'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        # Récupérer la transaction
+        tx = PaymentTransaction.objects.get(
+            transaction_id=transaction_id,
+            user=request.user
+        )
+
+        # Vérifier que c'est bien un paiement iKeePay
+        if not tx.payment_method.code.startswith('IKEEPAY'):
+            return Response(
+                {'error': 'Méthode de paiement incorrecte'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Mettre à jour le statut
+        tx.status = 'SUCCESS'
+        tx.save()
+
+        # TODO: Activer l'abonnement pour l'utilisateur
+        # Vous pouvez appeler votre service d'abonnement ici
+
+        logger.info(f"iKeePay payment confirmed: {transaction_id}")
+
+        return Response({
+            'status': 'success',
+            'transaction_id': transaction_id
+        })
+
+    except PaymentTransaction.DoesNotExist:
+        return Response(
+            {'error': 'Transaction non trouvée'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error confirming iKeePay payment: {str(e)}")
+        return Response(
+            {'error': 'Erreur serveur'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
