@@ -20,7 +20,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 import logging
 logger = logging.getLogger('paiement')
-
+from abonnement.models import UserAbonnement
+from django.utils import timezone
 
 class PaymentMethodListAPI(generics.ListAPIView):
     serializer_class = PaymentMethodSerializer
@@ -116,9 +117,6 @@ class PaymentTransactionListAPI(ListAPIView):
         return PaymentTransaction.objects.filter(user=self.request.user).order_by('-created')
 
 
-
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def confirm_ikeepay_payment(request):
@@ -152,14 +150,44 @@ def confirm_ikeepay_payment(request):
         tx.status = 'SUCCESS'
         tx.save()
 
-        # TODO: Activer l'abonnement pour l'utilisateur
-        # Vous pouvez appeler votre service d'abonnement ici
+        # ════════════════════════════════════════════════════════════════
+        #   ACTIVATION DE L'ABONNEMENT POUR L'UTILISATEUR
+        # ════════════════════════════════════════════════════════════════
 
-        logger.info(f"iKeePay payment confirmed: {transaction_id}")
+        # 1. Récupérer le type d'abonnement acheté
+        abonnement_type = tx.abonnement  # C'est déjà un objet SubscriptionType
+
+        # 2. Créer un nouvel abonnement pour l'utilisateur
+        # Note: On crée un nouvel abonnement, on ne modifie pas l'ancien
+        nouvel_abonnement = UserAbonnement.objects.create(
+            utilisateur=request.user,
+            abonnement=abonnement_type,
+            code_promo_utilise=None,  # Pas de code promo pour paiement direct
+            date_debut=timezone.now(),
+            date_fin=timezone.now() + timezone.timedelta(days=abonnement_type.duree_jours),
+            exercice_restants=abonnement_type.nombre_exercices_total,
+            statut='actif'
+        )
+
+        logger.info(
+            f"Abonnement activé pour utilisateur {request.user.id}: "
+            f"{abonnement_type.nom} - {nouvel_abonnement.exercice_restants} crédits"
+        )
+
+        # Optionnel : Désactiver l'ancien abonnement si nécessaire
+        # UserAbonnement.objects.filter(
+        #     utilisateur=request.user,
+        #     statut='actif'
+        # ).exclude(id=nouvel_abonnement.id).update(statut='expire')
 
         return Response({
             'status': 'success',
-            'transaction_id': transaction_id
+            'transaction_id': transaction_id,
+            'abonnement_active': {
+                'nom': abonnement_type.nom,
+                'credits': nouvel_abonnement.exercice_restants,
+                'date_fin': nouvel_abonnement.date_fin
+            }
         })
 
     except PaymentTransaction.DoesNotExist:
