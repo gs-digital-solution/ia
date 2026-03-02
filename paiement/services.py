@@ -54,8 +54,25 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
         logger.debug(f"Tx externe créée: {tx.transaction_id} - Statut: {tx.status}")
         return tx
 
+    # ════════════════════════════════════════════════════════════════
+    #   NOUVEAU : PAIEMENT IKEEPAY (iframe)
+    # ════════════════════════════════════════════════════════════════
+    elif payment_method.code.startswith('IKEEPAY'):
+        # PAIEMENT IKEEPAY - Le résultat est un dictionnaire, pas une réponse HTTP
+        logger.debug(f"IkeePay provider returned: {result}")
+
+        tx.transaction_id = result['transaction_id']
+        tx.status = result['status']
+        tx.raw_response = result.get('raw_response', result)
+        tx.save()
+
+        logger.debug(f"Tx iKeePay créée: {tx.transaction_id} - Statut: {tx.status}")
+        return tx
+
+    # ════════════════════════════════════════════════════════════════
+    #   PAIEMENT INTERNE (Touchpay/Campay) - LOGIQUE EXISTANTE
+    # ════════════════════════════════════════════════════════════════
     else:
-        # PAIEMENT INTERNE (Touchpay/Campay) - LOGIQUE EXISTANTE
         logger.debug(f"Provider responded HTTP {result.status_code}")
 
         try:
