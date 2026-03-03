@@ -303,39 +303,33 @@ def get_cache_manager():
 
 
 def with_cache(func):
-    """
-    Décorateur pour utiliser automatiquement le cache
-
-    Utilisation:
-        @with_cache
-        def generer_corrige_par_exercice(texte_exercice, ..., demande=None):
-            ...
-
-    Le décorateur:
-    1. Vérifie si le corrigé existe en cache
-    2. Si oui, retourne immédiatement le corrigé
-    3. Si non, appelle la fonction, puis stocke le résultat
-    """
     from functools import wraps
-
 
     @wraps(func)
     def wrapper(texte_exercice, *args, **kwargs):
-        # Récupérer la demande depuis les kwargs
         demande = kwargs.get('demande')
 
-        # Essayer de récupérer le contenu nettoyé depuis la soumission
+        # 🟡 LOGS DE DEBUG
+        logger.info(f"🔍 DEBUG - demande présent: {bool(demande)}")
+
         contenu_nettoye = None
         if demande:
-            # Chercher la soumission la plus récente pour cette demande
+            # Chercher la soumission
             soumission = demande.soumissionia_set.order_by('-date_creation').first()
-            if soumission and soumission.resultat_json:
-                contenu_nettoye = soumission.resultat_json.get('contenu_nettoye')
+            logger.info(f"🔍 DEBUG - soumission trouvée: {bool(soumission)}")
 
-        # Si on a un contenu nettoyé, on l'utilise pour le cache
+            if soumission:
+                logger.info(f"🔍 DEBUG - soumission ID: {soumission.id}, statut: {soumission.statut}")
+                logger.info(f"🔍 DEBUG - resultat_json présent: {bool(soumission.resultat_json)}")
+
+                if soumission.resultat_json:
+                    contenu_nettoye = soumission.resultat_json.get('contenu_nettoye')
+                    logger.info(f"🔍 DEBUG - contenu_nettoye trouvé: {bool(contenu_nettoye)}")
+                    if contenu_nettoye:
+                        logger.info(f"🔍 DEBUG - longueur contenu_nettoye: {len(contenu_nettoye)}")
+                        logger.info(f"🔍 DEBUG - début contenu: {contenu_nettoye[:100]}...")
+
         texte_pour_cache = contenu_nettoye if contenu_nettoye else texte_exercice
-
-        # Logger pour debug
         logger.info(f"🔍 Cache utilisant: {'contenu_nettoye' if contenu_nettoye else 'texte_brut'}")
 
         cache = get_cache_manager()
