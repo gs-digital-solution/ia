@@ -907,8 +907,9 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
         resultats.append({
             'titre': titre_affichage,
             'titre_complet': titre_final,
-            'contenu': contenu,  # ← Contenu SANS le titre
-            'extrait': extrait,  # ← NOUVEAU : extrait calculé
+            # 🟢 IMPORTANT: contenu SANS le titre
+            'contenu': '\n'.join(lignes_finales[1:]) if len(lignes_finales) > 1 else '',
+            'extrait': extrait,
             'longueur_contenu': longueur_totale,
             'nombre_parents': len(groupe) - 1 if len(groupe) > 1 else 0
         })
