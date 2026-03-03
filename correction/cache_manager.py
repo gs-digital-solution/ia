@@ -79,6 +79,17 @@ class CorrigeCacheManager:
         # Nettoyer le texte pour ignorer les différences mineures
         texte_normalise = self._normalize_text(texte_exercice)
 
+        # LOG TEMPORAIRE pour voir le texte normalisé
+        logger.info(f"🔍 TEXTE NORMALISÉ (début): {texte_normalise[:200]}")
+
+        if matiere_id:
+            texte_normalise = f"{texte_normalise}|matiere:{matiere_id}"
+            logger.info(f"🔍 AVEC MATIÈRE: {matiere_id}")
+
+        fingerprint = hashlib.md5(texte_normalise.encode('utf-8')).hexdigest()
+        logger.info(f"🔍 FINGERPRINT: {fingerprint[:16]}...")
+        return fingerprint
+
         # Ajouter la matière si fournie
         if matiere_id:
             texte_normalise = f"{texte_normalise}|matiere:{matiere_id}"
