@@ -596,7 +596,7 @@ class SplitExercisesAPIView(APIView):
                 pass
 
         # 4) Extraire le texte et découper en exercices
-        texte = extraire_texte_fichier(fichier, demande)   # ← Extraction UNE FOIS
+        texte = extraire_texte_fichier(fichier, demande)  # ← Extraction UNE FOIS
 
         if not texte:
             return Response(
@@ -609,44 +609,50 @@ class SplitExercisesAPIView(APIView):
         # 5) Séparation + validation index - UTILISER LA NOUVELLE FONCTION
         exercices_detaillees = separer_exercices_avec_titres(texte)
 
-        # 6) Construire la liste JSON complète pour stockage AVEC CONTENU COMPLET
+        # 6) Construire la liste JSON complète pour stockage
         exercices_complets = []
         for idx, ex in enumerate(exercices_detaillees):
+            # Les champs sont maintenant fournis directement par la fonction
             titre_complet = ex.get('titre_complet', ex.get('titre', f"Exercice {idx + 1}"))
-            contenu_complet = ex.get('contenu', '')  # ← CONTENU COMPLET
+            contenu = ex.get('contenu', '')  # ← Maintenant SANS le titre
+            extrait = ex.get('extrait', '')  # ← Déjà calculé par la fonction
 
-            # Nettoyer le titre pour l'affichage
+            # Nettoyer le titre pour l'affichage (troncature si trop long)
             titre_affichage = titre_complet
             if len(titre_affichage) > 80:
                 titre_affichage = titre_affichage[:77] + "..."
 
-            # Extraire un extrait (premières lignes) pour l'affichage rapide
-            lignes = contenu_complet.strip().split('\n')
-            extrait_lignes = []
-            for line in lignes[:3]:  # Prendre jusqu'à 3 premières lignes non vides
-                line_stripped = line.strip()
-                if line_stripped and len(line_stripped) < 100:
-                    extrait_lignes.append(line_stripped)
+            # Si pour une raison quelconque l'extrait est vide, on calcule un fallback
+            if not extrait and contenu:
+                lignes = contenu.strip().split('\n')
+                lignes_extrait = []
+                for line in lignes[:3]:
+                    line_stripped = line.strip()
+                    if line_stripped:
+                        if len(line_stripped) > 100:
+                            lignes_extrait.append(line_stripped[:97] + "...")
+                        else:
+                            lignes_extrait.append(line_stripped)
+                extrait = ' / '.join(lignes_extrait) if lignes_extrait else contenu.strip()[:150]
+                if len(extrait) > 150:
+                    extrait = extrait[:147] + "..."
 
-            extrait = ' / '.join(extrait_lignes) if extrait_lignes else contenu_complet.strip()[:150]
-            if len(extrait) > 150:
-                extrait = extrait[:147] + "..."
-
-            # ✅ STOCKER LE CONTENU COMPLET CETTE FOIS
+            # ✅ STOCKER AVEC LES CHAMPS AMÉLIORÉS
             exercices_complets.append({
                 "index": idx,
                 "titre": titre_affichage,
                 "titre_complet": titre_complet,
-                "extrait": extrait,
-                "contenu_complet": contenu_complet,  # ← NOUVEAU : CONTENU COMPLET
-                "longueur_contenu": len(contenu_complet)
+                "extrait": extrait,  # ← Utilise l'extrait pré-calculé
+                "contenu_complet": contenu,  # ← Contenu SANS le titre
+                "longueur_contenu": len(contenu)
             })
 
         # 7) Stocker les exercices COMPLETS dans la demande
         demande.exercices_data = json.dumps(exercices_complets, ensure_ascii=False)
         demande.save()
 
-        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés avec contenu complet")
+        print(f"✅ [SplitExercises] {len(exercices_complets)} exercices stockés")
+        print(f"   → Les titres sont maintenant séparés du contenu pour un meilleur cache")
 
         # 8) Construire la réponse pour le frontend (extraits seulement)
         exercices_reponse = []
@@ -663,8 +669,9 @@ class SplitExercisesAPIView(APIView):
             "exercices": exercices_reponse,
             "nom_fichier": demande.nom_fichier or os.path.basename(fichier.name),
             "matiere": demande.matiere.nom if demande.matiere else "Non spécifiée",
-            "info": f"{len(exercices_complets)} exercices détectés, contenu complet stocké"
+            "info": f"{len(exercices_complets)} exercices détectés, titres séparés du contenu"
         })
+
 
 #VUE PARTIELLE DES EXERCICES
 class PartialCorrectionAPIView(APIView):
