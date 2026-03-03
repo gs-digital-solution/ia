@@ -318,53 +318,51 @@ def with_cache(func):
     """
     from functools import wraps
 
+
     @wraps(func)
-    def with_cache(func):
-        @wraps(func)
-        def wrapper(texte_exercice, *args, **kwargs):
-            # 🟢 Récupérer la demande depuis les kwargs
-            demande = kwargs.get('demande')
+    def wrapper(texte_exercice, *args, **kwargs):
+        # Récupérer la demande depuis les kwargs
+        demande = kwargs.get('demande')
 
-            # 🟢 Essayer de récupérer le contenu nettoyé depuis la soumission
-            contenu_nettoye = None
-            if demande:
-                # Chercher la soumission la plus récente pour cette demande
-                soumission = demande.soumissionia_set.order_by('-date_creation').first()
-                if soumission and soumission.resultat_json:
-                    contenu_nettoye = soumission.resultat_json.get('contenu_nettoye')
+        # Essayer de récupérer le contenu nettoyé depuis la soumission
+        contenu_nettoye = None
+        if demande:
+            # Chercher la soumission la plus récente pour cette demande
+            soumission = demande.soumissionia_set.order_by('-date_creation').first()
+            if soumission and soumission.resultat_json:
+                contenu_nettoye = soumission.resultat_json.get('contenu_nettoye')
 
-            # 🟢 Si on a un contenu nettoyé, on l'utilise pour le cache
-            texte_pour_cache = contenu_nettoye if contenu_nettoye else texte_exercice
+        # Si on a un contenu nettoyé, on l'utilise pour le cache
+        texte_pour_cache = contenu_nettoye if contenu_nettoye else texte_exercice
 
-            # 🟢 Logger pour debug
-            logger.info(f"🔍 Cache utilisant: {'contenu_nettoye' if contenu_nettoye else 'texte_brut'}")
+        # Logger pour debug
+        logger.info(f"🔍 Cache utilisant: {'contenu_nettoye' if contenu_nettoye else 'texte_brut'}")
 
-            cache = get_cache_manager()
-            matiere = kwargs.get('matiere')
-            matiere_id = matiere.id if matiere else None
+        cache = get_cache_manager()
+        matiere = kwargs.get('matiere')
+        matiere_id = matiere.id if matiere else None
 
-            # Vérifier le cache avec le bon texte
-            cached_result = cache.get(texte_pour_cache, matiere_id)
+        # Vérifier le cache avec le bon texte
+        cached_result = cache.get(texte_pour_cache, matiere_id)
 
-            if cached_result:
-                logger.info(f"🎯 CACHE HIT! (utilisé contenu nettoyé: {bool(contenu_nettoye)}")
-                if isinstance(cached_result, dict):
-                    return cached_result.get('corrige_text', ''), cached_result.get('graphiques', [])
-                return cached_result, []
+        if cached_result:
+            logger.info(f"🎯 CACHE HIT! (utilisé contenu nettoyé: {bool(contenu_nettoye)})")
+            if isinstance(cached_result, dict):
+                return cached_result.get('corrige_text', ''), cached_result.get('graphiques', [])
+            return cached_result, []
 
-            # Pas dans le cache, exécuter la fonction
-            logger.info("🤖 CACHE MISS, exécution fonction originale")
-            result = func(texte_exercice, *args, **kwargs)
+        # Pas dans le cache, exécuter la fonction
+        logger.info("🤖 CACHE MISS, exécution fonction originale")
+        result = func(texte_exercice, *args, **kwargs)
 
-            # Stocker dans le cache (avec le contenu nettoyé pour les prochains)
-            if result and isinstance(result, tuple) and len(result) >= 1:
-                to_cache = {
-                    'corrige_text': result[0],
-                    'graphiques': result[1] if len(result) > 1 else []
-                }
-                cache.set(texte_pour_cache, to_cache, matiere_id)
+        # Stocker dans le cache (avec le contenu nettoyé pour les prochains)
+        if result and isinstance(result, tuple) and len(result) >= 1:
+            to_cache = {
+                'corrige_text': result[0],
+                'graphiques': result[1] if len(result) > 1 else []
+            }
+            cache.set(texte_pour_cache, to_cache, matiere_id)
 
-            return result
+        return result
 
-        return wrapper
-
+    return wrapper
