@@ -828,3 +828,64 @@ class ContactWhatsAppAPIView(APIView):
                 "error": "Erreur lors de la récupération du contact"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+# =============================================================================
+# VUES POUR LE MONITORING DU CACHE
+# =============================================================================
+
+from .cache_manager import get_cache_manager
+
+
+class CacheStatsAPIView(APIView):
+    """
+    API pour obtenir des statistiques sur le cache des corrigés
+    Utilisation: GET /api/cache/stats/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Seuls les admins peuvent voir ces stats
+        if not request.user.is_staff and request.user.role != 'admin':
+            return Response(
+                {"error": "Accès non autorisé"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        cache = get_cache_manager()
+        stats = cache.get_stats()
+
+        return Response({
+            "success": True,
+            "stats": stats
+        })
+
+
+class CacheClearAPIView(APIView):
+    """
+    API pour vider le cache (admin seulement)
+    Utilisation: POST /api/cache/clear/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not request.user.is_staff and request.user.role != 'admin':
+            return Response(
+                {"error": "Accès non autorisé"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Confirmation requise
+        confirm = request.data.get('confirm', False)
+        if not confirm:
+            return Response({
+                "success": False,
+                "message": "Veuillez confirmer avec confirm=true"
+            })
+
+        cache = get_cache_manager()
+        result = cache.clear_all()
+
+        return Response({
+            "success": result,
+            "message": "Cache vidé avec succès" if result else "Erreur lors du vidage"
+        })

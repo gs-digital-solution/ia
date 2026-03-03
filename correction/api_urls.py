@@ -21,7 +21,9 @@ from .api_views import (
     DebugExtractionAPIView,
     PartialCorrectionAPIView,
     CorrigesListAPIView,
-    DownloadPartialCorrigeAPIView
+    DownloadPartialCorrigeAPIView,
+    CacheStatsAPIView,      # ← Ajoutez cette ligne
+    CacheClearAPIView,      # ← Ajoutez cette ligne
 )
 from .api_views import SplitExercisesAPIView
 
@@ -84,6 +86,16 @@ path(
   DownloadPartialCorrigeAPIView.as_view(),
   name='api_download_partial_corrige'
 ),
+
+    # Routes pour le monitoring du cache
+    path(
+        'cache/stats/',
+        CacheStatsAPIView.as_view(),
+        name='api_cache_stats'),
+    path(
+        'cache/clear/',
+        CacheClearAPIView.as_view(),
+        name='api_cache_clear'),
 
 ]
 
