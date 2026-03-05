@@ -76,7 +76,7 @@ def extraire_avec_mathpix(fichier_path: str) -> dict:
             # Convertir TOUTES les pages du PDF
             images = convert_from_path(
                 fichier_path,
-                dpi=300  # Bonne résolution pour l'OCR
+                dpi=400  # Bonne résolution pour l'OCR
             )
 
             logger.info(f"   {len(images)} page(s) trouvée(s)")
