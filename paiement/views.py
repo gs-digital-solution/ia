@@ -19,6 +19,8 @@ from django.http import JsonResponse
 from django.utils import timezone
 # facultatif : pour envoyer un mail à chaque réussite
 from django.core.mail import send_mail
+import logging
+logger = logging.getLogger('paiement')
 
 def start_payment(request):
     if request.method == "POST":
