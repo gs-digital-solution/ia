@@ -711,6 +711,7 @@ class PartialCorrectionAPIView(APIView):
 
             # 3) OPTIMISATION : Vérifier si le contenu est déjà dans exercices_data
             fragment_trouve = False
+            contenu_nettoye = ""  # 🟢 NOUVEAU : pour stocker le contenu sans titre
 
             if demande.exercices_data:
                 try:
@@ -720,7 +721,10 @@ class PartialCorrectionAPIView(APIView):
                             # Vérifier qu'on a du contenu complet
                             if ex.get('contenu_complet') and len(ex['contenu_complet']) > 50:
                                 fragment_trouve = True
+                                # 🟢 NOUVEAU : récupérer le contenu nettoyé (sans titre)
+                                contenu_nettoye = ex.get('contenu_complet', '')
                                 print(f"✅ [PartialCorrection] Contenu trouvé dans exercices_data pour index {idx}")
+                                print(f"   📝 Longueur contenu nettoyé: {len(contenu_nettoye)} caractères")
                                 break
                 except json.JSONDecodeError:
                     print(f"⚠️ [PartialCorrection] JSON invalide dans exercices_data")
@@ -732,18 +736,27 @@ class PartialCorrectionAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 5) Création de la soumission
+            # 5) Création de la soumission avec le contenu nettoyé dans resultat_json
+            resultat_initial = {}
+            if contenu_nettoye:
+                resultat_initial['contenu_nettoye'] = contenu_nettoye
+                # 🟢 Optionnel : stocker aussi un extrait pour debug
+                resultat_initial['extrait'] = contenu_nettoye[:100] + "..." if len(contenu_nettoye) > 100 else contenu_nettoye
+
             soumission = SoumissionIA.objects.create(
                 user=user,
                 demande=demande,
                 statut='en_attente',
                 progression=0,
-                exercice_index=idx
+                exercice_index=idx,
+                resultat_json=resultat_initial if resultat_initial else None  # 🟢 Stockage du contenu nettoyé
             )
 
             # 6) Information de debug
             print(f"✅ [PartialCorrection] Soumission {soumission.id} créée pour exercice {idx}")
             print(f"   - Contenu pré-stocké: {'OUI' if fragment_trouve else 'NON (nécessitera extraction)'}")
+            if contenu_nettoye:
+                print(f"   - Contenu nettoyé stocké dans resultat_json ({len(contenu_nettoye)} chars)")
             print(f"   - Fichier disponible: {'OUI' if demande.fichier else 'NON'}")
 
             # 7) Lancement asynchrone

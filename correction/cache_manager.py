@@ -303,58 +303,59 @@ def get_cache_manager():
 
 
 def with_cache(func):
-    """
-    Décorateur pour utiliser automatiquement le cache
-
-    Utilisation:
-        @with_cache
-        def generer_corrige_par_exercice(texte_exercice, ..., demande=None):
-            ...
-
-    Le décorateur:
-    1. Vérifie si le corrigé existe en cache
-    2. Si oui, retourne immédiatement le corrigé
-    3. Si non, appelle la fonction, puis stocke le résultat
-    """
     from functools import wraps
 
     @wraps(func)
     def wrapper(texte_exercice, *args, **kwargs):
-        # Extraire la matière et la demande
-        matiere = kwargs.get('matiere')
         demande = kwargs.get('demande')
 
+        # 🟡 LOGS DE DEBUG
+        logger.info(f"🔍 DEBUG - demande présent: {bool(demande)}")
+
+        contenu_nettoye = None
+        if demande:
+            # Chercher la soumission
+            soumission = demande.soumissionia_set.order_by('-date_creation').first()
+            logger.info(f"🔍 DEBUG - soumission trouvée: {bool(soumission)}")
+
+            if soumission:
+                logger.info(f"🔍 DEBUG - soumission ID: {soumission.id}, statut: {soumission.statut}")
+                logger.info(f"🔍 DEBUG - resultat_json présent: {bool(soumission.resultat_json)}")
+
+                if soumission.resultat_json:
+                    contenu_nettoye = soumission.resultat_json.get('contenu_nettoye')
+                    logger.info(f"🔍 DEBUG - contenu_nettoye trouvé: {bool(contenu_nettoye)}")
+                    if contenu_nettoye:
+                        logger.info(f"🔍 DEBUG - longueur contenu_nettoye: {len(contenu_nettoye)}")
+                        logger.info(f"🔍 DEBUG - début contenu: {contenu_nettoye[:100]}...")
+
+        texte_pour_cache = contenu_nettoye if contenu_nettoye else texte_exercice
+        logger.info(f"🔍 Cache utilisant: {'contenu_nettoye' if contenu_nettoye else 'texte_brut'}")
+
+        cache = get_cache_manager()
+        matiere = kwargs.get('matiere')
         matiere_id = matiere.id if matiere else None
 
-        # Récupérer le cache manager
-        cache = get_cache_manager()
-
-        # 1. Tentative de lecture du cache
-        cached_result = cache.get(texte_exercice, matiere_id)
+        # Vérifier le cache avec le bon texte
+        cached_result = cache.get(texte_pour_cache, matiere_id)
 
         if cached_result:
-            # Trouvé dans le cache ! On retourne directement
-            logger.info(f"🎯 Utilisation du cache pour exercice {matiere_id}")
-            # Convertir si nécessaire (format attendu par l'appelant)
+            logger.info(f"🎯 CACHE HIT! (utilisé contenu nettoyé: {bool(contenu_nettoye)})")
             if isinstance(cached_result, dict):
-                if 'corrige_text' in cached_result:
-                    return cached_result['corrige_text'], cached_result.get('graphiques', [])
-                # Fallback
-                return cached_result.get('texte', ''), []
+                return cached_result.get('corrige_text', ''), cached_result.get('graphiques', [])
             return cached_result, []
 
-        # 2. Pas dans le cache, on exécute la fonction originale
-        logger.info("🤖 Exécution de la fonction originale (appel API)")
+        # Pas dans le cache, exécuter la fonction
+        logger.info("🤖 CACHE MISS, exécution fonction originale")
         result = func(texte_exercice, *args, **kwargs)
 
-        # 3. Stocker le résultat dans le cache
+        # Stocker dans le cache (avec le contenu nettoyé pour les prochains)
         if result and isinstance(result, tuple) and len(result) >= 1:
-            # Préparer les données à stocker
             to_cache = {
                 'corrige_text': result[0],
                 'graphiques': result[1] if len(result) > 1 else []
             }
-            cache.set(texte_exercice, to_cache, matiere_id)
+            cache.set(texte_pour_cache, to_cache, matiere_id)
 
         return result
 
