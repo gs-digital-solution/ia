@@ -58,10 +58,6 @@ def start_payment(request):
         )
 
 
-
-
-
-
 @csrf_exempt
 def payment_callback(request):
     """
@@ -70,7 +66,7 @@ def payment_callback(request):
     2) Vérifie la signature JWT de Campay si présente
     3) Extrait la transaction et le statut
     4) Met à jour la transaction
-    5) Crée un abonnement si paiement validé (idempotent)
+    5) Crée ou CUMULE l'abonnement si paiement validé (idempotent)
     6) Retourne un JSON minimal
     """
     # 1) Récupération des données
@@ -96,7 +92,7 @@ def payment_callback(request):
 
     # 3) Extraction de l’ID et du statut
     tx_id = data.get('transaction_id') or data.get('idFromClient') or data.get('reference')
-    stat  = data.get('status') or data.get('transactionStatus') or data.get('state')
+    stat = data.get('status') or data.get('transactionStatus') or data.get('state')
     if not tx_id or not stat:
         return JsonResponse({'status': 'fail', 'error': 'missing fields'}, status=400)
 
@@ -110,35 +106,67 @@ def payment_callback(request):
     tx.raw_response = data
     tx.save()
 
-    # 5) Création idempotente de l’abonnement si paiement validé
+    # 5) Activation CUMULATIVE de l’abonnement si paiement validé
     if tx.status in ('SUCCESS', 'SUCCESSFUL', 'PAID', 'VALIDATED'):
-        exists = UserAbonnement.objects.filter(
+        from abonnement.models import UserAbonnement
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # Chercher un abonnement actif existant (non expiré)
+        abo_existant = UserAbonnement.objects.filter(
             utilisateur=tx.user,
-            abonnement=tx.abonnement,
             statut='actif',
-            date_fin__gt=timezone.now()
-        ).exists()
-        if not exists:
-            UserAbonnement.objects.create(
+            date_fin__gt=now
+        ).first()
+
+        if abo_existant:
+            # ✅ CUMUL : Ajouter les crédits et prolonger la durée
+            logger.info(f"🔄 [Callback] Cumul abonnement pour utilisateur {tx.user.id}")
+            logger.info(f"   - Anciens crédits: {abo_existant.exercice_restants}")
+            logger.info(f"   - Nouveaux crédits à ajouter: {tx.abonnement.nombre_exercices_total}")
+
+            # Cumul des crédits
+            abo_existant.exercice_restants += tx.abonnement.nombre_exercices_total
+
+            # Prolongation de la date de fin
+            abo_existant.date_fin += timezone.timedelta(days=tx.abonnement.duree_jours)
+
+            abo_existant.save()
+
+            logger.info(f"   ✅ Nouveaux crédits: {abo_existant.exercice_restants}")
+            logger.info(f"   ✅ Nouvelle date fin: {abo_existant.date_fin}")
+
+        else:
+            # ❌ Pas d'abonnement actif → Création d'un nouveau
+            logger.info(f"🆕 [Callback] Création nouvel abonnement pour utilisateur {tx.user.id}")
+
+            nouvel_abo = UserAbonnement.objects.create(
                 utilisateur=tx.user,
                 abonnement=tx.abonnement,
+                code_promo_utilise=None,
+                date_debut=now,
+                date_fin=now + timezone.timedelta(days=tx.abonnement.duree_jours),
                 exercice_restants=tx.abonnement.nombre_exercices_total,
-                date_debut=timezone.now(),
-                date_fin=timezone.now() + timezone.timedelta(days=tx.abonnement.duree_jours),
                 statut='actif'
             )
-            # Envoi d'un mail d'alerte si nécessaire
-            try:
-                subject = f"Paiement validé – {tx.user}"
-                message = (
-                    f"Utilisateur : {tx.user}\n"
-                    f"Abonnement : {tx.abonnement.nom}\n"
-                    f"Montant : {tx.amount}\n"
-                    f"Provider : {tx.payment_method.code}"
-                )
-                send_mail(subject, message, None, [settings.PAYMENT_ADMIN_EMAIL])
-            except Exception:
-                pass
+
+            logger.info(f"   ✅ Nouvel abonnement créé: {nouvel_abo.id}")
+            logger.info(f"   ✅ Crédits: {nouvel_abo.exercice_restants}")
+            logger.info(f"   ✅ Date fin: {nouvel_abo.date_fin}")
+
+        # Envoi d'un mail d'alerte si nécessaire
+        try:
+            subject = f"Paiement validé – {tx.user}"
+            message = (
+                f"Utilisateur : {tx.user}\n"
+                f"Abonnement : {tx.abonnement.nom}\n"
+                f"Montant : {tx.amount}\n"
+                f"Provider : {tx.payment_method.code}"
+            )
+            send_mail(subject, message, None, [settings.PAYMENT_ADMIN_EMAIL])
+        except Exception:
+            pass
 
     # 6) Réponse JSON minimale
     return JsonResponse({'status': 'ok', 'app_status': tx.status})
