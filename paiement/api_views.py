@@ -151,39 +151,74 @@ def confirm_ikeepay_payment(request):
         tx.save()
 
         # ════════════════════════════════════════════════════════════════
-        #   ACTIVATION DE L'ABONNEMENT POUR L'UTILISATEUR
+        #   ACTIVATION CUMULATIVE DE L'ABONNEMENT POUR L'UTILISATEUR
         # ════════════════════════════════════════════════════════════════
 
-        # 1. Récupérer le type d'abonnement acheté
-        abonnement_type = tx.abonnement  # C'est déjà un objet SubscriptionType
+        from abonnement.models import UserAbonnement
+        from django.utils import timezone
 
-        # 2. Créer un nouvel abonnement pour l'utilisateur
-        # Note: On crée un nouvel abonnement, on ne modifie pas l'ancien
-        nouvel_abonnement = UserAbonnement.objects.create(
+        # 1. Récupérer le type d'abonnement acheté
+        abonnement_type = tx.abonnement
+        now = timezone.now()
+
+        # 2. Chercher un abonnement actif existant (non expiré)
+        abo_existant = UserAbonnement.objects.filter(
             utilisateur=request.user,
-            abonnement=abonnement_type,
-            code_promo_utilise=None,  # Pas de code promo pour paiement direct
-            date_debut=timezone.now(),
-            date_fin=timezone.now() + timezone.timedelta(days=abonnement_type.duree_jours),
-            exercice_restants=abonnement_type.nombre_exercices_total,
-            statut='actif'
-        )
+            statut='actif',
+            date_fin__gt=now
+        ).first()
+
+        if abo_existant:
+            # ✅ CUMUL : Ajouter les crédits et prolonger la durée
+            logger.info(
+                f"🔄 Cumul abonnement existant ID {abo_existant.id} "
+                f"pour utilisateur {request.user.id}"
+            )
+            logger.info(f"   - Anciens crédits: {abo_existant.exercice_restants}")
+            logger.info(f"   - Nouveaux crédits à ajouter: {abonnement_type.nombre_exercices_total}")
+            logger.info(f"   - Ancienne date fin: {abo_existant.date_fin}")
+
+            # Cumul des crédits
+            abo_existant.exercice_restants += abonnement_type.nombre_exercices_total
+
+            # Prolongation de la date de fin
+            abo_existant.date_fin += timezone.timedelta(days=abonnement_type.duree_jours)
+
+            abo_existant.save()
+
+            nouvel_abonnement = abo_existant
+            logger.info(f"   ✅ Nouveaux crédits: {abo_existant.exercice_restants}")
+            logger.info(f"   ✅ Nouvelle date fin: {abo_existant.date_fin}")
+
+        else:
+            # ❌ Pas d'abonnement actif → Création d'un nouveau
+            logger.info(f"🆕 Création nouvel abonnement pour utilisateur {request.user.id}")
+
+            nouvel_abonnement = UserAbonnement.objects.create(
+                utilisateur=request.user,
+                abonnement=abonnement_type,
+                code_promo_utilise=None,
+                date_debut=now,
+                date_fin=now + timezone.timedelta(days=abonnement_type.duree_jours),
+                exercice_restants=abonnement_type.nombre_exercices_total,
+                statut='actif'
+            )
+
+            logger.info(f"   ✅ Nouvel abonnement créé: {nouvel_abonnement.id}")
+            logger.info(f"   ✅ Crédits: {nouvel_abonnement.exercice_restants}")
+            logger.info(f"   ✅ Date fin: {nouvel_abonnement.date_fin}")
 
         logger.info(
-            f"Abonnement activé pour utilisateur {request.user.id}: "
-            f"{abonnement_type.nom} - {nouvel_abonnement.exercice_restants} crédits"
+            f"💰 Paiement iKeePay confirmé: {transaction_id} - "
+            f"Utilisateur {request.user.id} - "
+            f"{nouvel_abonnement.exercice_restants} crédits"
         )
-
-        # Optionnel : Désactiver l'ancien abonnement si nécessaire
-        # UserAbonnement.objects.filter(
-        #     utilisateur=request.user,
-        #     statut='actif'
-        # ).exclude(id=nouvel_abonnement.id).update(statut='expire')
 
         return Response({
             'status': 'success',
             'transaction_id': transaction_id,
             'abonnement_active': {
+                'id': nouvel_abonnement.id,
                 'nom': abonnement_type.nom,
                 'credits': nouvel_abonnement.exercice_restants,
                 'date_fin': nouvel_abonnement.date_fin

@@ -48,17 +48,16 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
         # Mettre à jour la transaction avec le résultat
         tx.transaction_id = result['transaction_id']
         tx.raw_response = result
-        tx.status = "PENDING_EXTERNAL"  # Statut spécial pour paiements externes
+        tx.status = "PENDING_EXTERNAL"
 
         tx.save()
         logger.debug(f"Tx externe créée: {tx.transaction_id} - Statut: {tx.status}")
         return tx
 
     # ════════════════════════════════════════════════════════════════
-    #   NOUVEAU : PAIEMENT IKEEPAY (iframe)
+    #   PAIEMENT IKEEPAY (iframe)
     # ════════════════════════════════════════════════════════════════
     elif payment_method.code.startswith('IKEEPAY'):
-        # PAIEMENT IKEEPAY - Le résultat est un dictionnaire, pas une réponse HTTP
         logger.debug(f"IkeePay provider returned: {result}")
 
         tx.transaction_id = result['transaction_id']
@@ -70,7 +69,7 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
         return tx
 
     # ════════════════════════════════════════════════════════════════
-    #   PAIEMENT INTERNE (Touchpay/Campay) - LOGIQUE EXISTANTE
+    #   PAIEMENT INTERNE (Touchpay/Campay) - AVEC TRAITEMENT CALLBACK
     # ════════════════════════════════════════════════════════════════
     else:
         logger.debug(f"Provider responded HTTP {result.status_code}")
@@ -84,6 +83,7 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
         logger.debug(f"raw_response: {raw}")
 
         code = payment_method.code.upper()
+        initial_status = tx.status
 
         # Touchpay
         if code.startswith("TOUCHPAY"):
@@ -106,4 +106,44 @@ def process_payment(user, abonnement, phone, payment_method, callback_url):
 
         tx.save()
         logger.debug(f"Tx updated: {tx.status}")
+
+        # ════════════════════════════════════════════════════════════════
+        #   SI LE PAIEMENT EST DÉJÀ SUCCESS (via callback synchrone)
+        #   NOTE: Pour les vrais callbacks asynchrones, ceci est géré
+        #   dans la vue payment_callback (callback_url)
+        # ════════════════════════════════════════════════════════════════
+        # Certains providers peuvent retourner un succès immédiat
+        if tx.status == 'SUCCESS' or (tx.status == 'PROCESSING' and raw.get('status') == 'SUCCESS'):
+            from abonnement.models import UserAbonnement
+            from django.utils import timezone
+
+            now = timezone.now()
+
+            # Chercher un abonnement actif existant
+            abo_existant = UserAbonnement.objects.filter(
+                utilisateur=user,
+                statut='actif',
+                date_fin__gt=now
+            ).first()
+
+            if abo_existant:
+                # ✅ CUMUL
+                logger.info(f"🔄 [process_payment] Cumul pour utilisateur {user.id}")
+                abo_existant.exercice_restants += abonnement.nombre_exercices_total
+                abo_existant.date_fin += timezone.timedelta(days=abonnement.duree_jours)
+                abo_existant.save()
+                logger.info(f"   ✅ Nouveaux crédits: {abo_existant.exercice_restants}")
+            else:
+                # ✅ Création
+                logger.info(f"🆕 [process_payment] Création abonnement pour utilisateur {user.id}")
+                UserAbonnement.objects.create(
+                    utilisateur=user,
+                    abonnement=abonnement,
+                    code_promo_utilise=None,
+                    date_debut=now,
+                    date_fin=now + timezone.timedelta(days=abonnement.duree_jours),
+                    exercice_restants=abonnement.nombre_exercices_total,
+                    statut='actif'
+                )
+
         return tx
