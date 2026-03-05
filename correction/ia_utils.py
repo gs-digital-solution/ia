@@ -30,7 +30,6 @@ from .models import CorrigePartiel
 from django.core.files import File
 import time
 from datetime import datetime
-from .cache_manager import with_cache, get_cache_manager
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -731,8 +730,7 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
         '[A-D][\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',  # B. EVALUATION, B-EVALUATION, B: EVALUATION
         '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPÉTENCES',
         # II. ÉVALUATION, II-ÉVALUATION, II: ÉVALUATION
-        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',
-        # II. EVALUATION, II-EVALUATION, II: EVALUATION
+        '[IVXL]+[\\s\\-\\.:]*É?VALUATION[\\s\\-]*DES[\\s\\-]*COMPETENCES',# II. EVALUATION, II-EVALUATION, II: EVALUATION
         'SUJET[\\s\\-]*DE[\\s\\-]*TYPE[\\s\\-]*[\\dIVXL]+',
         'SUJET[\\s\\-]*TYPE[\\s\\-]*[\\dIVXL]+',
         'SUJET[\\s\\-]*[\\dIVXL]+',
@@ -856,16 +854,6 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
                 if bloc != groupe[-1]:
                     lignes_finales.append("")  # Ligne vide de séparation
 
-        # ========== NOUVEAU : SÉPARER LE TITRE DU CONTENU ==========
-        # Le titre est déjà dans 'titre_final'
-        # Le contenu est tout sauf la première ligne (le titre)
-        if len(lignes_finales) > 1:
-            # La première ligne est le titre, on la retire du contenu
-            contenu_sans_titre = lignes_finales[1:]
-        else:
-            # Si une seule ligne, c'est probablement juste un titre sans contenu
-            contenu_sans_titre = lignes_finales
-
         # Nettoyer et formater pour l'API
         titre_affichage = titre_final
         if len(titre_affichage) > 150:
@@ -876,40 +864,17 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             else:
                 titre_affichage = titre_affichage[:147] + "..."
 
-        # Limiter le nombre de lignes pour le contenu
-        lignes_limitees = contenu_sans_titre[:300]
+        # Limiter le nombre de lignes
+        lignes_limitees = lignes_finales[:300]
         contenu = '\n'.join(lignes_limitees)
 
-        # Calculer la longueur totale du contenu (sans le titre)
-        longueur_totale = sum(len(l) for l in lignes_limitees)
-
-        # ========== NOUVEAU : CALCULER L'EXTRAIT POUR LE FRONTEND ==========
-        # Prendre les 3 premières lignes non vides du contenu
-        lignes_extrait = []
-        for line in contenu_sans_titre[:5]:  # On regarde les 5 premières lignes
-            line_stripped = line.strip()
-            if line_stripped and len(lignes_extrait) < 3:
-                # Limiter chaque ligne à 100 caractères max
-                if len(line_stripped) > 100:
-                    lignes_extrait.append(line_stripped[:97] + "...")
-                else:
-                    lignes_extrait.append(line_stripped)
-
-        if lignes_extrait:
-            extrait = ' / '.join(lignes_extrait)
-        else:
-            # Fallback si pas de lignes extraites
-            extrait = contenu[:150]
-
-        if len(extrait) > 200:
-            extrait = extrait[:197] + "..."
+        # Calculer la longueur totale du contenu
+        longueur_totale = sum(len(l) for l in lignes_limitees[1:] if len(lignes_limitees) > 1)
 
         resultats.append({
             'titre': titre_affichage,
+            'contenu': contenu,
             'titre_complet': titre_final,
-            # 🟢 IMPORTANT: contenu SANS le titre
-            'contenu': '\n'.join(lignes_finales[1:]) if len(lignes_finales) > 1 else '',
-            'extrait': extrait,
             'longueur_contenu': longueur_totale,
             'nombre_parents': len(groupe) - 1 if len(groupe) > 1 else 0
         })
@@ -924,40 +889,23 @@ def separer_exercices_avec_titres(texte_epreuve, min_caracteres=60):
             if len(titre) > 150:
                 titre = titre[:147] + "..."
 
-            # Séparer titre et contenu pour le fallback aussi
-            if len(plus_long['lines']) > 1:
-                contenu_lines = plus_long['lines'][1:][:200]
-                contenu = '\n'.join(contenu_lines)
-
-                # Calculer l'extrait
-                lignes_extrait = []
-                for line in plus_long['lines'][1:][:3]:
-                    line_stripped = line.strip()
-                    if line_stripped:
-                        lignes_extrait.append(line_stripped[:100])
-                extrait = ' / '.join(lignes_extrait) if lignes_extrait else contenu[:150]
-            else:
-                contenu = ""
-                extrait = ""
+            contenu_lines = plus_long['lines'][:200]
+            contenu = '\n'.join(contenu_lines)
 
             resultats.append({
                 'titre': titre,
-                'titre_complet': plus_long['title'],
                 'contenu': contenu,
-                'extrait': extrait,
+                'titre_complet': plus_long['title'],
                 'longueur_contenu': plus_long['content_length']
             })
         else:
             # Fallback ultime
             contenu_lines = lignes[:100]
             contenu = '\n'.join(contenu_lines)
-            extrait = contenu[:150] + "..." if len(contenu) > 150 else contenu
-
             resultats.append({
                 'titre': "Document complet",
-                'titre_complet': "Document complet",
                 'contenu': contenu,
-                'extrait': extrait,
+                'titre_complet': "Document complet",
                 'longueur_contenu': len(contenu)
             })
 
@@ -1038,7 +986,7 @@ def build_promptia_messages(promptia, contexte):
     return {"role": "system", "content": system_content}, \
            {"role": "user",   "content": user_content}
 
-@with_cache
+
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None, demande=None):
     """
     Génère le corrigé pour un seul exercice en exploitant les données vision.
