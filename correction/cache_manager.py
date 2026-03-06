@@ -361,3 +361,25 @@ def with_cache(func):
 
     return wrapper
 
+# STOCKER LE CACHE DES EXTRACTIONS MATHPIX
+def get_mathpix_extraction(self, empreinte):
+    """Récupère une extraction Mathpix du cache"""
+    if not self.redis_client:
+        return None
+
+    cache_key = f"mathpix:v{getattr(settings, 'MATHPIX_CACHE_VERSION', 1)}:{empreinte}"
+    return self.redis_client.get(cache_key)
+
+
+def set_mathpix_extraction(self, empreinte, data, ttl=None):
+    """Stocke une extraction Mathpix dans le cache"""
+    if not self.redis_client:
+        return False
+
+    cache_key = f"mathpix:v{getattr(settings, 'MATHPIX_CACHE_VERSION', 1)}:{empreinte}"
+    ttl = ttl or getattr(settings, 'MATHPIX_CACHE_TTL', 30 * 24 * 60 * 60)
+
+    if isinstance(data, dict):
+        data = json.dumps(data)
+
+    return self.redis_client.setex(cache_key, ttl, data)

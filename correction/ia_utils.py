@@ -32,6 +32,7 @@ import time
 from datetime import datetime
 from .cache_manager import with_cache, get_cache_manager
 from .rate_limiter import rate_limit_decorator
+from .file_fingerprint import calculate_fingerprint
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -1660,6 +1661,7 @@ def extraire_texte_pdf(fichier_path):
 def extraire_texte_fichier(fichier_field, demande=None):
     """
     Extraction robuste avec support Mathpix conditionnel
+    ET cache des extractions Mathpix
     """
     if not fichier_field:
         return ""
@@ -1667,32 +1669,52 @@ def extraire_texte_fichier(fichier_field, demande=None):
     # Sauvegarde locale
     temp_dir = tempfile.gettempdir()
     local_path = os.path.join(temp_dir, os.path.basename(fichier_field.name))
+
     with open(local_path, "wb") as f:
         for chunk in fichier_field.chunks():
             f.write(chunk)
 
-    # Appel à l'analyse scientifique AVEC paramètre demande
-    try:
-        analyse = analyser_document_scientifique(local_path, demande)
-        texte = analyse.get("texte_complet", "")
+    # 🆕 ÉTAPE 1: Calculer l'empreinte du fichier
+    empreinte = calculate_fingerprint(local_path)
 
-        logger.info(f"📄 Extraction terminée: {len(texte)} caractères "
-                    f"(source: {analyse.get('source_extraction', 'inconnu')})")
+    # 🆕 ÉTAPE 2: Vérifier le cache Mathpix
+    cache_manager = get_cache_manager()
+    extraction_cachee = None
 
-        # Stocker la méthode d'extraction dans la demande si disponible
-        if demande and hasattr(demande, 'methode_extraction'):
-            demande.methode_extraction = analyse.get('source_extraction', 'standard')
-            demande.save()
+    if empreinte and cache_manager.redis_client:
+        extraction_cachee = cache_manager.get_mathpix_extraction(empreinte)
 
-    except Exception as e:
-        logger.error(f"❌ Analyse échouée: {e}")
-        texte = ""
+        if extraction_cachee:
+            logger.info(f"🎯 CACHE MATHPIX HIT! Empreinte: {empreinte[:16]}...")
+            try:
+                analyse = json.loads(extraction_cachee)
+                # Nettoyage
+                os.unlink(local_path)
+                return analyse.get("texte_complet", "")
+            except json.JSONDecodeError:
+                logger.warning("⚠️ Cache corrompu, nouvel appel Mathpix")
+
+    # 🆕 ÉTAPE 3: Si pas en cache, appel à Mathpix
+    logger.info(f"🆕 CACHE MATHPIX MISS, appel à Mathpix pour {empreinte[:16] if empreinte else 'inconnu'}")
+    analyse = analyser_document_scientifique(local_path, demande)
+
+    # 🆕 ÉTAPE 4: Stocker dans le cache
+    if empreinte and cache_manager.redis_client and analyse:
+        try:
+            cache_manager.set_mathpix_extraction(empreinte, json.dumps(analyse))
+            logger.info(f"💾 Extraction Mathpix mise en cache pour {empreinte[:16]}...")
+        except Exception as e:
+            logger.error(f"❌ Erreur stockage cache Mathpix: {e}")
 
     # Nettoyage
     try:
         os.unlink(local_path)
     except:
         pass
+
+    texte = analyse.get("texte_complet", "")
+    logger.info(
+        f"📄 Extraction terminée: {len(texte)} caractères (source: {analyse.get('source_extraction', 'inconnu')})")
 
     return texte.strip()
 
