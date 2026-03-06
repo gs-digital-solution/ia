@@ -289,6 +289,46 @@ class CorrigeCacheManager:
             logger.error(f"❌ Erreur stats cache: {e}")
             return {"status": "error", "error": str(e)}
 
+    # ========== NOUVELLES MÉTHODES POUR LE CACHE MATHPIX ==========
+    def get_mathpix_extraction(self, empreinte):
+        """
+        Récupère une extraction Mathpix du cache
+        """
+        if not self.redis_client:
+            return None
+
+        from django.conf import settings
+        cache_version = getattr(settings, 'MATHPIX_CACHE_VERSION', 1)
+        cache_key = f"mathpix:v{cache_version}:{empreinte}"
+
+        try:
+            return self.redis_client.get(cache_key)
+        except Exception as e:
+            logger.error(f"❌ Erreur lecture cache Mathpix: {e}")
+            return None
+
+    def set_mathpix_extraction(self, empreinte, data, ttl=None):
+        """
+        Stocke une extraction Mathpix dans le cache
+        """
+        if not self.redis_client:
+            return False
+
+        from django.conf import settings
+        cache_version = getattr(settings, 'MATHPIX_CACHE_VERSION', 1)
+        cache_key = f"mathpix:v{cache_version}:{empreinte}"
+
+        # TTL par défaut: 30 jours
+        ttl = ttl or getattr(settings, 'MATHPIX_CACHE_TTL', 30 * 24 * 60 * 60)
+
+        try:
+            if isinstance(data, dict):
+                data = json.dumps(data)
+            return self.redis_client.setex(cache_key, ttl, data)
+        except Exception as e:
+            logger.error(f"❌ Erreur écriture cache Mathpix: {e}")
+            return False
+
 
 # Singleton pattern
 _cache_manager = None
@@ -360,26 +400,3 @@ def with_cache(func):
         return result
 
     return wrapper
-
-# STOCKER LE CACHE DES EXTRACTIONS MATHPIX
-def get_mathpix_extraction(self, empreinte):
-    """Récupère une extraction Mathpix du cache"""
-    if not self.redis_client:
-        return None
-
-    cache_key = f"mathpix:v{getattr(settings, 'MATHPIX_CACHE_VERSION', 1)}:{empreinte}"
-    return self.redis_client.get(cache_key)
-
-
-def set_mathpix_extraction(self, empreinte, data, ttl=None):
-    """Stocke une extraction Mathpix dans le cache"""
-    if not self.redis_client:
-        return False
-
-    cache_key = f"mathpix:v{getattr(settings, 'MATHPIX_CACHE_VERSION', 1)}:{empreinte}"
-    ttl = ttl or getattr(settings, 'MATHPIX_CACHE_TTL', 30 * 24 * 60 * 60)
-
-    if isinstance(data, dict):
-        data = json.dumps(data)
-
-    return self.redis_client.setex(cache_key, ttl, data)
