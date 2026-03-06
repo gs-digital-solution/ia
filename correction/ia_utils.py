@@ -31,6 +31,7 @@ from django.core.files import File
 import time
 from datetime import datetime
 from .cache_manager import with_cache, get_cache_manager
+from .rate_limiter import rate_limit_decorator
 #from .tasks import generer_un_exercice
 #from celery import group
 import logging
@@ -1038,6 +1039,8 @@ def build_promptia_messages(promptia, contexte):
     return {"role": "system", "content": system_content}, \
            {"role": "user",   "content": user_content}
 
+
+@rate_limit_decorator
 @with_cache
 def generer_corrige_par_exercice(texte_exercice, contexte, matiere=None, donnees_vision=None, demande=None):
     """

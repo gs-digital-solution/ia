@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .api_views import AppConfigAPIView, ContactWhatsAppAPIView
+from .api_views import AppConfigAPIView, ContactWhatsAppAPIView, RateLimitStatsAPIView
 from .api_views import (
     UserRegisterAPIView,
     UserLoginAPIView,
@@ -96,6 +96,11 @@ path(
         'cache/clear/',
         CacheClearAPIView.as_view(),
         name='api_cache_clear'),
+
+    path(
+    'rate-limit/stats/',
+        RateLimitStatsAPIView.as_view(),
+        name='api_rate_limit_stats'),
 
 ]
 

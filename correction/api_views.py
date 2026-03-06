@@ -910,3 +910,22 @@ class CacheClearAPIView(APIView):
             "message": "Cache vidé avec succès" if result else "Erreur lors du vidage"
         })
 
+
+class RateLimitStatsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not request.user.is_staff:
+            return Response({"error": "Accès non autorisé"}, status=403)
+
+        from .rate_limiter import get_rate_limiter
+        limiter = get_rate_limiter()
+
+        # Statistiques basiques
+        stats = {
+            "user_limit": limiter.USER_LIMIT,
+            "global_limit": limiter.GLOBAL_LIMIT,
+            "user_remaining": limiter.get_remaining_quota(user_id=request.user.id)
+        }
+
+        return Response({"success": True, "stats": stats})
