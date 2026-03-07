@@ -51,7 +51,7 @@ def generer_pdf_corrige(context: dict, soumission_id: int) -> str:
         "javascript-delay": "8000",
         "zoom": "3",
         "disable-smart-shrinking": "",
-        "dpi": 300,
+        "dpi": 200,
         "page-size": "A4",
         "margin-top": "15mm",
         "margin-bottom": "15mm",
